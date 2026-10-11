@@ -797,6 +797,64 @@ void sub_000C1860(void)
     s_menu_size_user = MEM32(NFSU1_MENU_SIZE);
 }
 
+/* ── Model binding nodes: no unlink through fill ─────────────
+ *
+ * A 24-byte node {next, prev, name hash, solid, tables, count} binds a
+ * model to its solid: sub_0011BC50 links it into the solid's list (+0x88)
+ * or the unbound list at 0x2C25D0, sub_0011BC20 (thiscall, ecx = node,
+ * ret) unlinks it when [8] or [0xC] is set, then clears both. A console
+ * run (2026-10-11) crashed after a finished race and its autosave: the
+ * race teardown (sub_00035C10 -> sub_0012E4A0 -> destructor sub_0012CB20,
+ * 120 nodes at +0xE6C, element destructor 0x3ACC0 -> here) met a node
+ * whose prev was 0xAAAAAAAA, the allocator's fill (sub_001243E0), and
+ * wrote through it. Seen once. A node whose neighbours are outside guest
+ * RAM is now cleared without the unlink, and logged; other broken links
+ * are logged and unlinked as before. */
+extern void sub_0011BC20_gen(void);
+
+static int node_ptr_ok(uint32_t a)
+{
+    return !(a & 3u) && ((a >= 0x00010000u && a < 0x04000000u) ||
+                         (a >= 0x80000000u && a < 0x84000000u));
+}
+
+void sub_0011BC20(void)
+{
+    static int logged;
+    uint32_t n = ecx;
+    uint32_t next, prev;
+
+    if (!node_ptr_ok(n) || !(MEM32(n + 8u) | MEM32(n + 0xCu))) {
+        sub_0011BC20_gen();
+        return;
+    }
+    next = MEM32(n);
+    prev = MEM32(n + 4u);
+    if (node_ptr_ok(next) && node_ptr_ok(prev)) {
+        if ((MEM32(prev) != n || MEM32(next + 4u) != n) && logged < 32) {
+            logged++;
+            fprintf(stderr, "[node] %08X: next %08X (prev %08X) prev %08X (next %08X),"
+                    " hash %08X solid %08X, from %08X, state %u\n", n, next,
+                    MEM32(next + 4u), prev, MEM32(prev), MEM32(n + 8u),
+                    MEM32(n + 0xCu), MEM32(esp), MEM32(NFSU1_GAMEFLOW_STATE));
+        }
+        sub_0011BC20_gen();
+        return;
+    }
+    if (logged < 32) {
+        logged++;
+        fprintf(stderr, "[node] %08X: next %08X prev %08X hash %08X solid %08X,"
+                " from %08X, state %u: links outside RAM, cleared without unlink\n",
+                n, next, prev, MEM32(n + 8u), MEM32(n + 0xCu), MEM32(esp),
+                MEM32(NFSU1_GAMEFLOW_STATE));
+    }
+    MEM32(n + 0x8u) = 0;
+    MEM32(n + 0xCu) = 0;
+    MEM32(n + 0x10u) = 0;
+    MEM32(n + 0x14u) = 0;
+    esp += 4;                                   /* ret */
+}
+
 /* ── Manual function overrides ─────────────────────────────── */
 
 /*

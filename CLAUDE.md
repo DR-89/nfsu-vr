@@ -155,6 +155,14 @@ https://github.com/antoxa2584x/nfsu1-sw (`main`, commits as
   sub_000DA280. jcc targets are now never gap-prologue starts (test in
   test_gap_prologue.py); also healed 0x187A60 and 0x18A5B0. Upstream
   candidate. Found with -DRECOMP_ABI_CHECK.
+- **Crash after a finished race + autosave (console 2026-10-11, once):**
+  guest VA 0xAAAAAAAA in sub_0011BC20 (model-binding node unlink; node
+  {next, prev, hash, solid +0x88 list / unbound list 0x2C25D0}) from the
+  race teardown sub_00035C10 -> sub_0012E4A0 -> dtor sub_0012CB20 (120
+  nodes at +0xE6C, element dtor 0x3ACC0). The node's own prev was the
+  allocator's 0xAA fill (sub_001243E0). Not reproduced on Linux (pause ->
+  Quit -> OK is clean). recomp_manual.c now clears such a node without the
+  unlink and logs `[node]` (also logs links that don't point back).
 - **XDK 5558 vs NFSU2's 5849:** D3D, DSOUND and the CRT are the same code
   apart from relocations; game code is not (different compiler output), so
   NFSU2's native game leaves, time cap, stream guard and text patch do not
