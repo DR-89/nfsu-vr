@@ -25,6 +25,7 @@ GEN="${NFSU1_GEN_DIR:-/root/nfsu1x/gen}"
 
 cd "$TK"
 if [ "${LIFT_ONLY:-0}" != "1" ]; then
+    python3 -m tools.xbe_parser "$XBE" --json "${XBE%.xbe}_analysis.json"
     python3 -m tools.disasm "$XBE" --seed-functions "$HERE/config/seed_functions.json"
     python3 -m tools.func_id "$XBE"
     python3 -m tools.abi_analysis "$XBE"

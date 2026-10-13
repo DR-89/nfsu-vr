@@ -61,6 +61,9 @@
 #include <glslang/Public/resource_limits_c.h>
 
 #include <pthread.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -179,6 +182,11 @@ typedef struct {
     int             submitted;
     Garbage        *garbage;
     uint32_t        ngarbage, garbage_cap;
+#ifdef __ANDROID__
+    VkDescriptorPool descriptors;
+    VkFramebuffer *framebuffers;
+    uint32_t nframebuffers, framebuffer_cap;
+#endif
 } Frame;
 
 static Frame  s_fr[VK_FRAMES];
@@ -188,6 +196,10 @@ static VkCommandBuffer s_cb;   /* s_f->cb while recording */
 static uint32_t s_cb_gen;      /* bumped at every vkBeginCommandBuffer */
 static int s_dyn_valid;
 
+#ifdef __ANDROID__
+static VkDescriptorSetLayout s_dsl, s_pp_dsl;
+#include "nv2a_vk_android.h"
+#endif
 static void garbage_add_pipe(VkPipeline pipe);
 static void garbage_add(VkImage img, VkImageView view, VkDeviceMemory mem)
 {
@@ -212,6 +224,9 @@ static void garbage_add_pipe(VkPipeline pipe)
 static void garbage_free(Frame *f)
 {
     uint32_t i;
+#ifdef __ANDROID__
+    android_frame_reset(f);
+#endif
     for (i = 0; i < f->ngarbage; i++) {
         if (f->garbage[i].view) vkDestroyImageView(s_dev, f->garbage[i].view, NULL);
         if (f->garbage[i].image) vkDestroyImage(s_dev, f->garbage[i].image, NULL);
@@ -1373,7 +1388,9 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2], VkDescriptor
 
 /* ── Shaders and pipelines ────────────────────────────────────────── */
 
+#ifndef __ANDROID__
 static VkDescriptorSetLayout s_dsl;
+#endif
 static VkPipelineLayout      s_layout;
 static VkPipelineCache       s_pcache;
 
@@ -1776,6 +1793,9 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
 typedef struct {
     int      prog;
     uint32_t blend, bsrc, bdst, beq, cmask, depth, topo;
+#ifdef __ANDROID__
+    uint32_t state[11], strides[16], formats[16];
+#endif
 } PipeKey;
 
 typedef struct {
@@ -1855,6 +1875,12 @@ static uint32_t s_pipes_unsaved;
 
 static void pipe_rec_append(const PipeKey *k)
 {
+#ifdef __ANDROID__
+    /* The desktop record omits baked vertex/depth/rasterizer state. SPIR-V
+     * and the driver's pipeline cache still persist on Android. */
+    (void)k;
+    return;
+#endif
     char path[256];
     PipeRec rec;
     FILE *f;
@@ -1872,6 +1898,12 @@ static void pipe_rec_append(const PipeKey *k)
     }
 }
 
+#ifdef __ANDROID__
+static VkCompareOp cmp_op(uint32_t v, uint32_t dflt);
+static VkStencilOp stencil_op(uint32_t v);
+static VkVertexInputBindingDescription android_bindings[16];
+static VkVertexInputAttributeDescription android_attributes[16];
+#endif
 static VkPipeline pipe_get(const PipeKey *k)
 {
     const uint32_t *w = (const uint32_t *)k;
@@ -1943,7 +1975,35 @@ static VkPipeline pipe_get(const PipeKey *k)
         rci.depthAttachmentFormat = s_depth_fmt;
         rci.stencilAttachmentFormat = s_depth_fmt;
     }
+#ifdef __ANDROID__
+    VkVertexInputBindingDescription bindings[16];
+    VkVertexInputAttributeDescription attributes[16];
+    for (i = 0; i < 16; i++) {
+        bindings[i] = (VkVertexInputBindingDescription){ i, k->strides[i], VK_VERTEX_INPUT_RATE_VERTEX };
+        attributes[i] = (VkVertexInputAttributeDescription){ i, i, (VkFormat)k->formats[i], 0 };
+    }
+    vi.vertexBindingDescriptionCount = vi.vertexAttributeDescriptionCount = 16;
+    vi.pVertexBindingDescriptions = bindings;
+    vi.pVertexAttributeDescriptions = attributes;
+    ia.topology = (VkPrimitiveTopology)k->topo;
+    rs.cullMode = !k->state[0] ? VK_CULL_MODE_NONE : k->state[1] == 0x404
+        ? VK_CULL_MODE_FRONT_BIT : k->state[1] == 0x408
+        ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = k->state[2] == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+    ds.depthTestEnable = k->depth && k->state[3];
+    ds.depthWriteEnable = k->depth && k->state[4];
+    ds.depthCompareOp = cmp_op(k->state[5], 0x203);
+    ds.stencilTestEnable = k->depth && k->state[6];
+    ds.front.failOp = stencil_op(k->state[7]);
+    ds.front.depthFailOp = stencil_op(k->state[8]);
+    ds.front.passOp = stencil_op(k->state[9]);
+    ds.front.compareOp = cmp_op(k->state[10], 0x207);
+    ds.back = ds.front;
+    dy.dynamicStateCount = 6;
+    ci.renderPass = android_render_pass(cfmt, k->depth, 0);
+#else
     ci.pNext = &rci;
+#endif
     ci.stageCount = 2;
     ci.pStages = st;
     ci.pVertexInputState = &vi;
@@ -2051,6 +2111,7 @@ static void prewarm(void)
         }
         fclose(f);
     }
+#ifndef __ANDROID__
     if (cache_path(path, sizeof path, "vkpipes.bin") && (f = fopen(path, "rb"))) {
         while (fread(&pr, sizeof pr, 1, f) == 1) {
             VkProg *p;
@@ -2067,6 +2128,7 @@ static void prewarm(void)
         }
         fclose(f);
     }
+#endif
     s_prewarming = 0;
     fprintf(stderr, "  [VK] prewarm: %u programs (%u SPIR-V from cache), %u pipelines in %.0f ms%s\n",
             nprog, s_spv_hits, npipe, (hz_now() - t0) / 1e6, bad ? " (a file ends in a bad record)" : "");
@@ -2115,6 +2177,14 @@ static int create_swapchain(void)
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.preTransform = caps.currentTransform;
+#ifdef __ANDROID__
+    /* The renderer produces upright landscape frames. Declaring the panel's
+     * rotation as already applied makes Android rotate them a second time. */
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    fprintf(stderr, "  [VK] Android surface transform: current=%u, supported=%u, selected=%u\n",
+        caps.currentTransform, caps.supportedTransforms, ci.preTransform);
+#endif
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = mode;
     ci.clipped = VK_TRUE;
@@ -2198,7 +2268,11 @@ static int ready(void)
                 s_headless = 1;
             } else {
                 s_win = SDL_CreateWindow("NV2A (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+#ifdef __ANDROID__
+                                         | SDL_WINDOW_FULLSCREEN_DESKTOP
+#endif
+                                         );
                 if (!s_win) {
                     s_headless = 1;
                 } else {
@@ -2224,7 +2298,11 @@ static int ready(void)
 #endif
     ai.pApplicationName = "nfsu2x";
     ai.pEngineName = "xboxrecomp";
+#ifdef __ANDROID__
+    ai.apiVersion = VK_API_VERSION_1_1;
+#else
     ai.apiVersion = VK_API_VERSION_1_3;
+#endif
     ici.pApplicationInfo = &ai;
     ici.enabledExtensionCount = niext;
     ici.ppEnabledExtensionNames = iext;
@@ -2336,14 +2414,18 @@ static int ready(void)
     fvi.vertexInputDynamicState = VK_TRUE;
     feds.extendedDynamicState = VK_TRUE;
     f13.pNext = &fvi;
+#ifndef __ANDROID__
     f2.pNext = &f13;
+#endif
     f2.features.textureCompressionBC = s_have_bc ? VK_TRUE : VK_FALSE;
     f2.features.depthClamp = s_have_depth_clamp ? VK_TRUE : VK_FALSE;
     f2.features.samplerAnisotropy = s_aniso > 1.0f ? VK_TRUE : VK_FALSE;
     if (!s_headless)
         dext[ndext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+#ifndef __ANDROID__
     dext[ndext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
     dext[ndext++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+#endif
     dci.pNext = &f2;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
@@ -2356,6 +2438,11 @@ static int ready(void)
     }
     vkGetDeviceQueue(s_dev, s_qfam, 0, &s_queue);
 #define GET(p, name) p = (void *)vkGetDeviceProcAddr(s_dev, name); if (!p) { LOGE("missing %s\n", name); return 0; }
+#ifdef __ANDROID__
+    p_push_desc = android_push_descriptors;
+    p_begin_rendering = android_begin_rendering;
+    p_end_rendering = android_end_rendering;
+#else
     GET(p_push_desc, "vkCmdPushDescriptorSetKHR");
     GET(p_vertex_input, "vkCmdSetVertexInputEXT");
     GET(p_begin_rendering, "vkCmdBeginRendering");
@@ -2368,6 +2455,7 @@ static int ready(void)
     GET(p_depth_op, "vkCmdSetDepthCompareOp");
     GET(p_stencil_test, "vkCmdSetStencilTestEnable");
     GET(p_stencil_op, "vkCmdSetStencilOp");
+#endif
 #undef GET
 
     if (!s_headless && !create_swapchain()) {
@@ -2389,7 +2477,9 @@ static int ready(void)
             b[i].stageFlags = i == 0 || i == 6 ? VK_SHADER_STAGE_VERTEX_BIT
                                                : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
+        #ifndef __ANDROID__
         lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+#endif
         lci.bindingCount = 7;
         lci.pBindings = b;
         if (vkCreateDescriptorSetLayout(s_dev, &lci, NULL, &s_dsl) != VK_SUCCESS)
@@ -2533,6 +2623,15 @@ static DynState s_dyn;
 
 static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology topo)
 {
+#ifdef __ANDROID__
+    float bc[4];
+    argb_vec4(r[0x34C / 4], bc);
+    vkCmdSetBlendConstants(s_cb, bc);
+    vkCmdSetStencilCompareMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, r[0x36C / 4] & 255);
+    vkCmdSetStencilWriteMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, r[0x360 / 4] & 255);
+    vkCmdSetStencilReference(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, r[0x368 / 4] & 255);
+    return;
+#endif
     DynState d;
     memset(&d, 0, sizeof d);
     d.cull = r[0x308 / 4] != 0;
@@ -2883,7 +2982,14 @@ static int upload_vertices(const Nv2aRawBatch *b)
         static uint32_t last_gen;
         if (last_gen != s_cb_gen || memcmp(bind, last_bind, sizeof bind)
             || memcmp(attr, last_attr, sizeof attr)) {
+#ifdef __ANDROID__
+            for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+                android_bindings[a] = (VkVertexInputBindingDescription){a, bind[a].stride, VK_VERTEX_INPUT_RATE_VERTEX};
+                android_attributes[a] = (VkVertexInputAttributeDescription){a, a, attr[a].format, 0};
+            }
+#else
             p_vertex_input(s_cb, NV2A_RAW_ATTRS, bind, NV2A_RAW_ATTRS, attr);
+#endif
             memcpy(last_bind, bind, sizeof bind);
             memcpy(last_attr, attr, sizeof attr);
             last_gen = s_cb_gen;
@@ -3191,9 +3297,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     key.depth = d != NULL;
     key.topo = cls;
+#ifndef __ANDROID__
     pipe = pipe_get(&key);
     if (!pipe)
         return;
+#endif
 
     {
         /* Everything this draw puts in the ring, reserved now: a flush
@@ -3213,6 +3321,18 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             s_f->ring_off = 0;
         }
     }
+#ifdef __ANDROID__
+    if (!upload_vertices(b)) return;
+    static const uint32_t offsets[11] = {0x308,0x39C,0x3A0,0x30C,0x35C,0x354,0x32C,0x370,0x374,0x378,0x364};
+    key.topo = topo;
+    for (i = 0; i < 11; i++) key.state[i] = r[offsets[i] / 4];
+    for (i = 0; i < 16; i++) {
+        key.strides[i] = android_bindings[i].stride;
+        key.formats[i] = android_attributes[i].format;
+    }
+    pipe = pipe_get(&key);
+    if (!pipe) return;
+#endif
     begin_rendering(s, d);
     s->dirty = 1;
     s->gen++;
@@ -3272,8 +3392,10 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             ub[1].range = sizeof(FsBlock);
         }
     }
+#ifndef __ANDROID__
     if (!upload_vertices(b))
         return;
+#endif
     {
         VkDeviceSize iat;
         if (b->vertex_count <= 65536) {
@@ -3469,7 +3591,9 @@ static int s_fxaa = -1;
  * blurred text (HUD, number plates); 0.25 keeps it and still smooths
  * edges. */
 static float s_fxaa_subpix = 0.25f;
+#ifndef __ANDROID__
 static VkDescriptorSetLayout s_pp_dsl;
+#endif
 static VkPipelineLayout      s_pp_layout;
 static VkSampler             s_pp_sampler;
 static struct { VkFormat fmt; VkPipeline pipe; } s_pp[2];
@@ -3582,7 +3706,9 @@ static VkPipeline pp_pipe(VkFormat fmt)
         VkPushConstantRange pr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 };
         VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        #ifndef __ANDROID__
         lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+#endif
         lci.bindingCount = 1;
         lci.pBindings = &b;
         if (vkCreateDescriptorSetLayout(s_dev, &lci, NULL, &s_pp_dsl) != VK_SUCCESS)
@@ -3622,7 +3748,11 @@ static VkPipeline pp_pipe(VkFormat fmt)
         dy.pDynamicStates = dyn;
         rci.colorAttachmentCount = 1;
         rci.pColorAttachmentFormats = &fmt;
+#ifdef __ANDROID__
+        ci.renderPass = android_render_pass(fmt, 0, 1);
+#else
         ci.pNext = &rci;
+#endif
         ci.stageCount = 2;
         ci.pStages = st;
         ci.pVertexInputState = &vi;
@@ -3956,7 +4086,11 @@ static void vk_flip(void)
         pi.pImageIndices = &idx;
         VT("flip %u: vkQueuePresentKHR\n", s_frame);
         pr = vkQueuePresentKHR(s_queue, &pi);
-        if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+        if (pr == VK_ERROR_OUT_OF_DATE_KHR
+#ifndef __ANDROID__
+            || pr == VK_SUBOPTIMAL_KHR
+#endif
+            ) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
         }
@@ -3977,7 +4111,33 @@ static void vk_flip(void)
 #if !defined(__SWITCH__)
     if (s_win) {
         SDL_Event e;
-        while (SDL_PollEvent(&e)) { }
+        while (SDL_PollEvent(&e)) {
+#ifdef __ANDROID__
+            if (e.type == SDL_QUIT) _exit(0);
+            /* IDENTITY presentation can remain SUBOPTIMAL on a rotated
+             * Android panel. Rebuild only when the extent actually changed. */
+            if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                VkSurfaceCapabilitiesKHR caps;
+                if (s_surface && vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &caps) == VK_SUCCESS
+                    && memcmp(&caps.currentExtent, &s_sc_extent, sizeof(s_sc_extent))) {
+                    vkDeviceWaitIdle(s_dev);
+                    create_swapchain();
+                }
+            }
+            if (e.type == SDL_APP_DIDENTERBACKGROUND) {
+                vkDeviceWaitIdle(s_dev);
+                int paused = 1;
+                while (paused) {
+                    if (SDL_WaitEventTimeout(&e, 100)) {
+                        if (e.type == SDL_QUIT) _exit(0);
+                        if (e.type == SDL_APP_DIDENTERFOREGROUND) paused = 0;
+                    }
+                }
+                if (s_surface) create_swapchain();
+                s_dyn_valid = 0;
+            }
+#endif
+        }
     }
 #endif
 }

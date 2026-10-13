@@ -887,7 +887,11 @@ void xbox_guest_pin(int interrupt)
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(core, &set);
+#ifdef __ANDROID__
+        sched_setaffinity(0, sizeof set, &set);
+#else
         pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+#endif
         (void)interrupt;
     }
 #endif
@@ -1161,6 +1165,13 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return FALSE;
+#ifdef __ANDROID__
+    /* Bionic has no thread cancellation. Do not signal a still-running
+     * thread as exited; callers must use normal guest thread termination. */
+    (void)exitCode;
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+#else
     pthread_cancel(o->thread);
     pthread_mutex_lock(&o->lock);
     o->exit_code = exitCode;
@@ -1169,6 +1180,7 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
     pthread_cond_broadcast(&o->cond);
     pthread_mutex_unlock(&o->lock);
     return TRUE;
+#endif
 }
 
 /* Opt-in (RECOMP_NX_GUEST_RT=1): a guest thread at TIME_CRITICAL gets a
@@ -1823,10 +1835,10 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     void *p;
 #if defined(__APPLE__)
     if (address) {
-        p = mach_map_fixed(address, size, prot ? prot : PROT_READ | PROT_WRITE);
+        p = mach_map_fixed(address, size, prot);
     } else
 #endif
-    p = mmap(address, size, prot ? prot : PROT_READ | PROT_WRITE, flags, -1, 0);
+    p = mmap(address, size, prot, flags, -1, 0);
     if (p == MAP_FAILED) {
         SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return NULL;
@@ -1834,7 +1846,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     /* Remember the length: VirtualFree(MEM_RELEASE) is passed size 0 by every
      * Win32 caller, and munmap cannot be called without one. */
     view_register(p, size);
-#if !defined(MAP_FIXED_NOREPLACE) && !defined(__APPLE__)
+#if !defined(__APPLE__)
     /* Older kernels without MAP_FIXED_NOREPLACE: plain MAP_FIXED would silently
      * unmap whatever already lives there, so we pass the address as a hint and
      * treat a different result as "taken". Apple goes through mach_map_fixed
@@ -1992,6 +2004,11 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 {
 #if defined(__APPLE__)
     memset_s(ptr, cnt, 0, cnt);
+#elif defined(__ANDROID__)
+    /* Volatile stores cannot be removed when the buffer is no longer used. */
+    volatile unsigned char *bytes = ptr;
+    while (cnt--)
+        *bytes++ = 0;
 #else
     explicit_bzero(ptr, cnt);
 #endif

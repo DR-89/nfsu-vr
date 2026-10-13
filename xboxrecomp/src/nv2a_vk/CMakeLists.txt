@@ -12,10 +12,14 @@ add_library(xbox_nv2a_vk STATIC
 )
 target_include_directories(xbox_nv2a_vk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-find_package(glslang CONFIG REQUIRED)
+if(NOT TARGET glslang::glslang)
+    find_package(glslang CONFIG REQUIRED)
+endif()
 target_link_libraries(xbox_nv2a_vk PUBLIC glslang::glslang glslang::glslang-default-resource-limits)
 
-if(NINTENDO_SWITCH)
+if(ANDROID)
+    target_link_libraries(xbox_nv2a_vk PUBLIC vulkan SDL2::SDL2)
+elseif(NINTENDO_SWITCH)
     set(NVK_SDK "" CACHE PATH "mesa-switch install prefix (holds lib/libvulkan.a, include/vulkan)")
     if(NOT EXISTS "${NVK_SDK}/lib/libvulkan.a")
         message(FATAL_ERROR "NVK_SDK must point at a mesa-switch install (no lib/libvulkan.a in '${NVK_SDK}')")

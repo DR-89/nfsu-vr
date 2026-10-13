@@ -2,7 +2,7 @@
 
 <img src="https://cdn2.steamgriddb.com/logo/e88a994b60847fd3f5bf29ddce531b13.png" alt="Need for Speed: Underground" width="520">
 
-### Xbox static recompilation for Nintendo Switch and Linux
+### Xbox static recompilation for Android
 
 The original Xbox (NTSC-U) release of **Need for Speed: Underground**, lifted
 instruction by instruction to C and running natively, with no emulator.
@@ -82,6 +82,17 @@ NFSU2_GPU_MHZ=768
 ```
 
 ## 🛠️ Building
+
+### Android (ARM64)
+
+The Android host uses SDL2 and a Vulkan 1.1 renderer adapted for Retroid
+Pocket 4 Pro. Select the extracted game folder through Android's system
+picker, including on an SD card; files are read directly without importing
+them. Saves are kept separately in the application's files directory.
+
+See [Android build instructions and device validation](android/README.md).
+SDL2 and glslang are pinned submodules (`git submodule update --init --recursive`).
+
 
 <details open>
 <summary><b>1. Extract the disc and lift the XBE to C</b></summary>
@@ -196,6 +207,7 @@ lists every runtime switch; the ones that matter here:
 | Platform | State |
 |---|---|
 | 🐧 Linux | Movies, title, menus, Quick Race at 30 fps with HUD, AI and audio |
+| Android / Retroid Pocket 4 Pro | Movies, menus and Quick Race checked on hardware; Vulkan 1.1, built-in controller, direct SD-card reads. FPS and Career not verified. |
 | 🎮 Switch hardware | Menus and Quick Race at 30 fps (Vulkan, CPU 1785 MHz) |
 
 Still open: the main-menu car's rear window shows through its side windows;

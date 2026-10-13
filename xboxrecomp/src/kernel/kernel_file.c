@@ -892,7 +892,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     if (CreateOptions & XBOX_FILE_DIRECTORY_FILE) {
         if (CreateDisposition == XBOX_FILE_CREATE || CreateDisposition == XBOX_FILE_OPEN_IF)
             mkdir(host_path, 0755);   /* EEXIST is fine */
-#if defined(__SWITCH__)
+#if defined(__SWITCH__) || defined(__ANDROID__)
         /* Horizon's filesystem layer cannot open() a directory. A
          * directory handle only needs its path (enumeration uses opendir on
          * it), so it gets a descriptor that names no file; the calls that

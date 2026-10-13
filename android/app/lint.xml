@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- SDL's optional BLE Steam Controller and audio capture paths are not
+         enabled by this app. SDL checks Bluetooth permissions in its manager;
+         no Bluetooth/microphone permission is requested for Android gamepads. -->
+    <issue id="MissingPermission">
+        <ignore path="build/generated/sdl-java/org/libsdl/app/HIDDeviceBLESteamController.java" />
+        <ignore path="build/generated/sdl-java/org/libsdl/app/HIDDeviceManager.java" />
+        <ignore path="build/generated/sdl-java/org/libsdl/app/SDLAudioManager.java" />
+    </issue>
+    <!-- SDL handles native quit in its existing back callback. -->
+    <issue id="GestureBackNavigation">
+        <ignore path="build/generated/sdl-java/org/libsdl/app/SDLActivity.java" />
+    </issue>
+</lint>
