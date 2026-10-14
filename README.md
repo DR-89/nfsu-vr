@@ -73,3 +73,22 @@ playing; it is read directly rather than copied into the app.
 
 See [the Android README](android/README.md) for controls, graphics, and runtime
 details.
+
+## License
+
+Copyright (C) 2026 cherepavel.
+
+The original code in this project is licensed under the **GNU General Public
+License, version 3 or (at your option) any later version**
+(`SPDX-License-Identifier: GPL-3.0-or-later`). See [LICENSE](LICENSE) for the
+full terms. This software is provided without warranty.
+
+Third-party code retains its existing copyright and license notices. In
+particular, see [xboxrecomp/LICENSE](xboxrecomp/LICENSE),
+[xboxrecomp/NOTICE](xboxrecomp/NOTICE), and the license files in the SDL and
+glslang submodules.
+
+The GPL grant covers the project's code, not the original game's executable,
+game data, logos, artwork, or trademarks. Those remain subject to their
+respective owners' rights; inclusion or reference here does not grant a license
+to them.
