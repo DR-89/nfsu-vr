@@ -44,7 +44,10 @@ screens and background pauses can also trigger these snapshots.
    card or a USB drive. The folder must contain `default.xbe`, `CARS`,
    `FRONTEND`, `GLOBAL`, `LANGUAGES`, `MOVIES`, `SOUND` and `TRACKS`.
 3. Tap **Выбрать папку игры**, choose this folder and grant read access.
-4. Tap **Играть**. SDL reads the built-in or connected controller.
+4. The game starts automatically after the folder passes validation. Later app
+   launches validate the saved folder and open the game directly. If the folder
+   is missing or unreadable, the folder-selection menu appears.
+   SDL reads the built-in or connected controller.
 
 The app does not import/copy the selected game folder. SAF resolves document
 IDs and opens seekable read-only descriptors; regular native read/seek then

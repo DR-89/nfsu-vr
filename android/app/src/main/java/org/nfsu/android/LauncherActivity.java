@@ -8,7 +8,6 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -19,11 +18,19 @@ public final class LauncherActivity extends Activity {
     private final ExecutorService folderChecker = Executors.newSingleThreadExecutor();
     private TextView status;
     private Button chooseButton;
-    private Button playButton;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        String tree = getSharedPreferences("game", MODE_PRIVATE).getString("tree", null);
+        if (tree != null) {
+            checkFolder(Uri.parse(tree), false);
+        } else {
+            showMenu("Выберите папку с файлами игры.");
+        }
+    }
+
+    private void showMenu(String message) {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         int padding = (int) (24 * getResources().getDisplayMetrics().density);
@@ -46,32 +53,10 @@ public final class LauncherActivity extends Activity {
             }
         });
         layout.addView(chooseButton);
-        playButton = new Button(this);
-        playButton.setText("Играть");
-        playButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                startActivity(new Intent(LauncherActivity.this, GameActivity.class));
-            }
-        });
-        layout.addView(playButton);
         status = new TextView(this);
+        status.setText(message);
         layout.addView(status);
         setContentView(layout);
-        refresh();
-    }
-
-    private File storageRoot() {
-        File root = getExternalFilesDir(null);
-        return root == null ? getFilesDir() : root;
-    }
-
-    private void refresh() {
-        String tree = getSharedPreferences("game", MODE_PRIVATE).getString("tree", null);
-        playButton.setEnabled(tree != null);
-        status.setText(tree == null ? "Выберите папку с файлами игры."
-            : "Выбранная папка: " + Uri.parse(tree).getLastPathSegment()
-                + "\nСохранения и журнал: " + storageRoot().getAbsolutePath());
     }
 
     @Override
@@ -80,35 +65,44 @@ public final class LauncherActivity extends Activity {
         if (requestCode != PICK_GAME || resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
-        final Uri tree = data.getData();
+        checkFolder(data.getData(), true);
+    }
 
-        chooseButton.setEnabled(false);
-        playButton.setEnabled(false);
-        status.setText("Проверка выбранной папки…");
+    private void checkFolder(final Uri tree, final boolean persistSelection) {
+        if (chooseButton != null) {
+            chooseButton.setEnabled(false);
+            status.setText("Проверка выбранной папки…");
+        }
         folderChecker.execute(new Runnable() {
             @Override
             public void run() {
                 String error = null;
                 try {
-                    getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    if (persistSelection) {
+                        getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    }
                     SafAccess.configure(getContentResolver(), tree);
                     SafAccess.validate();
-                    if (!getSharedPreferences("game", MODE_PRIVATE).edit().putString("tree", tree.toString()).commit())
+                    if (persistSelection && !getSharedPreferences("game", MODE_PRIVATE).edit().putString("tree", tree.toString()).commit())
                         throw new IOException("Не удалось сохранить выбранную папку");
                 } catch (IOException | RuntimeException exception) {
                     error = exception.getMessage();
+                    if (error == null) {
+                        error = exception.toString();
+                    }
                 }
                 final String result = error;
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (isDestroyed()) {
+                        if (isFinishing() || isDestroyed()) {
                             return;
                         }
-                        chooseButton.setEnabled(true);
-                        refresh();
                         if (result != null) {
-                            status.setText("Не удалось выбрать папку: " + result);
+                            showMenu("Игра недоступна: " + result + "\nПодключите накопитель и выберите папку игры.");
+                        } else {
+                            startActivity(new Intent(LauncherActivity.this, GameActivity.class));
+                            finish();
                         }
                     }
                 });

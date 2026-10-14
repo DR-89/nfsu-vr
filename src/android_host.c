@@ -18,7 +18,10 @@ int android_host_boot(int argc, char **argv)
     snprintf(save, sizeof(save), "%s/save", argv[2]);
     snprintf(log_path, sizeof(log_path), "%s/nfsu1.log", argv[2]);
     snprintf(cache, sizeof(cache), "%s/progcache.bin", argv[2]);
-    mkdir(save, 0700);
+    mkdir(save, 0755);
+    /* Also repair directories created by earlier builds with owner-only access. */
+    if (chmod(save, 0755) != 0)
+        __android_log_print(ANDROID_LOG_WARN, "NFSU", "Cannot update save directory permissions: %s", save);
     if (!freopen(log_path, "w", stdout) || dup2(fileno(stdout), fileno(stderr)) < 0)
         return 0;
     setenv("NFSU2_GAME_DIR", argv[1], 1);
