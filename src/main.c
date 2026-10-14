@@ -20,6 +20,7 @@
 #  include <unistd.h>
 #endif
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
@@ -27,6 +28,9 @@
 #ifdef __ANDROID__
 #include <SDL.h>
 #include <pthread.h>
+#include <ucontext.h>
+#include <dlfcn.h>
+static uintptr_t diagnostic_library_base;
 int android_host_boot(int argc, char **argv);
 #include "../xboxrecomp/src/platform/android_host.h"
 #endif
@@ -175,6 +179,22 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
     fprintf(stderr, "[CRASH] signal %d, fault addr %p (guest VA 0x%08X)\n",
             sig, si->si_addr,
             (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)g_xbox_mem_offset));
+#if defined(__ANDROID__) && defined(__aarch64__)
+    ucontext_t *context = (ucontext_t *)uc;
+    if (context) {
+        fprintf(stderr, "[NATIVE] pc=%016llX pc_offset=%llX lr=%016llX"
+                " sp=%016llX fp=%016llX base=%llX\n",
+                (unsigned long long)context->uc_mcontext.pc,
+                (unsigned long long)(context->uc_mcontext.pc - diagnostic_library_base),
+                (unsigned long long)context->uc_mcontext.regs[30],
+                (unsigned long long)context->uc_mcontext.sp,
+                (unsigned long long)context->uc_mcontext.regs[29],
+                (unsigned long long)diagnostic_library_base);
+        for (unsigned i = 0; i < 31; i++)
+            fprintf(stderr, "[NATIVE] x%u=%016llX\n", i,
+                    (unsigned long long)context->uc_mcontext.regs[i]);
+    }
+#endif
     print_guest_state();
 #ifdef NFSU_HOST_BACKTRACE
     {
@@ -193,6 +213,14 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
 
 static void install_crash_reporter(void)
 {
+#ifdef __ANDROID__
+    Dl_info info;
+    if (dladdr((void *)crash_signal, &info)) {
+        diagnostic_library_base = (uintptr_t)info.dli_fbase;
+        fprintf(stderr, "[NATIVE] library=%s base=%llX diagnostics=2\n",
+                info.dli_fname, (unsigned long long)diagnostic_library_base);
+    }
+#endif
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = crash_signal;

@@ -30,6 +30,220 @@
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
 
+#ifdef __ANDROID__
+#include <pthread.h>
+#include <time.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+/* Boundary snapshots, not asynchronous stack unwinding. The SDL host thread
+ * can report them even when a guest worker or its GIL stops making progress. */
+typedef struct {
+    uint64_t changed_ms, ticks;
+    uint32_t function, ordinal, caller, stack[16];
+    unsigned count, running, active, requested;
+    long tid;
+} AudioDiagnostic;
+static AudioDiagnostic audio_diag[2]; /* worker, shutdown caller */
+static pthread_mutex_t audio_diag_mutex = PTHREAD_MUTEX_INITIALIZER;
+static RECOMP_TLS int audio_diag_lane = -1;
+
+static uint64_t audio_diag_ms(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static void audio_diag_boundary(uint32_t function, unsigned running, int tick)
+{
+    AudioDiagnostic *d;
+    if (audio_diag_lane < 0) return;
+    pthread_mutex_lock(&audio_diag_mutex);
+    d = &audio_diag[audio_diag_lane];
+    d->function = function;
+    d->ordinal = 0;
+    d->changed_ms = audio_diag_ms();
+    d->tid = syscall(SYS_gettid);
+    d->running = running;
+    d->active = MEM8(0x2DDCEC);
+    d->requested = MEM8(0x2DDCED);
+    if (tick) d->ticks++;
+    d->count = 0;
+    for (unsigned i = 0; i < 16; i++) {
+        uint32_t address = esp + i * 4u;
+        if (address < 0x10000u || address > 0x03FFFFFCu) break;
+        d->stack[d->count++] = MEM32(address);
+    }
+    pthread_mutex_unlock(&audio_diag_mutex);
+}
+
+/* Called only for potentially blocking kernel operations on a tracked thread.
+ * No guest register or stack changes, no signals, and no forced completion. */
+void nfsu_audio_diag_kernel(uint32_t ordinal, uint32_t caller, int entering)
+{
+    AudioDiagnostic *d;
+    if (audio_diag_lane < 0) return;
+    pthread_mutex_lock(&audio_diag_mutex);
+    d = &audio_diag[audio_diag_lane];
+    d->ordinal = entering ? ordinal : 0;
+    d->caller = caller;
+    d->changed_ms = audio_diag_ms();
+    if (entering) {
+        d->count = 0;
+        for (unsigned i = 0; i < 16; i++) {
+            uint32_t address = esp + i * 4u;
+            if (address < 0x10000u || address > 0x03FFFFFCu) break;
+            d->stack[d->count++] = MEM32(address);
+        }
+    }
+    pthread_mutex_unlock(&audio_diag_mutex);
+}
+
+void nfsu_audio_diag_poll(void)
+{
+    static uint64_t last;
+    AudioDiagnostic snapshot[2];
+    uint64_t now = audio_diag_ms();
+    if (now - last < 5000) return;
+    if (pthread_mutex_trylock(&audio_diag_mutex) != 0) return;
+    memcpy(snapshot, audio_diag, sizeof(snapshot));
+    pthread_mutex_unlock(&audio_diag_mutex);
+    last = now;
+    for (unsigned lane = 0; lane < 2; lane++) {
+        AudioDiagnostic *d = &snapshot[lane];
+        if (!d->tid) continue;
+        fprintf(stderr, "[AUDTRACE] t=%llu lane=%s tid=%ld running=%u ticks=%llu"
+                " function=%08X kernel=%u caller=%08X age_ms=%llu"
+                " sampled_active=%u sampled_run=%u stack_words=",
+                (unsigned long long)now, lane ? "shutdown" : "worker", d->tid,
+                d->running, (unsigned long long)d->ticks, d->function,
+                d->ordinal, d->caller,
+                (unsigned long long)(now >= d->changed_ms ? now - d->changed_ms : 0),
+                d->active, d->requested);
+        for (unsigned i = 0; i < d->count; i++) fprintf(stderr, " %08X", d->stack[i]);
+        fputc('\n', stderr);
+    }
+    fflush(stderr);
+}
+#endif
+
+extern void sub_001A5C60_gen(void);
+void sub_001A5C60(void)
+{
+#ifdef __ANDROID__
+    int previous = audio_diag_lane;
+    audio_diag_lane = 0;
+    audio_diag_boundary(0x001A5C60u, 1, 0);
+#endif
+    sub_001A5C60_gen();
+#ifdef __ANDROID__
+    audio_diag_boundary(0x001A5C60u, 0, 0);
+    audio_diag_lane = previous;
+#endif
+}
+
+extern void sub_001A2760_gen(void);
+void sub_001A2760(void)
+{
+#ifdef __ANDROID__
+    audio_diag_boundary(0x001A2760u, 1, 1);
+#endif
+    sub_001A2760_gen();
+#ifdef __ANDROID__
+    audio_diag_boundary(0x001A5C60u, 1, 0);
+#endif
+}
+
+extern void sub_001A6110_gen(void);
+void sub_001A6110(void)
+{
+#ifdef __ANDROID__
+    int previous = audio_diag_lane;
+    audio_diag_lane = 1;
+    audio_diag_boundary(0x001A6110u, 1, 0);
+    fprintf(stderr, "[AUDTRACE] shutdown entered\n");
+#endif
+    sub_001A6110_gen();
+#ifdef __ANDROID__
+    audio_diag_boundary(0x001A6110u, 0, 0);
+    fprintf(stderr, "[AUDTRACE] shutdown returned\n");
+    audio_diag_lane = previous;
+#endif
+}
+
+#ifdef __ANDROID__
+extern void nfsu_diag_voice(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern void nfsu_diag_dump(void);
+
+static int audio_pointer_ok(uint32_t address, uint32_t size)
+{
+    uint32_t low = address & 0x7FFFFFFFu;
+    return !(address & 3u) && low >= 0x10000u && low < 0x04000000u
+        && size <= 0x04000000u - low;
+}
+
+static void audio_list_sample(uint32_t operation, uint32_t node, uint32_t parent)
+{
+    uint32_t next = 0, prev = 0, caller = 0;
+    int invalid = !audio_pointer_ok(node, 8);
+    if (audio_pointer_ok(esp, 4)) caller = MEM32(esp);
+    if (!invalid) {
+        next = MEM32(node); prev = MEM32(node + 4);
+        invalid = !audio_pointer_ok(next, 8) || !audio_pointer_ok(prev, 8);
+        if (!invalid) invalid = MEM32(next + 4) != node || MEM32(prev) != node;
+    }
+    nfsu_diag_voice(operation, caller, node, next, prev, parent);
+    if (invalid) {
+        fprintf(stderr, "[VOICE-LINK] invalid observed op=%08X node=%08X"
+                " next=%08X prev=%08X parent=%08X caller=%08X\n",
+                operation, node, next, prev, parent, caller);
+        if (operation == 0x001E6921u && audio_pointer_ok(node - 0x4Cu, 0x6C)) {
+            uint32_t object = node - 0x4Cu;
+            fprintf(stderr, "[VOICE-LINK] object=%08X count=%u channel=%u"
+                    " status=%04X owner=%08X\n", object, MEM8(object + 0x64),
+                    MEM8(object + 0x65), MEM16(object + 0x12), MEM32(object + 0x68));
+        }
+        /* Emit retained context before the original code can fault. */
+        nfsu_diag_dump();
+    }
+}
+#endif
+
+extern void sub_001E6921_gen(void);
+void sub_001E6921(void)
+{
+#ifdef __ANDROID__
+    uint32_t object = ecx;
+    uint32_t parent = audio_pointer_ok(object, 12) ? MEM32(object + 8) : 0;
+    audio_list_sample(0x001E6921u, object + 0x4Cu, parent);
+#endif
+    sub_001E6921_gen();
+#ifdef __ANDROID__
+    uint32_t node = object + 0x4Cu;
+    nfsu_diag_voice(0x801E6921u, 0, node,
+        audio_pointer_ok(node, 8) ? MEM32(node) : 0,
+        audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, parent);
+#endif
+}
+
+extern void sub_001E2880_gen(void);
+void sub_001E2880(void)
+{
+#ifdef __ANDROID__
+    uint32_t node = audio_pointer_ok(esp, 8) ? MEM32(esp + 4) : 0;
+    audio_list_sample(0x001E2880u, node, 0);
+#endif
+    sub_001E2880_gen();
+#ifdef __ANDROID__
+    /* Removed nodes need not have reciprocal links after unlink. Record the
+     * bytes without applying the linked-node invariant to the removed node. */
+    nfsu_diag_voice(0x801E2880u, 0, node,
+        audio_pointer_ok(node, 8) ? MEM32(node) : 0,
+        audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, 0);
+#endif
+}
+
 /* ── ICALL trace ring buffer ───────────────────────────────── */
 
 /*
