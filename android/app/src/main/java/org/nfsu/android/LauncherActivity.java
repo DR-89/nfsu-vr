@@ -4,9 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Html;
+import android.text.method.LinkMovementMethod;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -23,27 +25,24 @@ public final class LauncherActivity extends Activity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         String tree = getSharedPreferences("game", MODE_PRIVATE).getString("tree", null);
+        showMenu("");
         if (tree != null) {
             checkFolder(Uri.parse(tree), false);
-        } else {
-            showMenu("Выберите папку с файлами игры.");
         }
     }
 
     private void showMenu(String message) {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int padding = (int) (24 * getResources().getDisplayMetrics().density);
-        layout.setPadding(padding, padding, padding, padding);
-        TextView title = new TextView(this);
-        title.setText("Need for Speed Underground");
-        title.setTextSize(24);
-        layout.addView(title);
-        TextView instructions = new TextView(this);
-        instructions.setText("Выберите распакованную Xbox-версию: папку с default.xbe, CARS, TRACKS и остальными файлами.\n\nФайлы остаются в выбранной папке, в том числе на карте памяти. Управление — встроенный геймпад. Сохранения хранятся отдельно в приложении.");
-        layout.addView(instructions);
-        chooseButton = new Button(this);
-        chooseButton.setText("Выбрать папку игры");
+        setContentView(R.layout.activity_launcher);
+        View panel = findViewById(R.id.launcher_panel);
+        int width = Math.min(getResources().getConfiguration().screenWidthDp - 48, 560);
+        panel.getLayoutParams().width = (int) (width * getResources().getDisplayMetrics().density);
+        TextView credits = findViewById(R.id.launcher_credits);
+        credits.setText(Html.fromHtml(getString(R.string.launcher_credits, BuildConfig.BUILD_COMMIT), Html.FROM_HTML_MODE_LEGACY));
+        credits.setMovementMethod(LinkMovementMethod.getInstance());
+        status = findViewById(R.id.launcher_status);
+        status.setText(message);
+        status.setVisibility(message.isEmpty() ? View.GONE : View.VISIBLE);
+        chooseButton = findViewById(R.id.choose_game);
         chooseButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -52,11 +51,7 @@ public final class LauncherActivity extends Activity {
                 startActivityForResult(intent, PICK_GAME);
             }
         });
-        layout.addView(chooseButton);
-        status = new TextView(this);
-        status.setText(message);
-        layout.addView(status);
-        setContentView(layout);
+
     }
 
     @Override
@@ -71,7 +66,8 @@ public final class LauncherActivity extends Activity {
     private void checkFolder(final Uri tree, final boolean persistSelection) {
         if (chooseButton != null) {
             chooseButton.setEnabled(false);
-            status.setText("Проверка выбранной папки…");
+            status.setVisibility(View.VISIBLE);
+            status.setText(R.string.launcher_checking);
         }
         folderChecker.execute(new Runnable() {
             @Override
@@ -84,8 +80,9 @@ public final class LauncherActivity extends Activity {
                     SafAccess.configure(getContentResolver(), tree);
                     SafAccess.validate();
                     if (persistSelection && !getSharedPreferences("game", MODE_PRIVATE).edit().putString("tree", tree.toString()).commit())
-                        throw new IOException("Не удалось сохранить выбранную папку");
+                        throw new IOException("Could not persist the selected folder");
                 } catch (IOException | RuntimeException exception) {
+                    Log.w("NFSU", "Game folder validation failed", exception);
                     error = exception.getMessage();
                     if (error == null) {
                         error = exception.toString();
@@ -99,7 +96,7 @@ public final class LauncherActivity extends Activity {
                             return;
                         }
                         if (result != null) {
-                            showMenu("Игра недоступна: " + result + "\nПодключите накопитель и выберите папку игры.");
+                            showMenu(getString(R.string.launcher_unavailable));
                         } else {
                             startActivity(new Intent(LauncherActivity.this, GameActivity.class));
                             finish();

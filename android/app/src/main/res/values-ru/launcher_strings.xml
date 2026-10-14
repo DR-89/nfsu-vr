@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launcher_title">ВЫБОР ФАЙЛОВ ИГРЫ</string>
+    <string name="launcher_description">Выберите папку распакованной Xbox-версии с default.xbe, CARS и TRACKS. Файлы останутся на вашем накопителе.</string>
+    <string name="launcher_choose">ВЫБРАТЬ ПАПКУ  ›</string>
+    <string name="launcher_checking">Проверка файлов игры…</string>
+    <string name="launcher_unavailable">ФАЙЛЫ ИГРЫ НЕДОСТУПНЫ\nПодключите накопитель или выберите папку заново. Проверьте, что она содержит поддерживаемую Xbox-версию.</string>
+    <string name="launcher_logo">Need for Speed Underground</string>
+    <string name="launcher_platform">XBOX RECOMPILATION / ANDROID</string>
+    <string name="launcher_credits">&lt;a href="https://github.com/cherepavel/nfsu1-android"&gt;Билд %1$s&lt;/a&gt;　/　Автор порта: &lt;a href="https://github.com/cherepavel"&gt;cherepavel&lt;/a&gt;</string>
+</resources>

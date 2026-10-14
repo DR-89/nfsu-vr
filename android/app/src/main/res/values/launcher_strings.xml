@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launcher_title">SELECT GAME FILES</string>
+    <string name="launcher_description">Choose your extracted Xbox game folder containing default.xbe, CARS and TRACKS. Files stay on your storage.</string>
+    <string name="launcher_choose">SELECT FOLDER  ›</string>
+    <string name="launcher_checking">Checking game files…</string>
+    <string name="launcher_unavailable">GAME FILES UNAVAILABLE\nReconnect your storage or select the game folder again. Check that it contains the supported Xbox release.</string>
+    <string name="launcher_logo">Need for Speed Underground</string>
+    <string name="launcher_platform">XBOX RECOMPILATION / ANDROID</string>
+    <string name="launcher_credits">&lt;a href="https://github.com/cherepavel/nfsu1-android"&gt;Build %1$s&lt;/a&gt;　/　Port by &lt;a href="https://github.com/cherepavel"&gt;cherepavel&lt;/a&gt;</string>
+</resources>

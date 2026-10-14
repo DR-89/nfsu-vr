@@ -1,0 +1,9 @@
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#50FFFFFF">
+    <item>
+        <selector>
+            <item android:state_enabled="false"><shape><solid android:color="#344E57" /><corners android:radius="2dp" /></shape></item>
+            <item android:state_focused="true"><shape><solid android:color="#DBF7FF" /><stroke android:width="3dp" android:color="#FFFFFF" /><corners android:radius="2dp" /></shape></item>
+            <item><shape><gradient android:startColor="#B8E9F5" android:endColor="#69B7CF" android:angle="270" /><corners android:radius="2dp" /></shape></item>
+        </selector>
+    </item>
+</ripple>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="#090E12">
+    <ImageView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:src="@drawable/launcher_backdrop" android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+    <View android:layout_width="match_parent" android:layout_height="match_parent"
+        android:background="#50000000" android:importantForAccessibility="no" />
+<ScrollView
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:fillViewport="true" android:scrollbars="none">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:gravity="center" android:padding="16dp">
+        <LinearLayout android:id="@+id/launcher_panel"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <ImageView android:layout_width="match_parent" android:layout_height="64dp"
+                android:layout_marginBottom="12dp" android:src="@drawable/launcher_logo"
+                android:scaleType="fitCenter" android:contentDescription="@string/launcher_logo" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp" android:gravity="center"
+                android:text="@string/launcher_platform" android:textColor="#95A4A8"
+                android:fontFamily="sans-serif-condensed" android:letterSpacing="0.18" android:textSize="11sp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="20dp"
+                android:background="@drawable/launcher_card">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="@string/launcher_title" android:textColor="#F3F6F7"
+                    android:textSize="22sp" android:textStyle="bold|italic" android:fontFamily="sans-serif-condensed" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp" android:text="@string/launcher_description"
+                    android:textColor="#ABB4BC" android:textSize="15sp" android:lineSpacingExtra="4dp" />
+                <TextView android:id="@+id/launcher_status"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp" android:textColor="#F3C28C"
+                    android:textSize="14sp" android:lineSpacingExtra="3dp" />
+                <Button android:id="@+id/choose_game"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:minHeight="52dp"
+                    android:background="@drawable/launcher_button" android:backgroundTint="@null" android:textColor="#10242C"
+                    android:text="@string/launcher_choose" android:textAllCaps="false"
+                    android:textSize="16sp" android:textStyle="bold" />
+            </LinearLayout>
+            <TextView android:id="@+id/launcher_credits"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:gravity="center"
+                android:textColor="#87929C" android:textColorLink="#A5DCEB" android:textSize="12sp"
+                android:minHeight="40dp" android:linksClickable="true" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
+
+</FrameLayout>

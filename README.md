@@ -7,218 +7,69 @@
 The original Xbox (NTSC-U) release of **Need for Speed: Underground**, lifted
 instruction by instruction to C and running natively, with no emulator.
 
-![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
-![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
-![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.3.2-blue)
-
-[Features](#-features) · [Playing on Switch](#-playing-on-switch) · [Building](#%EF%B8%8F-building) · [Configuration](#%EF%B8%8F-configuration) · [Status](#-status)
-
 </div>
 
----
+## Build for Android
 
-> [!IMPORTANT]
-> **No game data is included.** You need your own copy of the Xbox disc,
-> extracted (`default.xbe`, `FRONTEND/`, `CARS/`, ...).
+The commands below are for Linux. The APK targets **ARM64**, Android 11 or
+newer (API 30+).
 
-## ✨ Features
+### Requirements
 
-- 🏁 **Native code**: the whole game runs as recompiled C, built with
-  [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
-- 🎮 **Two renderers**: Vulkan (NVK on Switch, recommended) and OpenGL, with
-  render scaling up to 4x
-- ⚡ **30 fps races on Switch** (the game's own cap) with the Vulkan build
-  and raised clocks
-- 🪞 **Car reflections** as cube maps (Vulkan), switchable in
-  **Options → Camera → Car Reflections**; Off also skips the reflection
-  cube-face passes in races
-- 🖼️ **Cleaner picture** (Vulkan): mipmaps with trilinear and 16x
-  anisotropic filtering, FXAA, square-pixel 1280x720 for the 16:9 view
-- ⚙️ **Graphics options in the game** (Vulkan), under **Options → Camera**:
-  Resolution Scale (1x, 1.5x, 2x, 2.5x), Anti-Aliasing, Anisotropic
-  (Off-16x) and Square Pixels, applied at once and kept in
-  `nfsu1x_options.txt`
-- 🎬 **Movies** played by the game's own EA `.mad` decoder
-- 🔊 **Audio** through an emulated Xbox APU, with 5.1 downmixed to stereo
-- 📳 **Rumble** on Switch HD rumble and SDL controllers
-- ⏱️ **CPU/GPU/memory clocks** settable per mode (handheld and docked),
-  kept across dock changes, HOME and sleep
-- Shares its runtime with the
-  [Underground 2](https://github.com/antoxa2584x/nfsu2-sw) port
+- Git, Python 3 with `venv` and `pip`, and JDK 21 or newer.
+- Android SDK with platform **37**, NDK **30.0.16248370**, and CMake **4.1.2**.
+  Install these through Android Studio's SDK Manager or `sdkmanager`.
+- The supported original Xbox **NTSC-U** `default.xbe` from your own game copy.
+  Game data is not included in the repository or APK.
 
-## 🕹️ Playing on Switch
+Gradle **9.8.0** is downloaded by the wrapper; Android Gradle Plugin **9.4.1**
+is configured in the project. Run the build from a Git checkout: the launcher
+displays the current commit as its build identifier.
 
-1. Copy the NRO to `sdmc:/switch/nfsu1x/` (`nfsu1x-vulkan.nro` for the Vulkan
-   build, `nfsu1x.nro` for OpenGL).
-2. Copy the **extracted** disc (not the ISO) to `sdmc:/switch/nfsu1x/game/`.
-3. Start it with **title takeover**: hold **R** while launching any game.
-   Applet mode leaves too little memory.
+### Prepare and build
 
-```
-sdmc:/switch/nfsu1x/
-├── nfsu1x-vulkan.nro
-├── nfsu1x_env.txt      optional settings, KEY=VALUE per line
-├── nfsu1x_options.txt  written by the in-game options the port adds
-├── save/               created on first run
-└── game/
-    ├── default.xbe
-    └── ...
-```
-
-Buttons map by label (Switch A = Xbox A). Settings go in `nfsu1x_env.txt`
-(see [Configuration](#%EF%B8%8F-configuration)) and the log is written to the
-same folder.
-
-Recommended `nfsu1x_env.txt`:
-
-```ini
-RECOMP_GIL_EAGER=1
-RECOMP_CULL=0
-RECOMP_GL_SCALE=1.5
-NFSU2_CPU_MHZ=1785
-NFSU2_GPU_MHZ=768
-```
-
-## 🛠️ Building
-
-### Android (ARM64)
-
-The Android host uses SDL2 and a Vulkan 1.1 renderer adapted for Retroid
-Pocket 4 Pro. Select the extracted game folder through Android's system
-picker, including on an SD card; files are read directly without importing
-them. Saves are kept separately in the application's files directory.
-
-See [Android build instructions and device validation](android/README.md).
-SDL2 and glslang are pinned submodules (`git submodule update --init --recursive`).
-
-
-<details open>
-<summary><b>1. Extract the disc and lift the XBE to C</b></summary>
+From the repository root, initialize the pinned source dependencies once:
 
 ```sh
-python3 -m tools.xiso unpack "Need for Speed - Underground (USA).iso" /path/to/game   # from xboxrecomp/
-# Writes NFSU1_GEN_DIR (default /root/nfsu1x/gen)
-NFSU1_XBE=/path/to/game/default.xbe NFSU1_GEN_DIR=/path/to/gen tools/regen.sh
+git submodule update --init --recursive
 ```
 
-</details>
+Open the repository root in Android Studio and select your JDK, or use the
+command line. In `local.properties`, set your SDK and game executable
+paths (this file is ignored by Git):
 
-<details open>
-<summary><b>2a. Linux</b> (SDL2 + OpenGL or Vulkan)</summary>
+```properties
+sdk.dir=/path/to/Android/Sdk
+nfsu.xbe=/path/to/Need For Speed Underground/default.xbe
+```
+
+If `nfsu.xbe` is omitted, Gradle uses
+`game/Need For Speed Underground/default.xbe` relative to the repository root.
+Then build:
 
 ```sh
-cmake -S . -B build -G Ninja -DNFSU2_GEN_DIR=/path/to/gen   # add -DNFSU2_VULKAN=ON for Vulkan
-cmake --build build
-NFSU2_GAME_DIR=/path/to/game build/nfsu2_recomp
+./gradlew assembleDebug
 ```
 
-</details>
+Gradle creates its own Python virtual environment, installs the pinned generator
+dependencies, generates C sources from the XBE, and builds the native libraries
+and APK. Python 3 with `venv` must be installed; no manual `pip` or preparation
+script is needed. The first build needs network access for dependencies.
+Generated sources and analysis files live under `android/app/build/` and are
+regenerated when the XBE or generator inputs change. `clean` removes them.
+Use `-Pnfsu.xbe=/path/to/default.xbe` to override the executable for one build,
+and `-Pnfsu.python=/path/to/python3` to choose a Python interpreter.
 
-<details open>
-<summary><b>2b. Nintendo Switch</b> (devkitA64, switch-sdl2, switch-mesa)</summary>
+The APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
+To install it on a connected device with USB debugging enabled:
 
 ```sh
-NFSU2_GEN_DIR=/path/to/gen NFSU2_GAME_SRC=/path/to/game switch/build.sh
-# Vulkan build (needs mesa-switch NVK and glslang for Switch)
-VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-</details>
+On first launch, select the extracted Xbox game folder containing `default.xbe`,
+`CARS`, `TRACKS`, and the remaining disc files. Keep that folder available while
+playing; it is read directly rather than copied into the app.
 
-CMake options and most runtime switches keep their `NFSU2_*` names: the glue
-code is shared with the Underground 2 port.
-
-### Project layout
-
-| Path | What |
-|---|---|
-| `src/main.c` | boot and runtime defaults |
-| `src/recomp_manual.c` | hand-written overrides of lifted functions (D3D, DirectSound, CRT) |
-| `src/switch_nx.c` | Switch log device, env file, clocks, profiler, loading screen |
-| `config/seed_functions.json` | entry points the static pass cannot see |
-| `xboxrecomp/` | the toolkit (MIT), vendored with this port's changes: NV2A renderers (Vulkan, OpenGL), SDL audio, Switch platform layer, translator fixes |
-| `tools/regen.sh` | XBE → lifted C (`gen/`, never committed) |
-| `tools/prof_report.py` | Switch profiler (`prof.bin`) → per-thread function tables |
-| `switch/build.sh` | Switch NRO build + SD-card staging |
-
-## ⚙️ Configuration
-
-On Linux these are ordinary environment variables. On the Switch they go in
-`sdmc:/switch/nfsu1x/nfsu1x_env.txt`, one `KEY=VALUE` per line (`#` starts a
-comment). The [Underground 2 README](https://github.com/antoxa2584x/nfsu2-sw#%EF%B8%8F-configuration)
-lists every runtime switch; the ones that matter here:
-
-<details open>
-<summary><b>Performance and clocks (Switch)</b></summary>
-
-| Variable | Meaning |
-|---|---|
-| `NFSU2_CPU_MHZ`, `NFSU2_GPU_MHZ`, `NFSU2_MEM_MHZ` | Clocks (closest listed rate, capped at 1785 / 921.6 / 1600 MHz). The CPU is what limits the port. Old rates come back on exit. |
-| `NFSU2_CPU_MHZ_DOCKED`, `NFSU2_GPU_MHZ_DOCKED`, `NFSU2_MEM_MHZ_DOCKED` | Different rates while docked (otherwise the plain keys apply in both modes). |
-| `RECOMP_GIL_EAGER=1` | Hand the guest lock over by guest priority (the main thread pre-empts workers). |
-| `RECOMP_CULL=0` | No off-screen batch culling (in NFSU1 it costs more than it saves). |
-| `RECOMP_VK_INSTANCE=0` | Vulkan: don't merge repeated draws into instanced draws. |
-| `RECOMP_GL_THREAD=1` | OpenGL: GL calls on their own thread. |
-| `RECOMP_NX_PROFILE` | Sampling profiler into `prof.bin`: 1 = busy threads, 2 = every thread above 2%. |
-| `NFSU2_NO_LOG=1` | No log file, no `[perf]` reports, no profiler. |
-
-</details>
-
-<details>
-<summary><b>Graphics</b></summary>
-
-| Variable | Meaning |
-|---|---|
-| `RECOMP_GL_SCALE` | Render resolution multiple, 0.5..4 (fractions allowed). Vulkan: only until Options → Camera → Resolution Scale is changed (default there 1.5x). |
-| `RECOMP_GL_SCALE_X` | Vulkan: horizontal multiple, if different; overrides Square Pixels. |
-| `RECOMP_VK_MIPS=0` | Vulkan: no mipmaps (distant textures shimmer, the old look). |
-| `RECOMP_VK_ANISO` | Vulkan: anisotropic filtering, 1..16 (default 16; 1 = off). |
-| `RECOMP_VK_LOD_BIAS` | Vulkan: mip bias, negative = sharper (default -0.25). |
-| `RECOMP_VK_FXAA=0` | Vulkan: no FXAA (plain scaled blit to the screen). |
-| `RECOMP_VK_CUBE=0` | Vulkan: no cube maps (car reflections off), whatever Options → Camera says. |
-| `RECOMP_GL_DXT=0` | Decode DXT textures on the CPU instead of uploading them compressed. |
-| `RECOMP_GL_TEX_MB` | Texture cache budget in MB. |
-| `RECOMP_PROG_CACHE` | Shader/pipeline cache file (`progcache.bin`), `=0` off. |
-| `RECOMP_GL_DUMP=<prefix>[,every]` | Write presented frames as BMP. |
-| `RECOMP_FPS_LOG=1` | Presented frames per 10 s. |
-| `RECOMP_DRAW_STATS=1` | Vulkan: draws → draw calls per frame. |
-
-</details>
-
-<details>
-<summary><b>Game, audio and input</b></summary>
-
-| Variable | Meaning |
-|---|---|
-| `NFSU2_GAME_DIR` | Extracted disc (Linux; default `./game`). The Switch always uses `sdmc:/switch/nfsu1x/game/`. |
-| `NFSU2_GL=0` | Use the executor's CPU renderer instead of the GPU renderer. |
-| `RECOMP_AUDIO_VOLUME` | Master volume 0..100 (default 50). |
-| `RECOMP_AUDIO=0` | No host audio device. |
-| `RECOMP_PAD_SCRIPT` | Timed presses, e.g. `4000:start:300,9000:a:200` (ms from the first pad read). |
-| `RECOMP_PAD_LAYOUT=position` | Map buttons by position (Xbox layout) instead of by label. |
-| `RECOMP_RUMBLE=0` | No rumble. |
-
-</details>
-
-## 🚦 Status
-
-| Platform | State |
-|---|---|
-| 🐧 Linux | Movies, title, menus, Quick Race at 30 fps with HUD, AI and audio |
-| Android / Retroid Pocket 4 Pro | Movies, menus and Quick Race checked on hardware; Vulkan 1.1, built-in controller, direct SD-card reads. FPS and Career not verified. |
-| 🎮 Switch hardware | Menus and Quick Race at 30 fps (Vulkan, CPU 1785 MHz) |
-
-Still open: the main-menu car's rear window shows through its side windows;
-cube maps on OpenGL; Career mode untested.
-
-## 📚 More
-
-- [`CLAUDE.md`](CLAUDE.md): detailed engineering notes (address map against
-  Underground 2, fixes, performance measurements)
-
-<div align="center">
-<sub>Need for Speed and Underground are trademarks of Electronic Arts. This is
-an unofficial fan project, not affiliated with or endorsed by EA or Microsoft.</sub>
-</div>
+See [the Android README](android/README.md) for controls, graphics, and runtime
+details.

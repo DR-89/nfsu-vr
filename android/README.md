@@ -5,22 +5,34 @@ The target device for bring-up is Retroid Pocket 4 Pro (Android 13, Mali-G77).
 
 ## Build
 
-Dependencies are pinned Git submodules: SDL 2.32.10 and glslang 15.1.0.
-`xboxrecomp` remains vendored because it includes the game's maintained fixes.
+Use JDK 21 or newer, Python 3 with `venv`, and Android SDK platform 37,
+NDK 30.0.16248370, and CMake 4.1.2. Gradle 9.8.0 and AGP 9.4.1 are pinned.
+Initialize the SDL and glslang submodules once:
 
 ```sh
 git submodule update --init --recursive
-python3 -m venv .venv
-.venv/bin/python -m pip install -r tools/requirements-recomp.txt
-JAVA_HOME=/path/to/jdk-21 ANDROID_HOME=/path/to/Android/Sdk tools/build_android.sh
 ```
 
-Install SDK platform 37, NDK 30.0.16248370 and CMake 4.1.2 through the SDK manager.
-The wrapper pins Gradle 9.8.0; AGP is 9.4.1. Generated C is excluded from Git.
-The generator expects the supported Xbox `default.xbe` under
-`game/Need For Speed Underground/`; set `NFSU1_XBE` for another location.
-Use `REGENERATE=1` after changing generator inputs. No game data is packaged
-in the APK.
+Set `sdk.dir` and `nfsu.xbe` in `local.properties` at the repository root:
+
+```properties
+sdk.dir=/path/to/Android/Sdk
+nfsu.xbe=/path/to/Need For Speed Underground/default.xbe
+```
+
+Build from the repository root, or open the root directory in Android Studio:
+
+```sh
+./gradlew assembleDebug
+```
+
+Gradle installs Python dependencies in its own virtual environment, runs the
+recompilation pipeline, and builds the APK. The default XBE location is
+`game/Need For Speed Underground/default.xbe` relative to the repository root.
+Override it with `-Pnfsu.xbe=/path/to/default.xbe`; use
+`-Pnfsu.python=/path/to/python3` for a different Python interpreter.
+Generation tracks its inputs and writes under `android/app/build/`, so `clean` removes
+all generated Android sources. No game data is packaged in the APK.
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
