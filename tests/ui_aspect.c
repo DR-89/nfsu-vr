@@ -19,6 +19,7 @@ void sub_00018E40(void);
 void sub_00016460(void);
 void sub_0014B510(void);
 void sub_000F8B80(void);
+void sub_000DC090(void);
 
 static float read_float(uint32_t at)
 {
@@ -51,6 +52,12 @@ void sub_00018E40_gen(void)
 
 static int draw_hud;
 static int draw_feng;
+static int draw_menu;
+void sub_000DC090_gen(void)
+{
+    if (draw_feng) sub_000F8B80();
+    else sub_000192C0();
+}
 static float cached_expected_shift;
 /* Reproduce the cached FEng path: queue node+0x10 -> screen-space quad. */
 void sub_000F8B80_gen(void)
@@ -61,7 +68,11 @@ void sub_000F8B80_gen(void)
     while (node != head) {
         uint32_t quad = node + 0x10;
         for (int i = 0; i < 4; i++) {
-            expected_x[i] = read_float(quad + 0x10 + i * 16) + cached_expected_shift;
+            float x = read_float(quad + 0x10 + i * 16);
+            int stretch = draw_menu && wide && getenv("RECOMP_HORPLUS") == NULL &&
+                          MEM32(0x283434) == 6;
+            expected_x[i] = stretch ? 320.0f + (x - 320.0f) * (4.0f / 3.0f) :
+                                      x + cached_expected_shift;
             expected_y[i] = read_float(quad + 0x14 + i * 16);
         }
         g_esp = caller_sp - 8;
@@ -79,7 +90,8 @@ void sub_0014B510_gen(void)
 }
 void sub_00016460_gen(void)
 {
-    if (draw_hud) sub_0014B510();
+    if (draw_menu) sub_000DC090();
+    else if (draw_hud) sub_0014B510();
     else if (draw_feng) sub_000F8B80();
     else sub_000192C0();
 }
@@ -122,15 +134,15 @@ int main(int argc, char **argv)
     MEM32(0x263EBC) = 0x3000;
     MEM32(0x3004) = 0;
     MEM32(0x283434) = 3;
-    quad_case(-20, 660, -10, 490, enabled); /* oversized menu backdrop */
-    quad_case(-320, 260, 0, 480, enabled); /* pause panel extending off-screen */
+    quad_case(-20, 660, -10, 490, 0); /* oversized menu backdrop */
+    quad_case(-320, 260, 0, 480, 0); /* pause panel extending off-screen */
     quad_case(510, 590, 400, 480, 0);      /* circular HUD icon */
     quad_case(100, 540, 120, 340, 0);      /* modal stays with its text */
     draw_feng = 1;
-    quad_case(12, 170, 15, 100, enabled ? -1 : 0); /* left frame corner */
-    quad_case(565, 615, 20, 25, enabled ? 2 : 0);  /* right frame dash */
-    quad_case(500, 625, 405, 465, enabled ? 2 : 0); /* bottom corner */
-    quad_case(12, 268, 15, 143, enabled ? -1 : 0); /* transparent corner canvas */
+    quad_case(12, 170, 15, 100, 0); /* left frame corner */
+    quad_case(565, 615, 20, 25, 0);  /* right frame dash */
+    quad_case(500, 625, 405, 465, 0); /* bottom corner */
+    quad_case(12, 268, 15, 143, 0); /* transparent corner canvas */
     MEM32(0x283434) = 6;
     quad_case(25, 175, 20, 100, enabled ? -1 : 0); /* lap/timer */
     quad_case(450, 600, 330, 470, enabled ? 2 : 0); /* gauge */
@@ -158,6 +170,23 @@ int main(int argc, char **argv)
     assert(draws == before + 2 && g_esp == 0x1004);
     assert(!memcmp(saved_first, (void *)XBOX_PTR(0x2000), sizeof saved_first));
     assert(!memcmp(saved_last, (void *)XBOX_PTR(0x3000), sizeof saved_last));
+    /* Post-race menus still render in game flow 6. Their title, body,
+     * footer and separate bevels must all undo the HUD projection. */
+    draw_menu = 1;
+    quad_case(40, 600, 95, 360, enabled ? 1 : 0); /* reward backdrop */
+    quad_case(565, 585, 95, 360, enabled ? 1 : 0); /* separate right bevel */
+    quad_case(70, 180, 330, 360, enabled ? 1 : 0); /* Next */
+    quad_case(210, 290, 330, 360, enabled ? 1 : 0); /* Back: opposite anchor */
+    quad_case(420, 660, 280, 480, enabled ? 1 : 0); /* result menu */
+    quad_case(405, 430, 415, 480, enabled ? 1 : 0); /* Accept icon */
+    draw_feng = 0;
+    quad_case(-20, 660, -10, 490, enabled ? 1 : 0); /* uncached menu backdrop */
+    draw_feng = 1;
+    MEM32(0x283434) = 3;
+    quad_case(12, 170, 15, 100, 0); /* FE package corner joins */
+    draw_menu = 0;
+    MEM32(0x283434) = 6;
+    quad_case(25, 175, 20, 100, enabled ? -1 : 0); /* HUD scope restored */
     draw_feng = 0;
     quad_case(510, 590, 400, 480, 0); /* no FEng context leaks */
     draw_hud = 1;
@@ -182,12 +211,12 @@ int main(int argc, char **argv)
     g_esp = 0x1000;
     sub_000192C0();                      /* unrelated draws outside the UI pass */
     assert(g_esp == 0x1004);
-    for (int loading = 0; loading < 2; loading++) {
-        MEM32(0x283434) = loading ? 4 : 3;
+    for (int state = 3; state <= 6; state++) {
+        MEM32(0x283434) = state;
         g_esp = 0x1000; g_ecx = 0x4000;
         MEM32(g_esp) = 0x16548;
         put_float(g_ecx + 0x40, 1.0f);
-        expected_projection = enabled && !loading ? 0.75f : 1.0f;
+        expected_projection = enabled && state == 6 ? 0.75f : 1.0f;
         sub_00018E40();
         assert(g_esp == 0x1004);
     }

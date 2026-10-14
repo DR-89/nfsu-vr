@@ -63,14 +63,18 @@ push descriptors or extended dynamic state. The existing desktop/Switch Vulkan
 implementation. Mobile BC/DXT support is optional; the existing CPU decode path
 is used when the driver lacks it.
 
-The Android baseline is commit `9d94d5c`, with only the subsequent widescreen
-HUD/menu corrections retained. Text, icons and gauges keep their proportions;
-HUD objects and the minimap are moved towards the screen edges, while large
-menu backgrounds keep their full width. Loading screens retain their original
-projection. `RECOMP_HORPLUS=0` disables these corrections. The guest draw checks
-in `tests/ui_aspect.c` cover coordinates, source restoration and 4:3/loading
-exclusions; they do not establish visual correctness or race stability on a
-device after this rollback.
+The Android baseline is commit `9d94d5c`, with 3D/HUD aspect corrections
+retained. 3D rendering keeps its widescreen correction. Only the racing HUD
+keeps proportional text, icons and gauges, with objects and the minimap moved
+towards the screen edges. All menus retain the original 4:3 layout stretched
+across the widescreen output, including text, buttons and background pieces.
+Menu draws in racing state (pause, rewards and results) undo the HUD projection
+for every quad equally. Loading screens retain their original projection.
+`RECOMP_HORPLUS=0` disables the corrections. The guest draw checks in
+`tests/ui_aspect.c` cover coordinates, source restoration, menu stretching,
+HUD scope restoration and projection selection. They do not establish visual
+correctness or race stability on a device. The revised menu behavior still
+needs device validation.
 
 ## Diagnostics and validation
 

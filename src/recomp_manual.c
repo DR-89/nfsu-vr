@@ -393,7 +393,7 @@ void sub_00018E40(void)
      * identity projection. Compensate the anamorphic 16:9 presentation
      * before forming its product; the 3D camera uses the other path below. */
     if (MEM32(esp) == 0x00016548u && horplus_on() &&
-        MEM32(NFSU1_GAMEFLOW_STATE) != 4) {
+        MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
         float m;
         memcpy(&m, (void *)XBOX_PTR(ecx + 0x40), sizeof m);
         m *= 0.75f;
@@ -474,44 +474,49 @@ void sub_0014B510(void)
 extern void sub_000F8B80_gen(void);
 static float s_feng_shift;
 static int s_feng_draw;
+static int s_feng_menu_draw;
+
+/* sub_00016460 draws FEng menus through sub_000DC090, then the racing
+ * HUD through the callbacks at 0x265B8C. Game flow remains 6 for pause,
+ * rewards and race results: it cannot distinguish those menus from HUD.
+ * Undo the racing UI projection equally for every menu quad, including
+ * glyphs, so menus retain their original stretched presentation. */
+extern void sub_000DC090_gen(void);
+
+void sub_000DC090(void)
+{
+    int previous = s_feng_menu_draw;
+    s_feng_menu_draw = 1;
+    sub_000DC090_gen();
+    s_feng_menu_draw = previous;
+}
 
 void sub_000F8B80(void)
 {
     uint32_t head = ecx + 0x18;
     uint32_t node = MEM32(head);
     float left = INFINITY, right = -INFINITY;
-    float top = INFINITY, bottom = -INFINITY;
     float previous_shift = s_feng_shift;
     int previous_draw = s_feng_draw;
     unsigned count = 0;
 
     s_feng_shift = 0.0f;
     s_feng_draw = s_ui_aspect_active;
-    if (s_feng_draw) {
+    if (s_feng_draw && !s_feng_menu_draw &&
+        MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
         while (node != head && node && count++ < 4096) {
             /* List node +0x10 is the quad, its xyz vertices start +0x10. */
             for (int i = 0; i < 4; i++) {
-                float x, y;
+                float x;
                 memcpy(&x, (void *)XBOX_PTR(node + 0x20 + i * 16), 4);
-                memcpy(&y, (void *)XBOX_PTR(node + 0x24 + i * 16), 4);
                 left = fminf(left, x); right = fmaxf(right, x);
-                top = fminf(top, y); bottom = fmaxf(bottom, y);
             }
             node = MEM32(node);
         }
         if (node == head && count) {
-            if (MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
-                float centre = (left + right) * 0.5f;
-                if (centre < 280.0f) s_feng_shift = -640.0f / 6.0f;
-                else if (centre > 360.0f) s_feng_shift = 640.0f / 6.0f;
-            } else if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
-                       right - left < 480.0f && bottom - top < 360.0f &&
-                       (top < 100.0f || bottom > 380.0f)) {
-                if (left < 80.0f && right < 320.0f)
-                    s_feng_shift = -640.0f / 6.0f;
-                else if (right > 560.0f && left > 320.0f)
-                    s_feng_shift = 640.0f / 6.0f;
-            }
+            float centre = (left + right) * 0.5f;
+            if (centre < 280.0f) s_feng_shift = -640.0f / 6.0f;
+            else if (centre > 360.0f) s_feng_shift = 640.0f / 6.0f;
         }
     }
     sub_000F8B80_gen();
@@ -519,52 +524,29 @@ void sub_000F8B80(void)
     s_feng_draw = previous_draw;
 }
 
-/* FE sprites arrive here in 640x480 screen coordinates (four xyz
- * vertices at quad+0x10, stride 16). Large panels are authored to reach
- * beyond the screen: narrowing these exposes their edges and breaks the
- * joins between the menu's background pieces. Undo the UI correction for
- * screen-spanning decoration, while logos and icons retain square pixels.
- * Restore the source coordinates after the synchronous guest draw: these
- * quads may be shared or animated by the FE. */
+/* The racing pass has a 0.75 horizontal projection. Undo it for every
+ * menu quad to preserve the original stretched 4:3 menu, including text.
+ * Only racing HUD objects receive an edge shift. Restore cached geometry. */
 extern void sub_000192C0_gen(void);
 
 void sub_000192C0(void)
 {
     uint32_t quad = MEM32(esp + 4);
     float original_x[4];
-    float left = INFINITY, right = -INFINITY;
-    float top = INFINITY, bottom = -INFINITY;
+    float shift = s_feng_shift;
     int i;
-    float shift = 0.0f;
-    int expand;
+    int stretch = s_feng_menu_draw;
 
-    if (!s_ui_aspect_active) {
+    if (!s_ui_aspect_active || (!stretch &&
+        (!s_feng_draw || shift == 0.0f))) {
         sub_000192C0_gen();
         return;
     }
-    for (i = 0; i < 4; i++) {
-        float x, y;
-        memcpy(&x, (void *)XBOX_PTR(quad + 0x10 + i * 16), 4);
-        memcpy(&y, (void *)XBOX_PTR(quad + 0x14 + i * 16), 4);
-        left = fminf(left, x); right = fmaxf(right, x);
-        top = fminf(top, y); bottom = fmaxf(bottom, y);
-    }
-    /* HUD cached objects have already selected a common anchor. Never
-     * expand a long HUD text/banner because of its overall dimensions. */
-    expand = !(s_feng_draw && MEM32(NFSU1_GAMEFLOW_STATE) == 6) &&
-             (right - left >= 480.0f || bottom - top >= 360.0f);
-    shift = s_feng_draw ? s_feng_shift : 0.0f;
-    if (!expand && shift == 0.0f) {
-        sub_000192C0_gen();
-        return;
-    }
-    /* Guest pointers must refer to guest RAM. Temporarily adjust only the
-     * four x coordinates, then restore the original bytes after the draw. */
     for (i = 0; i < 4; i++) {
         float x;
         memcpy(&x, (void *)XBOX_PTR(quad + 0x10 + i * 16), 4);
         original_x[i] = x;
-        x = expand ? 320.0f + (x - 320.0f) * (4.0f / 3.0f) : x + shift;
+        x = stretch ? 320.0f + (x - 320.0f) * (4.0f / 3.0f) : x + shift;
         memcpy((void *)XBOX_PTR(quad + 0x10 + i * 16), &x, 4);
     }
     sub_000192C0_gen();
@@ -959,7 +941,7 @@ void sub_00016460(void)
     memcpy(&f, &v, 4);
     if (v != s_menu_size_user && f > 0.919f && f < 0.921f)
         MEM32(NFSU1_MENU_SIZE) = 0x3F800000u;   /* 1.0f */
-    s_ui_aspect_active = horplus_on() && MEM32(NFSU1_GAMEFLOW_STATE) != 4;
+    s_ui_aspect_active = horplus_on() && MEM32(NFSU1_GAMEFLOW_STATE) == 6;
     sub_00016460_gen();
     s_ui_aspect_active = previous;
 }
