@@ -52,6 +52,10 @@
 #include <switch.h>
 #define VK_USE_PLATFORM_VI_NN 1
 #endif
+#ifdef __ANDROID__
+#define VK_USE_PLATFORM_ANDROID_KHR 1
+#include "../platform/android_host.h"
+#endif
 #include <vulkan/vulkan.h>
 #if !defined(__SWITCH__)
 #include <SDL.h>
@@ -63,6 +67,7 @@
 #include <pthread.h>
 #ifdef __ANDROID__
 #include <unistd.h>
+
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,11 +132,26 @@ static PFN_vkCmdSetStencilOp          p_stencil_op;
 /* Presentation. */
 static VkSurfaceKHR   s_surface;
 static VkSwapchainKHR s_swapchain;
+#ifdef __ANDROID__
+typedef enum AndroidPresentationState {
+    ANDROID_PRESENT_READY,
+    ANDROID_REBUILD_SWAPCHAIN,
+    ANDROID_REBUILD_SURFACE,
+    ANDROID_WAIT_SURFACE
+} AndroidPresentationState;
+static AndroidPresentationState s_android_present;
+static AndroidHostWindow s_android_window;
+#endif
 static VkFormat       s_sc_format;
 static VkExtent2D     s_sc_extent;
 static uint32_t       s_sc_count;
 static VkImage        s_sc_images[8];
 static VkImageView    s_sc_views[8];
+#ifdef __ANDROID__
+/* A submit fence does not establish that presentation consumed its wait
+ * semaphore. Reacquiring the same swapchain image allows its reuse. */
+static VkSemaphore s_sc_rendered[8];
+#endif
 static int            s_headless;
 #if !defined(__SWITCH__)
 static SDL_Window    *s_win;
@@ -2144,12 +2164,27 @@ static int create_swapchain(void)
     VkSurfaceFormatKHR fmts[16];
     VkPresentModeKHR modes[8], mode = VK_PRESENT_MODE_FIFO_KHR;
     uint32_t nf = 16, nm = 8, i;
+    VkResult result;
     VkSwapchainCreateInfoKHR ci = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
 
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &caps) != VK_SUCCESS)
+    result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &caps);
+    if (result != VK_SUCCESS) {
+        LOGE("surface capabilities failed: %d\n", result);
         return 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(s_pd, s_surface, &nf, fmts);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(s_pd, s_surface, &nm, modes);
+    }
+    if (!caps.currentExtent.width || !caps.currentExtent.height)
+        return 0;
+    result = vkGetPhysicalDeviceSurfaceFormatsKHR(s_pd, s_surface, &nf, fmts);
+    if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || !nf) {
+        LOGE("surface formats failed: %d\n", result);
+        return 0;
+    }
+    result = vkGetPhysicalDeviceSurfacePresentModesKHR(s_pd, s_surface, &nm, modes);
+    if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+        LOGE("surface present modes failed: %d\n", result);
+        return 0;
+    }
+    ci.imageColorSpace = fmts[0].colorSpace;
     s_sc_format = fmts[0].format;
     for (i = 0; i < nf; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM || fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) {
@@ -2191,21 +2226,39 @@ static int create_swapchain(void)
     ci.oldSwapchain = s_swapchain;
     {
         VkSwapchainKHR sc;
-        if (vkCreateSwapchainKHR(s_dev, &ci, NULL, &sc) != VK_SUCCESS)
+        result = vkCreateSwapchainKHR(s_dev, &ci, NULL, &sc);
+        if (result != VK_SUCCESS) {
+            LOGE("swapchain creation failed: %d\n", result);
             return 0;
+        }
+        for (i = 0; i < 8; i++) {
+            if (s_sc_views[i]) vkDestroyImageView(s_dev, s_sc_views[i], NULL);
+            s_sc_views[i] = VK_NULL_HANDLE;
+#ifdef __ANDROID__
+            if (s_sc_rendered[i]) vkDestroySemaphore(s_dev, s_sc_rendered[i], NULL);
+            s_sc_rendered[i] = VK_NULL_HANDLE;
+#endif
+        }
         if (s_swapchain)
             vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
         s_swapchain = sc;
     }
-    for (i = 0; i < 8; i++)
-        if (s_sc_views[i]) {
-            vkDestroyImageView(s_dev, s_sc_views[i], NULL);
-            s_sc_views[i] = VK_NULL_HANDLE;
-        }
     s_sc_count = 8;
-    vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, s_sc_images);
+    result = vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, s_sc_images);
+    if (result != VK_SUCCESS || !s_sc_count) {
+        LOGE("swapchain images failed: %d\n", result);
+        return 0;
+    }
     for (i = 0; i < s_sc_count; i++) {
         VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+#ifdef __ANDROID__
+        VkSemaphoreCreateInfo sci = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+        result = vkCreateSemaphore(s_dev, &sci, NULL, &s_sc_rendered[i]);
+        if (result != VK_SUCCESS) {
+            LOGE("presentation semaphore creation failed: %d\n", result);
+            return 0;
+        }
+#endif
         vi.image = s_sc_images[i];
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vi.format = s_sc_format;
@@ -2219,6 +2272,96 @@ static int create_swapchain(void)
             s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode);
     return 1;
 }
+
+#ifdef __ANDROID__
+/* These helpers run before acquiring an image. The recording frame contains
+ * guest rendering only; no command in it references the presentation images. */
+static void android_presentation_idle(void)
+{
+    uint32_t i, j;
+    vkDeviceWaitIdle(s_dev);
+    /* Completed command buffers can still own framebuffers referencing the
+     * old swapchain views. The recording frame owns guest targets only. */
+    for (i = 0; i < VK_FRAMES; i++) {
+        Frame *f = &s_fr[i];
+        if (!f->submitted) continue;
+        for (j = 0; j < f->nframebuffers; j++)
+            vkDestroyFramebuffer(s_dev, f->framebuffers[j], NULL);
+        f->nframebuffers = 0;
+    }
+}
+
+static void android_release_presentation(void)
+{
+    uint32_t i;
+    android_presentation_idle();
+    for (i = 0; i < 8; i++) {
+        if (s_sc_views[i]) vkDestroyImageView(s_dev, s_sc_views[i], NULL);
+        s_sc_views[i] = VK_NULL_HANDLE;
+        if (s_sc_rendered[i]) vkDestroySemaphore(s_dev, s_sc_rendered[i], NULL);
+        s_sc_rendered[i] = VK_NULL_HANDLE;
+    }
+    if (s_swapchain) vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
+    s_swapchain = VK_NULL_HANDLE;
+    s_sc_count = 0;
+    if (s_surface) vkDestroySurfaceKHR(s_inst, s_surface, NULL);
+    s_surface = VK_NULL_HANDLE;
+    s_android_present = ANDROID_WAIT_SURFACE;
+}
+
+static int android_create_surface(void)
+{
+    PFN_vkCreateAndroidSurfaceKHR create = (PFN_vkCreateAndroidSurfaceKHR)
+        vkGetInstanceProcAddr(s_inst, "vkCreateAndroidSurfaceKHR");
+    VkAndroidSurfaceCreateInfoKHR ci = { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
+    ci.window = s_android_window.window;
+    return create && create(s_inst, &ci, NULL, &s_surface) == VK_SUCCESS;
+}
+
+static void android_prepare_presentation(void)
+{
+    for (;;) {
+        AndroidHostWindow window;
+        if (!android_host_acquire_window(&window, 0)) {
+            if (s_surface) android_release_presentation();
+            android_host_release_window(&s_android_window);
+            if (!android_host_acquire_window(&window, 1)) _exit(0);
+        }
+        if (window.generation != s_android_window.generation) {
+            android_release_presentation();
+            android_host_release_window(&s_android_window);
+            s_android_window = window;
+            s_android_present = ANDROID_REBUILD_SURFACE;
+        } else {
+            if (window.width != s_android_window.width || window.height != s_android_window.height) {
+                s_android_window.width = window.width;
+                s_android_window.height = window.height;
+                if (s_android_present == ANDROID_PRESENT_READY)
+                    s_android_present = ANDROID_REBUILD_SWAPCHAIN;
+            }
+            android_host_release_window(&window);
+        }
+        if (s_android_present == ANDROID_PRESENT_READY) return;
+        if (s_android_present == ANDROID_REBUILD_SURFACE)
+            android_release_presentation();
+        if (!s_surface && !android_create_surface()) {
+            LOGE("Android surface creation failed\n");
+            SDL_Delay(100);
+            continue;
+        }
+        android_presentation_idle();
+        if (create_swapchain()) {
+            LOGE("Android presentation restored: generation=%llu size=%ux%u\n",
+                 (unsigned long long)s_android_window.generation,
+                 s_sc_extent.width, s_sc_extent.height);
+            s_android_present = ANDROID_PRESENT_READY;
+            return;
+        }
+        s_android_present = ANDROID_REBUILD_SURFACE;
+        SDL_Delay(100); /* Failed driver operation; host events remain serviced. */
+    }
+}
+#endif
 
 static int ready(void)
 {
@@ -2264,15 +2407,16 @@ static int ready(void)
         const char *drv = getenv("SDL_VIDEODRIVER");
         s_headless = (e && *e == '1') || (drv && !strcmp(drv, "offscreen"));
         if (!s_headless) {
+#ifdef __ANDROID__
+            s_win = android_host_window();
+            {
+#else
             if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
                 s_headless = 1;
             } else {
                 s_win = SDL_CreateWindow("NV2A (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-#ifdef __ANDROID__
-                                         | SDL_WINDOW_FULLSCREEN_DESKTOP
+                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 #endif
-                                         );
                 if (!s_win) {
                     s_headless = 1;
                 } else {
@@ -2401,7 +2545,11 @@ static int ready(void)
         }
     }
 #else
+#ifdef __ANDROID__
+    if (!s_headless && (!android_host_acquire_window(&s_android_window, 1) || !android_create_surface())) {
+#else
     if (!s_headless && !SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
+#endif
         LOGE("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
         s_headless = 1;
     }
@@ -2521,7 +2669,9 @@ static int ready(void)
         vkAllocateCommandBuffers(s_dev, &cai, &f->cb);
         vkCreateFence(s_dev, &fci, NULL, &f->fence);
         vkCreateSemaphore(s_dev, &sci, NULL, &f->acquired);
+#ifndef __ANDROID__
         vkCreateSemaphore(s_dev, &sci, NULL, &f->rendered);
+#endif
         bci.size = RING_BYTES;
         bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -3991,12 +4141,28 @@ static void vk_flip(void)
     barrier_all();
 
     VT("flip %u: surface %08X drew %d, acquiring\n", s_frame, s ? s->va : 0, s_drew_any);
-    if (!s_headless) {
-        VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain, UINT64_MAX, s_f->acquired,
-                                            VK_NULL_HANDLE, &idx);
-        if (rr == VK_ERROR_OUT_OF_DATE_KHR) {
+#ifdef __ANDROID__
+    if (!s_headless) android_prepare_presentation();
+#endif
+    if (!s_headless && s_swapchain) {
+        VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain,
+#ifdef __ANDROID__
+                                            /* Pause can race the event drain above. Bound the
+                                             * wait so the next flip can service that event. */
+                                            100000000ull,
+#else
+                                            UINT64_MAX,
+#endif
+                                            s_f->acquired, VK_NULL_HANDLE, &idx);
+        if (rr == VK_ERROR_OUT_OF_DATE_KHR || rr == VK_ERROR_SURFACE_LOST_KHR) {
+#ifdef __ANDROID__
+            LOGE("Android acquire requires presentation rebuild: %d\n", rr);
+            s_android_present = rr == VK_ERROR_SURFACE_LOST_KHR
+                ? ANDROID_REBUILD_SURFACE : ANDROID_REBUILD_SWAPCHAIN;
+#else
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
+#endif
         } else if (rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) {
             VkImage dst = s_sc_images[idx];
             VT("flip %u: acquired image %u\n", s_frame, idx);
@@ -4071,7 +4237,11 @@ static void vk_flip(void)
         si.pWaitSemaphores = &s_f->acquired;
         si.pWaitDstStageMask = &ws;
         si.signalSemaphoreCount = 1;
+#ifdef __ANDROID__
+        si.pSignalSemaphores = &s_sc_rendered[idx];
+#else
         si.pSignalSemaphores = &s_f->rendered;
+#endif
     }
     if (vkQueueSubmit(s_queue, 1, &si, s_f->fence) != VK_SUCCESS)
         LOGE("vkQueueSubmit failed\n");
@@ -4080,20 +4250,28 @@ static void vk_flip(void)
         VkPresentInfoKHR pi = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
         VkResult pr;
         pi.waitSemaphoreCount = 1;
+#ifdef __ANDROID__
+        pi.pWaitSemaphores = &s_sc_rendered[idx];
+#else
         pi.pWaitSemaphores = &s_f->rendered;
+#endif
         pi.swapchainCount = 1;
         pi.pSwapchains = &s_swapchain;
         pi.pImageIndices = &idx;
         VT("flip %u: vkQueuePresentKHR\n", s_frame);
         pr = vkQueuePresentKHR(s_queue, &pi);
-        if (pr == VK_ERROR_OUT_OF_DATE_KHR
-#ifndef __ANDROID__
-            || pr == VK_SUBOPTIMAL_KHR
-#endif
-            ) {
+#ifdef __ANDROID__
+        if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
+            LOGE("Android present requires presentation rebuild: %d\n", pr);
+            s_android_present = pr == VK_ERROR_SURFACE_LOST_KHR
+                ? ANDROID_REBUILD_SURFACE : ANDROID_REBUILD_SWAPCHAIN;
+        }
+#else
+        if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
         }
+#endif
     }
     {
         static uint64_t last_save;
@@ -4108,36 +4286,10 @@ static void vk_flip(void)
     frame_begin();
     VT("flip %u: next frame recording\n", s_frame);
     s_dyn_valid = 0;
-#if !defined(__SWITCH__)
+#if !defined(__SWITCH__) && !defined(__ANDROID__)
     if (s_win) {
         SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-#ifdef __ANDROID__
-            if (e.type == SDL_QUIT) _exit(0);
-            /* IDENTITY presentation can remain SUBOPTIMAL on a rotated
-             * Android panel. Rebuild only when the extent actually changed. */
-            if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                VkSurfaceCapabilitiesKHR caps;
-                if (s_surface && vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &caps) == VK_SUCCESS
-                    && memcmp(&caps.currentExtent, &s_sc_extent, sizeof(s_sc_extent))) {
-                    vkDeviceWaitIdle(s_dev);
-                    create_swapchain();
-                }
-            }
-            if (e.type == SDL_APP_DIDENTERBACKGROUND) {
-                vkDeviceWaitIdle(s_dev);
-                int paused = 1;
-                while (paused) {
-                    if (SDL_WaitEventTimeout(&e, 100)) {
-                        if (e.type == SDL_QUIT) _exit(0);
-                        if (e.type == SDL_APP_DIDENTERFOREGROUND) paused = 0;
-                    }
-                }
-                if (s_surface) create_swapchain();
-                s_dyn_valid = 0;
-            }
-#endif
-        }
+        while (SDL_PollEvent(&e)) { }
     }
 #endif
 }
