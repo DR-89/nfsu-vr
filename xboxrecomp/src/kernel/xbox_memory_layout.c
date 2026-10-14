@@ -1003,13 +1003,30 @@ int nv2a_exec_busy_percent(void) { return s_exec_busy_pct; }
  * status bits a microsecond after it sets them means the ISR never sees
  * them. While held, the PGRAPH status is left alone. */
 static volatile LONG g_nv2a_intr_hold;
+static volatile LONG g_nv2a_intr_guard;
+
+static void nv2a_intr_lock(void)
+{
+    while (InterlockedCompareExchange(&g_nv2a_intr_guard, 1, 0) != 0)
+        Sleep(0);
+}
+
+static void nv2a_intr_unlock(void)
+{
+    InterlockedExchange(&g_nv2a_intr_guard, 0);
+}
 
 void xbox_Nv2aHoldInterrupts(int on)
 {
+    /* Drain any ack pass that sampled "not held" before publishing a trap.
+     * An atomic counter alone cannot stop that pass clearing the new status
+     * while the guest handler reads it, then reporting the trap as taken. */
+    nv2a_intr_lock();
     if (on)
         InterlockedIncrement(&g_nv2a_intr_hold);
     else
         InterlockedDecrement(&g_nv2a_intr_hold);
+    nv2a_intr_unlock();
 }
 
 /* The vblank bits, likewise. The runtime raises vblank on the timer thread:
@@ -1089,7 +1106,9 @@ static int vblank_held(void)
 
 static void nv2a_ack_flags(volatile uint32_t *regs)
 {
-    int held = InterlockedCompareExchange(&g_nv2a_intr_hold, 0, 0) != 0;
+    int held;
+    nv2a_intr_lock();
+    held = InterlockedCompareExchange(&g_nv2a_intr_hold, 0, 0) != 0;
     int vblank = vblank_held();
 
     for (size_t i = 0; i < sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]); i++) {
@@ -1121,6 +1140,7 @@ static void nv2a_ack_flags(volatile uint32_t *regs)
             *r |= NV2A_IDLE[i].idle_mask;
         }
     }
+    nv2a_intr_unlock();
 }
 
 /* Busy/idle flags, on a thread of their own.
