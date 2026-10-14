@@ -80,7 +80,7 @@ val generateRecomp = tasks.register("generateRecomp") {
 
 val buildCommit = providers.exec {
     workingDir(repository)
-    commandLine("git", "rev-parse", "--short=12", "HEAD")
+    commandLine("git", "rev-parse", "HEAD")
 }.standardOutput.asText.map { it.trim() }
 
 val prepareSdlJava by tasks.registering {
@@ -122,7 +122,8 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "BUILD_COMMIT", "\"${buildCommit.get()}\"")
+        buildConfigField("String", "BUILD_COMMIT", "\"${buildCommit.get().take(12)}\"")
+        buildConfigField("String", "BUILD_COMMIT_FULL", "\"${buildCommit.get()}\"")
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild {
             cmake {

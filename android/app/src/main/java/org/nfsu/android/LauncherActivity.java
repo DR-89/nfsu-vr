@@ -37,7 +37,7 @@ public final class LauncherActivity extends Activity {
         int width = Math.min(getResources().getConfiguration().screenWidthDp - 48, 560);
         panel.getLayoutParams().width = (int) (width * getResources().getDisplayMetrics().density);
         TextView credits = findViewById(R.id.launcher_credits);
-        credits.setText(Html.fromHtml(getString(R.string.launcher_credits, BuildConfig.BUILD_COMMIT), Html.FROM_HTML_MODE_LEGACY));
+        credits.setText(Html.fromHtml(getString(R.string.launcher_credits, BuildConfig.BUILD_COMMIT, BuildConfig.BUILD_COMMIT_FULL), Html.FROM_HTML_MODE_LEGACY));
         credits.setMovementMethod(LinkMovementMethod.getInstance());
         status = findViewById(R.id.launcher_status);
         status.setText(message);
