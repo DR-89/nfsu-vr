@@ -358,6 +358,7 @@ extern int xbox_video_widescreen(void);
 extern void sub_00018E60_gen(void);
 extern void sub_00018E40_gen(void);
 static uint32_t s_proj_view;
+static int s_ui_aspect_active;
 
 static int horplus_on(void)
 {
@@ -384,6 +385,17 @@ void sub_00018E40(void)
 {
     uint32_t v = s_proj_view;
     int fe;
+
+    /* The 2D pass rebuilds view 0 with Menu Size on both axes and an
+     * identity projection. Compensate the anamorphic 16:9 presentation
+     * before forming its product; the 3D camera uses the other path below. */
+    if (MEM32(esp) == 0x00016548u && horplus_on() &&
+        MEM32(NFSU1_GAMEFLOW_STATE) != 4) {
+        float m;
+        memcpy(&m, (void *)XBOX_PTR(ecx + 0x40), sizeof m);
+        m *= 0.75f;
+        memcpy((void *)XBOX_PTR(ecx + 0x40), &m, sizeof m);
+    }
 
     if (!v || MEM32(esp) != 0x0001902Au) {
         sub_00018E40_gen();
@@ -429,6 +441,132 @@ void sub_00018E40(void)
         }
     }
     sub_00018E40_gen();
+}
+
+/* The minimap renderer owns a screen-space centre (+0x68) and half
+ * extent (+0x70). Its draw builds the map and markers from that centre. */
+extern void sub_0014B510_gen(void);
+
+void sub_0014B510(void)
+{
+    uint32_t centre = ecx + 0x68;
+    uint32_t original = MEM32(centre);
+    float x;
+
+    memcpy(&x, &original, 4);
+    if (s_ui_aspect_active && MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
+        if (x < 280.0f) x -= 640.0f / 6.0f;
+        else if (x > 360.0f) x += 640.0f / 6.0f;
+        memcpy((void *)XBOX_PTR(centre), &x, 4);
+    }
+    sub_0014B510_gen();
+    MEM32(centre) = original;
+}
+
+/* FEng renders the rest of the HUD through a cached circular list of
+ * quads. This path is shared by sprites and text (one quad per glyph).
+ * Select one anchor from the complete object's bounds, then translate all
+ * of its quads equally. Editing FEng layout descriptors would miss cached
+ * geometry; selecting an anchor for each glyph would split long strings. */
+extern void sub_000F8B80_gen(void);
+static float s_feng_shift;
+static int s_feng_draw;
+
+void sub_000F8B80(void)
+{
+    uint32_t head = ecx + 0x18;
+    uint32_t node = MEM32(head);
+    float left = INFINITY, right = -INFINITY;
+    float top = INFINITY, bottom = -INFINITY;
+    float previous_shift = s_feng_shift;
+    int previous_draw = s_feng_draw;
+    unsigned count = 0;
+
+    s_feng_shift = 0.0f;
+    s_feng_draw = s_ui_aspect_active;
+    if (s_feng_draw) {
+        while (node != head && node && count++ < 4096) {
+            /* List node +0x10 is the quad, its xyz vertices start +0x10. */
+            for (int i = 0; i < 4; i++) {
+                float x, y;
+                memcpy(&x, (void *)XBOX_PTR(node + 0x20 + i * 16), 4);
+                memcpy(&y, (void *)XBOX_PTR(node + 0x24 + i * 16), 4);
+                left = fminf(left, x); right = fmaxf(right, x);
+                top = fminf(top, y); bottom = fmaxf(bottom, y);
+            }
+            node = MEM32(node);
+        }
+        if (node == head && count) {
+            if (MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
+                float centre = (left + right) * 0.5f;
+                if (centre < 280.0f) s_feng_shift = -640.0f / 6.0f;
+                else if (centre > 360.0f) s_feng_shift = 640.0f / 6.0f;
+            } else if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
+                       right - left < 480.0f && bottom - top < 360.0f &&
+                       (top < 100.0f || bottom > 380.0f)) {
+                if (left < 80.0f && right < 320.0f)
+                    s_feng_shift = -640.0f / 6.0f;
+                else if (right > 560.0f && left > 320.0f)
+                    s_feng_shift = 640.0f / 6.0f;
+            }
+        }
+    }
+    sub_000F8B80_gen();
+    s_feng_shift = previous_shift;
+    s_feng_draw = previous_draw;
+}
+
+/* FE sprites arrive here in 640x480 screen coordinates (four xyz
+ * vertices at quad+0x10, stride 16). Large panels are authored to reach
+ * beyond the screen: narrowing these exposes their edges and breaks the
+ * joins between the menu's background pieces. Undo the UI correction for
+ * screen-spanning decoration, while logos and icons retain square pixels.
+ * Restore the source coordinates after the synchronous guest draw: these
+ * quads may be shared or animated by the FE. */
+extern void sub_000192C0_gen(void);
+
+void sub_000192C0(void)
+{
+    uint32_t quad = MEM32(esp + 4);
+    float original_x[4];
+    float left = INFINITY, right = -INFINITY;
+    float top = INFINITY, bottom = -INFINITY;
+    int i;
+    float shift = 0.0f;
+    int expand;
+
+    if (!s_ui_aspect_active) {
+        sub_000192C0_gen();
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        float x, y;
+        memcpy(&x, (void *)XBOX_PTR(quad + 0x10 + i * 16), 4);
+        memcpy(&y, (void *)XBOX_PTR(quad + 0x14 + i * 16), 4);
+        left = fminf(left, x); right = fmaxf(right, x);
+        top = fminf(top, y); bottom = fmaxf(bottom, y);
+    }
+    /* HUD cached objects have already selected a common anchor. Never
+     * expand a long HUD text/banner because of its overall dimensions. */
+    expand = !(s_feng_draw && MEM32(NFSU1_GAMEFLOW_STATE) == 6) &&
+             (right - left >= 480.0f || bottom - top >= 360.0f);
+    shift = s_feng_draw ? s_feng_shift : 0.0f;
+    if (!expand && shift == 0.0f) {
+        sub_000192C0_gen();
+        return;
+    }
+    /* Guest pointers must refer to guest RAM. Temporarily adjust only the
+     * four x coordinates, then restore the original bytes after the draw. */
+    for (i = 0; i < 4; i++) {
+        float x;
+        memcpy(&x, (void *)XBOX_PTR(quad + 0x10 + i * 16), 4);
+        original_x[i] = x;
+        x = expand ? 320.0f + (x - 320.0f) * (4.0f / 3.0f) : x + shift;
+        memcpy((void *)XBOX_PTR(quad + 0x10 + i * 16), &x, 4);
+    }
+    sub_000192C0_gen();
+    for (i = 0; i < 4; i++)
+        memcpy((void *)XBOX_PTR(quad + 0x10 + i * 16), &original_x[i], 4);
 }
 
 /* ── Options -> Camera: car reflections and picture rows ──────
@@ -783,12 +921,15 @@ static uint32_t s_menu_size_user;       /* bits the slider last stored */
 void sub_00016460(void)
 {
     uint32_t v = MEM32(NFSU1_MENU_SIZE);
+    int previous = s_ui_aspect_active;
     float f;
 
     memcpy(&f, &v, 4);
     if (v != s_menu_size_user && f > 0.919f && f < 0.921f)
         MEM32(NFSU1_MENU_SIZE) = 0x3F800000u;   /* 1.0f */
+    s_ui_aspect_active = horplus_on() && MEM32(NFSU1_GAMEFLOW_STATE) != 4;
     sub_00016460_gen();
+    s_ui_aspect_active = previous;
 }
 
 void sub_000C1860(void)

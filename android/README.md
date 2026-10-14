@@ -50,6 +50,15 @@ push descriptors or extended dynamic state. The existing desktop/Switch Vulkan
 implementation. Mobile BC/DXT support is optional; the existing CPU decode path
 is used when the driver lacks it.
 
+The Android baseline is commit `9d94d5c`, with only the subsequent widescreen
+HUD/menu corrections retained. Text, icons and gauges keep their proportions;
+HUD objects and the minimap are moved towards the screen edges, while large
+menu backgrounds keep their full width. Loading screens retain their original
+projection. `RECOMP_HORPLUS=0` disables these corrections. The guest draw checks
+in `tests/ui_aspect.c` cover coordinates, source restoration and 4:3/loading
+exclusions; they do not establish visual correctness or race stability on a
+device after this rollback.
+
 ## Diagnostics and validation
 
 The persistent native log is `nfsu1.log` in
