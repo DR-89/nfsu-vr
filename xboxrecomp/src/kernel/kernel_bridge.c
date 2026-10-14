@@ -44,6 +44,11 @@
 #include <ctype.h>
 #include <wctype.h>
 
+#ifdef __ANDROID__
+extern void nfsu_diag_kernel(uint32_t, uint32_t, const uint32_t *, uint32_t, int)
+    __attribute__((weak));
+#endif
+
 /* RECOMP_QUIET=1: drop the periodic and per-operation logging (kernel call
  * summaries, per-read lines, pushbuffer pointers, GPU stats). Each of those
  * flushes stderr, which on a Switch is a write to the SD card. Errors and
@@ -678,6 +683,14 @@ static void gil_lock(void)
     if (me != s_gil_serving && xbox_thread_holds_dispatch()) {
         g_gil_contended = 1;
     }
+#ifdef __ANDROID__
+    int diagnostic_wait = me != s_gil_serving && nfsu_diag_kernel;
+    uint32_t diagnostic_tickets[4] = {
+        (uint32_t)me, (uint32_t)(me >> 32), (uint32_t)s_gil_serving, (uint32_t)prio
+    };
+    if (diagnostic_wait)
+        nfsu_diag_kernel(0x80000001u, g_xbox_kernel_caller, diagnostic_tickets, 0, 1);
+#endif
     while (me != s_gil_serving)
         if (!SleepConditionVariableCS(&s_gil_cv, &s_gil_cs, 1))
             g_gil_contended = 1;           /* 1 ms and still waiting */
@@ -698,6 +711,10 @@ static void gil_lock(void)
         g_gil_contended = 0;               /* nobody behind us */
     }
     LeaveCriticalSection(&s_gil_cs);
+#ifdef __ANDROID__
+    if (diagnostic_wait)
+        nfsu_diag_kernel(0x80000001u, g_xbox_kernel_caller, diagnostic_tickets, 0, 0);
+#endif
 }
 
 static void gil_unlock(void)
@@ -3237,6 +3254,31 @@ static XboxTimer g_timers[XBOX_MAX_TIMERS];
 static CRITICAL_SECTION g_timer_lock;
 static int g_timer_started;
 
+/* Expiry and rearm serialize both the table entry and its dispatcher state.
+ * Never publish a timer before resetting its old signal, or reset can erase
+ * an expiry that happened while the arming thread was descheduled. */
+static int kernel_timer_expire(int i, long long now, uint32_t *dpc)
+{
+    uint32_t fired;
+    HANDLE ev;
+    EnterCriticalSection(&g_timer_lock);
+    if (!g_timers[i].timer_va || now < g_timers[i].due_ms) {
+        LeaveCriticalSection(&g_timer_lock);
+        return 0;
+    }
+    fired = g_timers[i].timer_va;
+    *dpc = g_timers[i].dpc_va;
+    if (g_timers[i].period_ms > 0)
+        g_timers[i].due_ms = now + g_timers[i].period_ms;
+    else
+        g_timers[i].timer_va = 0;
+    ev = ke_shadow_lookup(fired);
+    BRIDGE_MEM32(fired + 4) = 1;
+    if (ev) SetEvent(ev);
+    LeaveCriticalSection(&g_timer_lock);
+    return 1;
+}
+
 static DWORD WINAPI kernel_timer_thread(LPVOID unused)
 {
     int slot = xbox_worker_stack_alloc();
@@ -3285,34 +3327,13 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
         now = (long long)GetTickCount64();
 
         for (i = 0; i < XBOX_MAX_TIMERS; i++) {
-            uint32_t dpc, fired_va;
-
-            EnterCriticalSection(&g_timer_lock);
-            if (!g_timers[i].timer_va || now < g_timers[i].due_ms) {
-                LeaveCriticalSection(&g_timer_lock);
-                continue;
-            }
-            fired_va = g_timers[i].timer_va;
-            dpc = g_timers[i].dpc_va;
-            if (g_timers[i].period_ms > 0)
-                g_timers[i].due_ms = now + g_timers[i].period_ms;
-            else
-                g_timers[i].timer_va = 0;      /* one-shot, done */
-            LeaveCriticalSection(&g_timer_lock);
+            uint32_t dpc;
+            if (!kernel_timer_expire(i, now, &dpc)) continue;
 
             /* Outside the lock: the routine can set or cancel timers. */
             if (dpc)
                 kernel_run_dpc(dpc, 0, 0);
 
-            /* Wake anyone parked on the timer's shadow event; a timer with no
-             * DPC is just a kernel sleep. */
-            {
-                HANDLE ev = ke_shadow_lookup(fired_va);
-                if (ev) {
-                    SetEvent(ev);
-                    BRIDGE_MEM32(fired_va + 4) = 1;   /* SignalState */
-                }
-            }
         }
         xbox_KfLowerIrql(PASSIVE_LEVEL);
     }
@@ -3329,6 +3350,7 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
     if (!g_timer_started) {
         InitializeCriticalSection(&g_timer_lock);
         g_timer_started = 1;
+        fprintf(stderr, "  [KERNEL] timer arm/expiry signals serialized (timer fix v1)\n");
         CloseHandle(CreateThread(NULL, 0, kernel_timer_thread, NULL, 0, NULL));
     }
 
@@ -3338,6 +3360,9 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
         if (!g_timers[i].timer_va && free_slot < 0) free_slot = i;
     }
     if (free_slot >= 0) {
+        HANDLE ev = ke_shadow_lookup(timer_va);
+        if (ev) ResetEvent(ev);
+        BRIDGE_MEM32(timer_va + 4) = 0;
         g_timers[free_slot].timer_va  = timer_va;
         g_timers[free_slot].dpc_va    = dpc_va;
         g_timers[free_slot].due_ms    = (long long)GetTickCount64() + delay_ms;
@@ -3345,12 +3370,6 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
     }
     LeaveCriticalSection(&g_timer_lock);
 
-    /* A freshly set timer starts unsignaled, like the real KeSetTimer. */
-    {
-        HANDLE ev = ke_shadow_lookup(timer_va);
-        if (ev)
-            ResetEvent(ev);
-    }
     g_eax = was_set;
 }
 
@@ -3677,8 +3696,18 @@ static NTSTATUS bridge_create_file_impl(
     if (NT_SUCCESS(st)) {
         bridge_write_handle(handle_va, h);
         bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
+#ifdef __ANDROID__
+        const char *diagnostic_path = w32_handle_path(h);
+        fprintf(stderr, "[FILEOPEN] caller=%08X token=%08X options=%08X path=%s\n",
+                g_xbox_kernel_caller, handle_va ? BRIDGE_MEM32(handle_va) : 0,
+                options, diagnostic_path ? diagnostic_path : "(unknown)");
+#endif
     } else {
         bridge_write_iostatus(iostatus_va, st, 0);
+#ifdef __ANDROID__
+        fprintf(stderr, "[FILEOPENFAIL] caller=%08X status=%08X path=%.512s\n",
+                g_xbox_kernel_caller, (uint32_t)st, name.Buffer ? name.Buffer : "(unknown)");
+#endif
     }
     return st;
 }
@@ -4151,6 +4180,10 @@ static int bridge_async_io_enabled(void)
 /* ── NtReadFile (ordinal 219, 8 args = 32 bytes) ──────── */
 static void bridge_NtReadFile(void)
 {
+#ifdef __ANDROID__
+    uint32_t diagnostic_caller = g_xbox_kernel_caller;
+    uint32_t diagnostic_handle = STACK_ARG(0);
+#endif
     HANDLE   handle    = bridge_resolve_handle(STACK_ARG(0));
     uint32_t iostatus  = STACK_ARG(4);
     uint32_t buffer_va = STACK_ARG(5);
@@ -4216,6 +4249,13 @@ static void bridge_NtReadFile(void)
     bridge_complete_file_io(STACK_ARG(1), STACK_ARG(2), STACK_ARG(3),
                             iostatus);
 
+#ifdef __ANDROID__
+    extern void nfsu_diag_io(uint32_t, uint32_t, uint32_t, int64_t, uint32_t, uint32_t)
+        __attribute__((weak));
+    if (nfsu_diag_io) nfsu_diag_io(219, diagnostic_caller, diagnostic_handle,
+        poff ? off.QuadPart : -1, (uint32_t)ios.Information, (uint32_t)ios.Status);
+#endif
+
     /* An asynchronous request returns STATUS_PENDING, even when the data was
      * already there.
      *
@@ -4238,6 +4278,10 @@ static void bridge_NtReadFile(void)
 /* ── NtWriteFile (ordinal 236, 8 args = 32 bytes) ─────── */
 static void bridge_NtWriteFile(void)
 {
+#ifdef __ANDROID__
+    uint32_t diagnostic_caller = g_xbox_kernel_caller;
+    uint32_t diagnostic_handle = STACK_ARG(0);
+#endif
     HANDLE   handle    = bridge_resolve_handle(STACK_ARG(0));
     uint32_t iostatus  = STACK_ARG(4);
     uint32_t buffer_va = STACK_ARG(5);
@@ -4263,6 +4307,12 @@ static void bridge_NtWriteFile(void)
     bridge_write_iostatus(iostatus, ios.Status, (uint32_t)ios.Information);
     bridge_complete_file_io(STACK_ARG(1), STACK_ARG(2), STACK_ARG(3),
                             iostatus);
+#ifdef __ANDROID__
+    extern void nfsu_diag_io(uint32_t, uint32_t, uint32_t, int64_t, uint32_t, uint32_t)
+        __attribute__((weak));
+    if (nfsu_diag_io) nfsu_diag_io(236, diagnostic_caller, diagnostic_handle,
+        poff ? off.QuadPart : -1, (uint32_t)ios.Information, (uint32_t)ios.Status);
+#endif
 }
 
 /* ── NtQueryInformationFile (ordinal 211, 5 args = 20 bytes) */
@@ -10223,6 +10273,34 @@ static void kernel_thunk_dispatch_body(void)
         }
     }
 
+    /* Optional title-specific boundary diagnostics. Avoid the high-frequency
+     * clock/IRQL calls: they can occur hundreds of thousands of times/sec. */
+#ifdef __ANDROID__
+    extern void nfsu_audio_diag_kernel(uint32_t, uint32_t, int) __attribute__((weak));
+    int audio_trace = nfsu_audio_diag_kernel &&
+        (ordinal == 99 || ordinal == 158 || ordinal == 159 ||
+         ordinal == 234 || ordinal == 235 || ordinal == 219 ||
+         ordinal == 236 || ordinal == 277 || ordinal == 278);
+    uint32_t audio_caller = g_xbox_kernel_caller;
+    if (audio_trace) nfsu_audio_diag_kernel(ordinal, audio_caller, 1);
+    extern void nfsu_diag_kernel(uint32_t, uint32_t, const uint32_t *, uint32_t, int)
+        __attribute__((weak));
+    int runtime_trace = nfsu_diag_kernel &&
+        (ordinal == 158 || ordinal == 159 || ordinal == 234 || ordinal == 235 ||
+         ordinal == 187 || ordinal == 190 || ordinal == 198 || ordinal == 219 ||
+         ordinal == 226 || ordinal == 236 || ordinal == 277 || ordinal == 278 ||
+         ordinal == 225 || ordinal == 145);
+    uint32_t diagnostic_args[4] = {0};
+    if (runtime_trace) {
+        for (unsigned i = 0; i < 4; i++) diagnostic_args[i] = STACK_ARG(i);
+        if (ordinal == 219 || ordinal == 236) {
+            diagnostic_args[1] = STACK_ARG(5); /* buffer */
+            diagnostic_args[2] = STACK_ARG(6); /* length */
+            diagnostic_args[3] = STACK_ARG(7); /* offset pointer */
+        }
+        nfsu_diag_kernel(ordinal, audio_caller, diagnostic_args, 0, 1);
+    }
+#endif
     if (bridge) {
         bridge();
     } else {
@@ -10252,6 +10330,11 @@ static void kernel_thunk_dispatch_body(void)
         }
         g_eax = 0;
     }
+
+#ifdef __ANDROID__
+    if (audio_trace) nfsu_audio_diag_kernel(ordinal, audio_caller, 0);
+    if (runtime_trace) nfsu_diag_kernel(ordinal, audio_caller, diagnostic_args, g_eax, 0);
+#endif
 
     /* Clean stdcall args from the simulated stack.
      * On real x86, stdcall callee does "ret N" to pop the return address
