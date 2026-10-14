@@ -109,6 +109,8 @@ int android_host_video_init(void)
 {
     SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
     SDL_SetHint(SDL_HINT_VIDEO_EXTERNAL_CONTEXT, "1");
+    // Resizable SDL windows otherwise override the manifest with FULL_USER.
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return 0;
     host_sdl_window = SDL_CreateWindow("NFS Underground", SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED, 1280, 720,
