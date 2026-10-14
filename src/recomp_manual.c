@@ -208,8 +208,11 @@ extern void sub_001D9BB0_gen(void);
 void sub_001D9BB0(void)
 {
     uint32_t blk = ecx;
-    uint32_t head = MEM32(blk + 0x1BC);
     uint8_t old = d3d_isr_enter();
+    /* Capture under the dispatch lock: raising IRQL can release the guest
+     * lock and let another handler retire a flip. Reading before the raise
+     * counted that flip again in our delta. */
+    uint32_t head = MEM32(blk + 0x1BC);
 
     xbox_Nv2aVblankTaken();
     sub_001D9BB0_gen();
@@ -238,11 +241,11 @@ void sub_001DA120(void)
 {
     volatile uint32_t *nv = (volatile uint32_t *)XBOX_PTR(0xFD000000u);
     uint32_t blk = ecx;
-    uint32_t head = MEM32(blk + 0x1BC);
     uint8_t old = d3d_isr_enter();
-    uint32_t nsource;
+    uint32_t nsource, head;
 
     nv2a_pb_trap_lock();
+    head = MEM32(blk + 0x1BC);
     nsource = nv[0x400108 / 4];
     sub_001DA120_gen();
     nv2a_pb_flip_retired(MEM32(blk + 0x1BC) - head);   /* a flip queued on its vblank retires at once */
@@ -358,6 +361,7 @@ extern int xbox_video_widescreen(void);
 extern void sub_00018E60_gen(void);
 extern void sub_00018E40_gen(void);
 static uint32_t s_proj_view;
+static int s_ui_aspect_active;
 
 static int horplus_on(void)
 {
@@ -384,6 +388,17 @@ void sub_00018E40(void)
 {
     uint32_t v = s_proj_view;
     int fe;
+
+    /* The 2D pass rebuilds view 0 with Menu Size on both axes and an
+     * identity projection. Compensate the anamorphic 16:9 presentation
+     * before forming its product; the 3D camera uses the other path below. */
+    if (MEM32(esp) == 0x00016548u && horplus_on() &&
+        MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
+        float m;
+        memcpy(&m, (void *)XBOX_PTR(ecx + 0x40), sizeof m);
+        m *= 0.75f;
+        memcpy((void *)XBOX_PTR(ecx + 0x40), &m, sizeof m);
+    }
 
     if (!v || MEM32(esp) != 0x0001902Au) {
         sub_00018E40_gen();
@@ -431,6 +446,114 @@ void sub_00018E40(void)
     sub_00018E40_gen();
 }
 
+/* The minimap renderer owns a screen-space centre (+0x68) and half
+ * extent (+0x70). Its draw builds the map and markers from that centre. */
+extern void sub_0014B510_gen(void);
+
+void sub_0014B510(void)
+{
+    uint32_t centre = ecx + 0x68;
+    uint32_t original = MEM32(centre);
+    float x;
+
+    memcpy(&x, &original, 4);
+    if (s_ui_aspect_active && MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
+        if (x < 280.0f) x -= 640.0f / 6.0f;
+        else if (x > 360.0f) x += 640.0f / 6.0f;
+        memcpy((void *)XBOX_PTR(centre), &x, 4);
+    }
+    sub_0014B510_gen();
+    MEM32(centre) = original;
+}
+
+/* FEng renders the rest of the HUD through a cached circular list of
+ * quads. This path is shared by sprites and text (one quad per glyph).
+ * Select one anchor from the complete object's bounds, then translate all
+ * of its quads equally. Editing FEng layout descriptors would miss cached
+ * geometry; selecting an anchor for each glyph would split long strings. */
+extern void sub_000F8B80_gen(void);
+static float s_feng_shift;
+static int s_feng_draw;
+static int s_feng_menu_draw;
+
+/* sub_00016460 draws FEng menus through sub_000DC090, then the racing
+ * HUD through the callbacks at 0x265B8C. Game flow remains 6 for pause,
+ * rewards and race results: it cannot distinguish those menus from HUD.
+ * Undo the racing UI projection equally for every menu quad, including
+ * glyphs, so menus retain their original stretched presentation. */
+extern void sub_000DC090_gen(void);
+
+void sub_000DC090(void)
+{
+    int previous = s_feng_menu_draw;
+    s_feng_menu_draw = 1;
+    sub_000DC090_gen();
+    s_feng_menu_draw = previous;
+}
+
+void sub_000F8B80(void)
+{
+    uint32_t head = ecx + 0x18;
+    uint32_t node = MEM32(head);
+    float left = INFINITY, right = -INFINITY;
+    float previous_shift = s_feng_shift;
+    int previous_draw = s_feng_draw;
+    unsigned count = 0;
+
+    s_feng_shift = 0.0f;
+    s_feng_draw = s_ui_aspect_active;
+    if (s_feng_draw && !s_feng_menu_draw &&
+        MEM32(NFSU1_GAMEFLOW_STATE) == 6) {
+        while (node != head && node && count++ < 4096) {
+            /* List node +0x10 is the quad, its xyz vertices start +0x10. */
+            for (int i = 0; i < 4; i++) {
+                float x;
+                memcpy(&x, (void *)XBOX_PTR(node + 0x20 + i * 16), 4);
+                left = fminf(left, x); right = fmaxf(right, x);
+            }
+            node = MEM32(node);
+        }
+        if (node == head && count) {
+            float centre = (left + right) * 0.5f;
+            if (centre < 280.0f) s_feng_shift = -640.0f / 6.0f;
+            else if (centre > 360.0f) s_feng_shift = 640.0f / 6.0f;
+        }
+    }
+    sub_000F8B80_gen();
+    s_feng_shift = previous_shift;
+    s_feng_draw = previous_draw;
+}
+
+/* The racing pass has a 0.75 horizontal projection. Undo it for every
+ * menu quad to preserve the original stretched 4:3 menu, including text.
+ * Only racing HUD objects receive an edge shift. Restore cached geometry. */
+extern void sub_000192C0_gen(void);
+
+void sub_000192C0(void)
+{
+    uint32_t quad = MEM32(esp + 4);
+    float original_x[4];
+    float shift = s_feng_shift;
+    int i;
+    int stretch = s_feng_menu_draw;
+
+    if (!s_ui_aspect_active || (!stretch &&
+        (!s_feng_draw || shift == 0.0f))) {
+        sub_000192C0_gen();
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        float x;
+        memcpy(&x, (void *)XBOX_PTR(quad + 0x10 + i * 16), 4);
+        original_x[i] = x;
+        x = stretch ? 320.0f + (x - 320.0f) * (4.0f / 3.0f) : x + shift;
+        memcpy((void *)XBOX_PTR(quad + 0x10 + i * 16), &x, 4);
+    }
+    sub_000192C0_gen();
+    for (i = 0; i < 4; i++)
+        memcpy((void *)XBOX_PTR(quad + 0x10 + i * 16), &original_x[i], 4);
+}
+
 /* ── Options -> Camera: car reflections and picture rows ──────
  *
  * The port's own settings, as NFSU2 has them under Options -> Video, live
@@ -446,7 +569,7 @@ void sub_00018E40(void)
  * this+0x3C+4*(N-1) (thiscall, the message, ret 4; dispatch at
  * 0x000C281C), Favorite Drive Camera's being sub_000C0C90: step a value,
  * rewrite the texts with sub_000DD490(package, object name, text) and
- * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..7 are added
+ * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..8 are added
  * the same way after the original setup; their handlers are our own, at
  * unused int3 bytes after sub_000C0C20 (ROW_HANDLER_VA, recomp_lookup_manual).
  * Texts are our own strings in guest memory -- the language files are
@@ -493,6 +616,7 @@ extern void sub_00016050_gen(void);
 static const int s_scale_pct[] = { 100, 150, 200, 250 };
 static const int s_aniso_lvl[] = { 1, 2, 4, 8, 16 };
 
+static int s_fps60;                     /* experimental; default 30 FPS */
 static int s_refl = 1;                  /* 0 off, 1 on */
 static int s_scale_idx = 1;             /* into s_scale_pct: 1.5x */
 static int s_scale_saved;               /* nfsu1x_options.txt had scale= */
@@ -535,6 +659,13 @@ static const char *const s_onoff[] = { "Off", "On" };
 static const char *const s_scale_texts[] = { "1x", "1.5x", "2x", "2.5x" };
 static const char *const s_aniso_texts[] = { "Off", "2x", "4x", "8x", "16x" };
 #endif
+static const char *const s_fps_texts[] = { "30 FPS", "60 FPS" };
+
+static void frame_rate_changed(void)
+{
+    /* Applied by the race render wrapper on the next frame. */
+}
+
 static const OptRow s_rows[] = {
     { "Car Reflections:", s_onoff, 2, &s_refl, refl_changed },
 #ifdef NFSU2_VULKAN
@@ -543,11 +674,14 @@ static const OptRow s_rows[] = {
     { "Anisotropic:", s_aniso_texts, 5, &s_aniso_idx, picture_changed },
     { "Square Pixels:", s_onoff, 2, &s_square, picture_changed },
 #endif
+    { "Frame Rate:", s_fps_texts, 2, &s_fps60, frame_rate_changed },
 };
 #define N_ROWS ((int)(sizeof s_rows / sizeof s_rows[0]))
 
 static void options_log(void)
 {
+    fprintf(stderr, "[options] race frame rate %d FPS (experimental 60 FPS)\n",
+            s_fps60 ? 60 : 30);
 #ifdef NFSU2_VULKAN
     fprintf(stderr, "[options] car reflections %s, resolution scale %d%%%s, anti-aliasing %s,"
             " anisotropic %dx, square pixels %s\n",
@@ -569,6 +703,8 @@ void nfsu1_options_load(void)
         while (fgets(line, sizeof line, f)) {
             if (!strncmp(line, "reflections=", 12))
                 s_refl = line[12] != '0';
+            else if (!strncmp(line, "fps=", 4))
+                s_fps60 = atoi(line + 4) == 60;
             else if (!strncmp(line, "fxaa=", 5))
                 s_fxaa = line[5] != '0';
             else if (!strncmp(line, "square=", 7))
@@ -618,7 +754,7 @@ static void options_save(void)
         fprintf(stderr, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
         return;
     }
-    fprintf(f, "reflections=%d\n", s_refl);
+    fprintf(f, "reflections=%d\nfps=%d\n", s_refl, s_fps60 ? 60 : 30);
     if (s_scale_saved)
         fprintf(f, "scale=%d\n", s_scale_pct[s_scale_idx]);
 #ifdef NFSU2_VULKAN
@@ -670,10 +806,10 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
 }
 
 static const char *const s_name_obj[] = {
-    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7",
+    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8",
 };
 static const char *const s_data_obj[] = {
-    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7",
+    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8",
 };
 
 static void opt_row_text(uint32_t screen, int i)
@@ -742,6 +878,9 @@ static void opt_row_input_1(void) { opt_row_input(1); }
 static void opt_row_input_2(void) { opt_row_input(2); }
 static void opt_row_input_3(void) { opt_row_input(3); }
 static void opt_row_input_4(void) { opt_row_input(4); }
+static void opt_row_input_5(void) { opt_row_input(5); }
+#else
+static void opt_row_input_1(void) { opt_row_input(1); }
 #endif
 
 /* Race render (cdecl, no arguments): cube-face views off for the call. */
@@ -749,6 +888,19 @@ void sub_00016050(void)
 {
     uint8_t keep[6];
     int n;
+
+    /* NFSU1 XDK presentation interval (0x1DE94C): initialization in
+     * sub_000156F0 requests 0x80000002, and D3D uses the low bits as
+     * the vblank count per flip. Keep its immediate-when-late flag and
+     * change only the normal one/two-vblank intervals. Do not alter the
+     * 60 Hz kernel clock, simulation time, or special D3D intervals.
+     * Reapply at each race render so device resets cannot lose the option. */
+    {
+        uint32_t interval = MEM32(0x001DE94Cu);
+        uint32_t count = interval & 0x7FFFFFFFu;
+        if (count == 1 || count == 2)
+            MEM32(0x001DE94Cu) = (interval & 0x80000000u) | (s_fps60 ? 1u : 2u);
+    }
 
     if (s_refl) {
         sub_00016050_gen();
@@ -783,12 +935,15 @@ static uint32_t s_menu_size_user;       /* bits the slider last stored */
 void sub_00016460(void)
 {
     uint32_t v = MEM32(NFSU1_MENU_SIZE);
+    int previous = s_ui_aspect_active;
     float f;
 
     memcpy(&f, &v, 4);
     if (v != s_menu_size_user && f > 0.919f && f < 0.921f)
         MEM32(NFSU1_MENU_SIZE) = 0x3F800000u;   /* 1.0f */
+    s_ui_aspect_active = horplus_on() && MEM32(NFSU1_GAMEFLOW_STATE) == 6;
     sub_00016460_gen();
+    s_ui_aspect_active = previous;
 }
 
 void sub_000C1860(void)
@@ -906,6 +1061,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
             opt_row_input_0,
 #ifdef NFSU2_VULKAN
             opt_row_input_1, opt_row_input_2, opt_row_input_3, opt_row_input_4,
+            opt_row_input_5,
+#else
+            opt_row_input_1,
 #endif
         };
         return row_input[xbox_va - ROW_HANDLER_VA];

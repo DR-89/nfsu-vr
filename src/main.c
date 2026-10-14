@@ -24,6 +24,12 @@
 #include <stdbool.h>
 #include <string.h>
 
+#ifdef __ANDROID__
+#include <SDL.h>
+#include <pthread.h>
+int android_host_boot(int argc, char **argv);
+#endif
+
 #include <xbox/xboxrecomp.h>
 
 #ifdef __SWITCH__
@@ -31,7 +37,7 @@
 void switch_boot(void);
 void switch_shutdown(void);
 void switch_error_dialog(const char *msg, const char *details);
-#elif !defined(_WIN32)
+#elif !defined(_WIN32) && !defined(__ANDROID__)
 int SDL_ShowSimpleMessageBox(uint32_t flags, const char *title, const char *message,
                              void *window);
 #endif
@@ -157,7 +163,10 @@ static void install_crash_reporter(void)
 /* The CPU exception handler is in switch_nx.c; it calls print_guest_state. */
 static void install_crash_reporter(void) {}
 #else
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 33
 #include <execinfo.h>
+#define NFSU_HOST_BACKTRACE 1
+#endif
 
 static void crash_signal(int sig, siginfo_t *si, void *uc)
 {
@@ -166,6 +175,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
             sig, si->si_addr,
             (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)g_xbox_mem_offset));
     print_guest_state();
+#ifdef NFSU_HOST_BACKTRACE
     {
         /* The host frames name the lifted function (sub_XXXXXXXX) that
          * faulted -- the guest stack alone does not on a worker thread. */
@@ -175,6 +185,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
         fflush(stderr);
         backtrace_symbols_fd(frames, n, 2);
     }
+#endif
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -283,11 +294,37 @@ int main(int argc, char **argv)
     return rc;
 }
 #else
+#ifdef __ANDROID__
+static void *android_game_thread(void *arg)
+{
+    *(int *)arg = game_main();
+    return NULL;
+}
+#endif
 int main(int argc, char **argv)
 {
+#ifdef __ANDROID__
+    if (!android_host_boot(argc, argv))
+        return 1;
+    /* Lifted code has large automatic arrays, unlike a typical SDL app. */
+    pthread_attr_t attr;
+    pthread_t thread;
+    int rc = 1;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16u * 1024u * 1024u);
+    int error = pthread_create(&thread, &attr, android_game_thread, &rc);
+    pthread_attr_destroy(&attr);
+    if (error != 0) {
+        fprintf(stderr, "Cannot start Android game thread: %d\n", error);
+        return 1;
+    }
+    pthread_join(thread, NULL);
+    return rc;
+#else
     (void)argc;
     (void)argv;
     return game_main();
+#endif
 }
 #endif
 
@@ -393,6 +430,11 @@ static int game_main(void)
      * gamepad (RECOMP_USB). On hosts without fault handling their registers
      * are reached through the MMIO accessors the XPP section is lifted with. */
     {
+#ifdef __ANDROID__
+        /* Unlike libnx, SDL controllers must be initialised/opened before
+         * OHCI starts asking xbox_InputGetState for USB input reports. */
+        xbox_InputInit();
+#endif
         extern void xbox_OhciInit(void);
         xbox_OhciInit();
     }
@@ -422,7 +464,8 @@ static int game_main(void)
     xbox_kernel_init();
     /* text patch: NFSU2 only */
     nfsu1_options_load();
-    xbox_path_init(game_dir, NFSU2_DEFAULT_SAVE_DIR);
+    xbox_path_init(game_dir, getenv("NFSU2_SAVE_DIR")
+        ? getenv("NFSU2_SAVE_DIR") : NFSU2_DEFAULT_SAVE_DIR);
     xbox_kernel_bridge_init();
 
     g_esp = XBOX_STACK_TOP;

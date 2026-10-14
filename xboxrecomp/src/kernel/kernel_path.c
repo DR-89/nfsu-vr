@@ -43,6 +43,12 @@ typedef struct {
 
 static const path_rule s_rules[] = {
     { "\\Device\\CdRom0\\",                   0, NULL,         NULL          },
+#ifdef __ANDROID__
+    /* The selected disc is read-only. Xbox title/user data belongs to the
+     * app's writable save tree, including paths before T:/U: are mounted. */
+    { "\\Device\\Harddisk0\\Partition1\\TDATA", 1, "\\TitleData", "/TitleData" },
+    { "\\Device\\Harddisk0\\Partition1\\UDATA", 1, "\\UserData",  "/UserData"  },
+#endif
     { "\\Device\\Harddisk0\\Partition1\\",    0, NULL,         NULL          },
     /* The rest of the disk. Partition 0 is the whole raw device, 2 holds
      * system data, and 3-5 are the per-title caches behind X:, Y: and Z:.

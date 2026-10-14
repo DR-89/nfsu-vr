@@ -9,6 +9,29 @@ cmake_minimum_required(VERSION 3.20)
 
 project(nfsu2_recomp C)
 
+if(ANDROID)
+    enable_language(CXX)
+    # Generated chunks are large; bound compiler memory even on many-core PCs.
+    set_property(GLOBAL PROPERTY JOB_POOLS nfsu_compile=4)
+    set(CMAKE_JOB_POOL_COMPILE nfsu_compile)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_TEST OFF CACHE BOOL "" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/SDL EXCLUDE_FROM_ALL)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+    set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/glslang EXCLUDE_FROM_ALL)
+    set(NFSU2_VULKAN ON CACHE BOOL "" FORCE)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -45,7 +68,15 @@ set(GAME_SOURCES
     src/switch_nx.c
 )
 
-if(WIN32)
+if(ANDROID)
+    add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} ${RECOMP_GEN_SOURCES}
+        src/android_host.c src/android_saf.c)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 log android)
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+    foreach(call open open64 __open_2 fopen fopen64 stat stat64 opendir readdir readdir64 closedir)
+        target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=${call}")
+    endforeach()
+elseif(WIN32)
     add_executable(${PROJECT_NAME} WIN32 ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
 else()
     add_executable(${PROJECT_NAME} ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})

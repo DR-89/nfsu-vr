@@ -81,6 +81,20 @@ static void *g_mirror_views[XBOX_NUM_MIRRORS] = {0};
  * question. */
 static void *g_span_base = NULL;
 static size_t g_span_size = 0;
+
+/* Android must claim the entire 32-bit guest address space before native
+ * threads/libraries allocate around it. Carve only slices of our reservation. */
+static void android_release_span_window(uintptr_t address, size_t size)
+{
+#ifdef __ANDROID__
+    uintptr_t base = (uintptr_t)g_span_base;
+    if (base && address >= base && address - base <= g_span_size
+        && size <= g_span_size - (address - base))
+        VirtualFree((void *)address, size, MEM_RELEASE);
+#else
+    (void)address; (void)size;
+#endif
+}
 static void *g_tiled_view = NULL;
 
 /* Contiguous / physical memory window (see MemoryLayoutInit).
@@ -832,11 +846,13 @@ int xbox_Nv2aFrameCounter(uint32_t device_ptr_va, uint32_t counter_off)
  * stalling, blocky video rather than a clock running away.
  */
 static DWORD g_frame_counter_flip_ms;
+static volatile LONG g_diagnostic_flip_count;
 
 void xbox_Nv2aFrameCounterFlip(void)
 {
     int i;
 
+    InterlockedIncrement(&g_diagnostic_flip_count);
     g_frame_counter_flip_ms = GetTickCount();
     if (!g_frame_counter_flip_ms)
         g_frame_counter_flip_ms = 1;          /* 0 means "never" */
@@ -987,13 +1003,30 @@ int nv2a_exec_busy_percent(void) { return s_exec_busy_pct; }
  * status bits a microsecond after it sets them means the ISR never sees
  * them. While held, the PGRAPH status is left alone. */
 static volatile LONG g_nv2a_intr_hold;
+static volatile LONG g_nv2a_intr_guard;
+
+static void nv2a_intr_lock(void)
+{
+    while (InterlockedCompareExchange(&g_nv2a_intr_guard, 1, 0) != 0)
+        Sleep(0);
+}
+
+static void nv2a_intr_unlock(void)
+{
+    InterlockedExchange(&g_nv2a_intr_guard, 0);
+}
 
 void xbox_Nv2aHoldInterrupts(int on)
 {
+    /* Drain any ack pass that sampled "not held" before publishing a trap.
+     * An atomic counter alone cannot stop that pass clearing the new status
+     * while the guest handler reads it, then reporting the trap as taken. */
+    nv2a_intr_lock();
     if (on)
         InterlockedIncrement(&g_nv2a_intr_hold);
     else
         InterlockedDecrement(&g_nv2a_intr_hold);
+    nv2a_intr_unlock();
 }
 
 /* The vblank bits, likewise. The runtime raises vblank on the timer thread:
@@ -1073,7 +1106,9 @@ static int vblank_held(void)
 
 static void nv2a_ack_flags(volatile uint32_t *regs)
 {
-    int held = InterlockedCompareExchange(&g_nv2a_intr_hold, 0, 0) != 0;
+    int held;
+    nv2a_intr_lock();
+    held = InterlockedCompareExchange(&g_nv2a_intr_hold, 0, 0) != 0;
     int vblank = vblank_held();
 
     for (size_t i = 0; i < sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]); i++) {
@@ -1105,6 +1140,7 @@ static void nv2a_ack_flags(volatile uint32_t *regs)
             *r |= NV2A_IDLE[i].idle_mask;
         }
     }
+    nv2a_intr_unlock();
 }
 
 /* Busy/idle flags, on a thread of their own.
@@ -2027,7 +2063,31 @@ static DWORD WINAPI xbox_watchdog_thread(LPVOID unused)
     {
         const char *keep = getenv("RECOMP_WATCHDOG_KEEP");
         if (keep && *keep == '1') {
+            const char *stall = getenv("RECOMP_STALL_DUMP_SECS");
+            unsigned interval = stall ? (unsigned)atoi(stall) : 0;
+            LONG previous = InterlockedCompareExchange(&g_diagnostic_flip_count, 0, 0);
+            DWORD last_progress = GetTickCount();
+            unsigned snapshots = 0;
             fflush(stderr);
+            /* Diagnostic only: no lock acquisition, guest call, forced GPU
+             * completion or process termination. Two snapshots per stalled
+             * period are enough to distinguish a fixed wait from slow work.
+             * A loading screen or background pause can also trigger this. */
+            while (interval >= 2 && interval <= 300) {
+                LONG current;
+                Sleep(1000);
+                current = InterlockedCompareExchange(&g_diagnostic_flip_count, 0, 0);
+                if (current != previous) {
+                    previous = current;
+                    last_progress = GetTickCount();
+                    snapshots = 0;
+                } else if (current && snapshots < 2 &&
+                           GetTickCount() - last_progress >= interval * 1000u) {
+                    watchdog_dump("no new GPU flip; diagnostic snapshot");
+                    last_progress = GetTickCount();
+                    snapshots++;
+                }
+            }
             return 0;
         }
     }
@@ -2178,7 +2238,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         /* Reserve base + mirrors as one range, and map the base at its head.
          * VirtualFree releases just the slice about to be used, so each view
          * replaces our own reservation rather than racing for free space. */
+#ifdef __ANDROID__
+        g_span_size = (size_t)UINT64_C(0x100000000);
+#else
         g_span_size = g_memory_size * (size_t)(1 + XBOX_NUM_MIRRORS);
+#endif
         g_span_base = VirtualAlloc(NULL, g_span_size, MEM_RESERVE, PAGE_NOACCESS);
         if (g_span_base) {
             VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
@@ -2192,6 +2256,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             }
         }
 
+#ifdef __ANDROID__
+        if (!g_memory_base) {
+            fprintf(stderr, "Cannot reserve the Android guest address space\n");
+            CloseHandle(g_mapping_handle);
+            g_mapping_handle = NULL;
+            return FALSE;
+        }
+#endif
         const size_t n_bases = sizeof(try_bases) / sizeof(try_bases[0]);
         for (size_t i = 0; !g_memory_base && i < n_bases; i++) {
             LPVOID hint = try_bases[i] ? (LPVOID)try_bases[i] : NULL;
@@ -2658,6 +2730,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t contig_native = XBOX_CONTIG_BASE + g_memory_offset;
+        android_release_span_window(contig_native, XBOX_CONTIG_SIZE);
         g_contig_mapping = CreateFileMappingW(
             INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
             0, (DWORD)XBOX_CONTIG_SIZE, NULL);
@@ -2703,6 +2776,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t nv2a_native = XBOX_NV2A_BASE + g_memory_offset;
+        android_release_span_window(nv2a_native, XBOX_NV2A_SIZE);
         g_nv2a_memory = VirtualAlloc(
             (LPVOID)nv2a_native,
             XBOX_NV2A_SIZE,
@@ -2748,6 +2822,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t mcpx_native = XBOX_MCPX_BASE + g_memory_offset;
+        android_release_span_window(mcpx_native, XBOX_MCPX_SIZE);
         g_mcpx_memory = VirtualAlloc(
             (LPVOID)mcpx_native,
             XBOX_MCPX_SIZE,
@@ -2846,6 +2921,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     {
         uintptr_t flash_native = XBOX_FLASH_BASE + g_memory_offset;
 
+        android_release_span_window(XBOX_FLASH_BASE + g_memory_offset, XBOX_FLASH_SIZE);
         g_flash_memory = VirtualAlloc(
             (LPVOID)flash_native,
             XBOX_FLASH_SIZE,
@@ -3005,6 +3081,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         uint64_t extvma_size = (uint64_t)0x7FFE0000u - aliased_top;
         void *extvma_base = (void *)((uintptr_t)g_memory_base + (uintptr_t)aliased_top);
 
+        android_release_span_window((uintptr_t)extvma_base, (size_t)extvma_size);
         if (VirtualAlloc(extvma_base, (SIZE_T)extvma_size, MEM_RESERVE, PAGE_NOACCESS)) {
             g_xbox_extvma_reserved = 1;
             fprintf(stderr, "  Extended VMA: reserved %llu MB at %p\n",
@@ -3055,6 +3132,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          */
         if (tiled_size > XBOX_CONTIG_SIZE)
             tiled_size = XBOX_CONTIG_SIZE;
+        android_release_span_window(tiled_native, tiled_size);
         g_tiled_view = g_contig_mapping
             ? MapViewOfFileEx(
                 g_contig_mapping,
