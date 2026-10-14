@@ -98,7 +98,9 @@ public final class LauncherActivity extends Activity {
                         if (result != null) {
                             showMenu(getString(R.string.launcher_unavailable));
                         } else {
-                            startActivity(new Intent(LauncherActivity.this, GameActivity.class));
+                            Intent game = new Intent(LauncherActivity.this, GameActivity.class);
+                            game.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                            startActivity(game);
                             finish();
                         }
                     }

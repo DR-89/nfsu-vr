@@ -28,6 +28,7 @@
 #include <SDL.h>
 #include <pthread.h>
 int android_host_boot(int argc, char **argv);
+#include "../xboxrecomp/src/platform/android_host.h"
 #endif
 
 #include <xbox/xboxrecomp.h>
@@ -272,6 +273,7 @@ static void *game_thread(void *arg)
     xbox_nx_spread_thread();
     xbox_nx_track_thread(NULL);          /* "game:" in the [perf] report */
     *(int *)arg = game_main();
+    android_host_game_finished();
     return NULL;
 }
 
@@ -298,6 +300,7 @@ int main(int argc, char **argv)
 static void *android_game_thread(void *arg)
 {
     *(int *)arg = game_main();
+    android_host_game_finished();
     return NULL;
 }
 #endif
@@ -306,6 +309,7 @@ int main(int argc, char **argv)
 #ifdef __ANDROID__
     if (!android_host_boot(argc, argv))
         return 1;
+    if (!android_host_video_init()) return 1;
     /* Lifted code has large automatic arrays, unlike a typical SDL app. */
     pthread_attr_t attr;
     pthread_t thread;
@@ -318,6 +322,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Cannot start Android game thread: %d\n", error);
         return 1;
     }
+    android_host_run();
     pthread_join(thread, NULL);
     return rc;
 #else

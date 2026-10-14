@@ -91,6 +91,19 @@ HUD scope restoration and projection selection. They do not establish visual
 correctness or race stability on a device. The revised menu behavior still
 needs device validation.
 
+The Android host owns the SDL window and services events on SDL's main thread,
+independently of guest flips. GameActivity is the sole owner of fullscreen policy, using WindowInsetsController
+and a decor layout that does not shrink for system bars. SDL does not request
+fullscreen window style.
+Java surface callbacks publish retained native-window references, a window
+lifetime generation and its dimensions. The Vulkan renderer consumes snapshots;
+window replacement recreates the surface and swapchain, while size changes only
+rebuild the swapchain. It waits when no active window is available. Presentation
+semaphores belong to swapchain images. GameActivity is a singleTask because the
+SDL/native runtime is process-global; launcher re-entry returns to that instance.
+The acquisition timeout only bounds a pause racing a window snapshot. Screen
+lock/unlock, launcher re-entry and app switching still require device validation.
+
 ## Diagnostics and validation
 
 The persistent native log is `nfsu1.log` in

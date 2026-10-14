@@ -1,8 +1,13 @@
 /* Android paths and persistent diagnostics. SDL owns the Java/native entry. */
 #include <SDL.h>
+#include <SDL_vulkan.h>
+#include <android/native_window_jni.h>
+#include <pthread.h>
+#include "../xboxrecomp/src/platform/android_host.h"
 #include <android/log.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -40,4 +45,96 @@ int android_host_boot(int argc, char **argv)
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     __android_log_print(ANDROID_LOG_INFO, "NFSU", "Booting from %s; log %s", argv[1], log_path);
     return 1;
+}
+
+/* SDL's main thread owns video/events. Java publishes native window lifetime;
+ * the GPU thread consumes retained snapshots, never SDL's mutable driverdata. */
+static pthread_mutex_t host_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t host_changed = PTHREAD_COND_INITIALIZER;
+static AndroidHostWindow host_window;
+static SDL_Window *host_sdl_window;
+static int host_active = 1;
+static int host_finished;
+
+JNIEXPORT void JNICALL Java_org_nfsu_android_GameActivity_nativeSurfaceChanged(
+        JNIEnv *env, jclass cls, jobject surface, jint width, jint height)
+{
+    (void)cls;
+    ANativeWindow *window = surface ? ANativeWindow_fromSurface(env, surface) : NULL;
+    pthread_mutex_lock(&host_mutex);
+    ANativeWindow *old = host_window.window;
+    host_window.window = window;
+    host_window.width = width;
+    host_window.height = height;
+    if (old != window) host_window.generation++;
+    fprintf(stderr, "[ANDROID] window generation=%llu size=%dx%d available=%d\n",
+            (unsigned long long)host_window.generation, width, height, window != NULL);
+    pthread_cond_broadcast(&host_changed);
+    pthread_mutex_unlock(&host_mutex);
+    if (old) ANativeWindow_release(old);
+}
+
+SDL_Window *android_host_window(void) { return host_sdl_window; }
+
+int android_host_acquire_window(AndroidHostWindow *out, int wait)
+{
+    pthread_mutex_lock(&host_mutex);
+    while (wait && !host_finished
+           && (!host_active || !host_window.window || host_window.width <= 0 || host_window.height <= 0))
+        pthread_cond_wait(&host_changed, &host_mutex);
+    int available = !host_finished && host_active && host_window.window
+        && host_window.width > 0 && host_window.height > 0;
+    memset(out, 0, sizeof(*out));
+    if (available) {
+        *out = host_window;
+        ANativeWindow_acquire(out->window);
+    }
+    pthread_mutex_unlock(&host_mutex);
+    return available;
+}
+
+void android_host_release_window(AndroidHostWindow *window)
+{
+    if (window->window) ANativeWindow_release(window->window);
+    memset(window, 0, sizeof(*window));
+}
+
+int android_host_video_init(void)
+{
+    SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
+    SDL_SetHint(SDL_HINT_VIDEO_EXTERNAL_CONTEXT, "1");
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return 0;
+    host_sdl_window = SDL_CreateWindow("NFS Underground", SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED, 1280, 720,
+            SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    return host_sdl_window != NULL;
+}
+
+void android_host_game_finished(void)
+{
+    pthread_mutex_lock(&host_mutex);
+    host_finished = 1;
+    pthread_cond_broadcast(&host_changed);
+    pthread_mutex_unlock(&host_mutex);
+}
+
+int android_host_run(void)
+{
+    for (;;) {
+        SDL_Event e;
+        pthread_mutex_lock(&host_mutex);
+        int finished = host_finished;
+        pthread_mutex_unlock(&host_mutex);
+        if (finished) return 0;
+        if (!SDL_WaitEventTimeout(&e, 50)) continue;
+        if (e.type == SDL_QUIT) _exit(0);
+        if (e.type == SDL_APP_DIDENTERBACKGROUND || e.type == SDL_APP_DIDENTERFOREGROUND) {
+            int active = e.type == SDL_APP_DIDENTERFOREGROUND;
+            pthread_mutex_lock(&host_mutex);
+            host_active = active;
+            fprintf(stderr, "[ANDROID] foreground=%d\n", active);
+            pthread_cond_broadcast(&host_changed);
+            pthread_mutex_unlock(&host_mutex);
+        }
+    }
 }
