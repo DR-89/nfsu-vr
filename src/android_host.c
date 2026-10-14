@@ -30,7 +30,8 @@ int android_host_boot(int argc, char **argv)
     setenv("RECOMP_INPUT_DIAG", "1", 0);
     setenv("RECOMP_WATCHDOG_SECS", "25", 0);
     setenv("RECOMP_WATCHDOG_KEEP", "1", 0);
-    setenv("RECOMP_PEEK", "0x283434", 0);
+    setenv("RECOMP_STALL_DUMP_SECS", "10", 0);
+    setenv("RECOMP_PEEK", "0x283434,0x1DE94C,0x1E11C0,[0x1DE9E8]+0x1BC,[0x1DE9E8]+0x1C0,[0x1DE9E8]+0x1C4,[0x1DE9E8]+0x174,[0x1DE9E8]+0x178,[0x1DE9E8]+0x180,[0x1DE9E8]+0x184,[0x1DE9E8]+0x2C,[0x1DE9E8]+0x30", 0);
     setenv("RECOMP_GL_SCALE", "1", 0);
     setenv("RECOMP_VK_ANISO", "4", 0);
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");

@@ -208,8 +208,11 @@ extern void sub_001D9BB0_gen(void);
 void sub_001D9BB0(void)
 {
     uint32_t blk = ecx;
-    uint32_t head = MEM32(blk + 0x1BC);
     uint8_t old = d3d_isr_enter();
+    /* Capture under the dispatch lock: raising IRQL can release the guest
+     * lock and let another handler retire a flip. Reading before the raise
+     * counted that flip again in our delta. */
+    uint32_t head = MEM32(blk + 0x1BC);
 
     xbox_Nv2aVblankTaken();
     sub_001D9BB0_gen();
@@ -238,11 +241,11 @@ void sub_001DA120(void)
 {
     volatile uint32_t *nv = (volatile uint32_t *)XBOX_PTR(0xFD000000u);
     uint32_t blk = ecx;
-    uint32_t head = MEM32(blk + 0x1BC);
     uint8_t old = d3d_isr_enter();
-    uint32_t nsource;
+    uint32_t nsource, head;
 
     nv2a_pb_trap_lock();
+    head = MEM32(blk + 0x1BC);
     nsource = nv[0x400108 / 4];
     sub_001DA120_gen();
     nv2a_pb_flip_retired(MEM32(blk + 0x1BC) - head);   /* a flip queued on its vblank retires at once */

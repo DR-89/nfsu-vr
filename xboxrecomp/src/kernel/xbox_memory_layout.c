@@ -846,11 +846,13 @@ int xbox_Nv2aFrameCounter(uint32_t device_ptr_va, uint32_t counter_off)
  * stalling, blocky video rather than a clock running away.
  */
 static DWORD g_frame_counter_flip_ms;
+static volatile LONG g_diagnostic_flip_count;
 
 void xbox_Nv2aFrameCounterFlip(void)
 {
     int i;
 
+    InterlockedIncrement(&g_diagnostic_flip_count);
     g_frame_counter_flip_ms = GetTickCount();
     if (!g_frame_counter_flip_ms)
         g_frame_counter_flip_ms = 1;          /* 0 means "never" */
@@ -2041,7 +2043,31 @@ static DWORD WINAPI xbox_watchdog_thread(LPVOID unused)
     {
         const char *keep = getenv("RECOMP_WATCHDOG_KEEP");
         if (keep && *keep == '1') {
+            const char *stall = getenv("RECOMP_STALL_DUMP_SECS");
+            unsigned interval = stall ? (unsigned)atoi(stall) : 0;
+            LONG previous = InterlockedCompareExchange(&g_diagnostic_flip_count, 0, 0);
+            DWORD last_progress = GetTickCount();
+            unsigned snapshots = 0;
             fflush(stderr);
+            /* Diagnostic only: no lock acquisition, guest call, forced GPU
+             * completion or process termination. Two snapshots per stalled
+             * period are enough to distinguish a fixed wait from slow work.
+             * A loading screen or background pause can also trigger this. */
+            while (interval >= 2 && interval <= 300) {
+                LONG current;
+                Sleep(1000);
+                current = InterlockedCompareExchange(&g_diagnostic_flip_count, 0, 0);
+                if (current != previous) {
+                    previous = current;
+                    last_progress = GetTickCount();
+                    snapshots = 0;
+                } else if (current && snapshots < 2 &&
+                           GetTickCount() - last_progress >= interval * 1000u) {
+                    watchdog_dump("no new GPU flip; diagnostic snapshot");
+                    last_progress = GetTickCount();
+                    snapshots++;
+                }
+            }
             return 0;
         }
     }

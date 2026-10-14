@@ -32,7 +32,10 @@ alongside the other port options and applies at the next race frame.
 This changes NFSU1's D3D presentation interval from two vblanks to one,
 while keeping the kernel clock and simulation timing unchanged. Actual frame
 rate depends on the device and rendering settings. Race speed, timers,
-animations and audio at 60 FPS still require device validation.
+animations and audio at 60 FPS still require device validation. If GPU flips
+stop for 10 seconds after startup, the diagnostic watchdog writes up to two
+guest-state snapshots into `nfsu1.log` without terminating the game. Loading
+screens and background pauses can also trigger these snapshots.
 
 ## Play
 
