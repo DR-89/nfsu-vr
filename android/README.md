@@ -24,6 +24,16 @@ in the APK.
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+## Experimental 60 FPS
+
+In the in-game **Options -> Camera** menu, set **Frame Rate** to **60 FPS**.
+The default is **30 FPS**; the choice is saved in `nfsu1x_options.txt`
+alongside the other port options and applies at the next race frame.
+This changes NFSU1's D3D presentation interval from two vblanks to one,
+while keeping the kernel clock and simulation timing unchanged. Actual frame
+rate depends on the device and rendering settings. Race speed, timers,
+animations and audio at 60 FPS still require device validation.
+
 ## Play
 
 1. Install the APK on an ARM64 Android device (Android 11 or newer).

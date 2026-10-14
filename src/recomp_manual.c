@@ -584,7 +584,7 @@ void sub_000192C0(void)
  * this+0x3C+4*(N-1) (thiscall, the message, ret 4; dispatch at
  * 0x000C281C), Favorite Drive Camera's being sub_000C0C90: step a value,
  * rewrite the texts with sub_000DD490(package, object name, text) and
- * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..7 are added
+ * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..8 are added
  * the same way after the original setup; their handlers are our own, at
  * unused int3 bytes after sub_000C0C20 (ROW_HANDLER_VA, recomp_lookup_manual).
  * Texts are our own strings in guest memory -- the language files are
@@ -631,6 +631,7 @@ extern void sub_00016050_gen(void);
 static const int s_scale_pct[] = { 100, 150, 200, 250 };
 static const int s_aniso_lvl[] = { 1, 2, 4, 8, 16 };
 
+static int s_fps60;                     /* experimental; default 30 FPS */
 static int s_refl = 1;                  /* 0 off, 1 on */
 static int s_scale_idx = 1;             /* into s_scale_pct: 1.5x */
 static int s_scale_saved;               /* nfsu1x_options.txt had scale= */
@@ -673,6 +674,13 @@ static const char *const s_onoff[] = { "Off", "On" };
 static const char *const s_scale_texts[] = { "1x", "1.5x", "2x", "2.5x" };
 static const char *const s_aniso_texts[] = { "Off", "2x", "4x", "8x", "16x" };
 #endif
+static const char *const s_fps_texts[] = { "30 FPS", "60 FPS" };
+
+static void frame_rate_changed(void)
+{
+    /* Applied by the race render wrapper on the next frame. */
+}
+
 static const OptRow s_rows[] = {
     { "Car Reflections:", s_onoff, 2, &s_refl, refl_changed },
 #ifdef NFSU2_VULKAN
@@ -681,11 +689,14 @@ static const OptRow s_rows[] = {
     { "Anisotropic:", s_aniso_texts, 5, &s_aniso_idx, picture_changed },
     { "Square Pixels:", s_onoff, 2, &s_square, picture_changed },
 #endif
+    { "Frame Rate:", s_fps_texts, 2, &s_fps60, frame_rate_changed },
 };
 #define N_ROWS ((int)(sizeof s_rows / sizeof s_rows[0]))
 
 static void options_log(void)
 {
+    fprintf(stderr, "[options] race frame rate %d FPS (experimental 60 FPS)\n",
+            s_fps60 ? 60 : 30);
 #ifdef NFSU2_VULKAN
     fprintf(stderr, "[options] car reflections %s, resolution scale %d%%%s, anti-aliasing %s,"
             " anisotropic %dx, square pixels %s\n",
@@ -707,6 +718,8 @@ void nfsu1_options_load(void)
         while (fgets(line, sizeof line, f)) {
             if (!strncmp(line, "reflections=", 12))
                 s_refl = line[12] != '0';
+            else if (!strncmp(line, "fps=", 4))
+                s_fps60 = atoi(line + 4) == 60;
             else if (!strncmp(line, "fxaa=", 5))
                 s_fxaa = line[5] != '0';
             else if (!strncmp(line, "square=", 7))
@@ -756,7 +769,7 @@ static void options_save(void)
         fprintf(stderr, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
         return;
     }
-    fprintf(f, "reflections=%d\n", s_refl);
+    fprintf(f, "reflections=%d\nfps=%d\n", s_refl, s_fps60 ? 60 : 30);
     if (s_scale_saved)
         fprintf(f, "scale=%d\n", s_scale_pct[s_scale_idx]);
 #ifdef NFSU2_VULKAN
@@ -808,10 +821,10 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
 }
 
 static const char *const s_name_obj[] = {
-    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7",
+    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8",
 };
 static const char *const s_data_obj[] = {
-    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7",
+    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8",
 };
 
 static void opt_row_text(uint32_t screen, int i)
@@ -880,6 +893,9 @@ static void opt_row_input_1(void) { opt_row_input(1); }
 static void opt_row_input_2(void) { opt_row_input(2); }
 static void opt_row_input_3(void) { opt_row_input(3); }
 static void opt_row_input_4(void) { opt_row_input(4); }
+static void opt_row_input_5(void) { opt_row_input(5); }
+#else
+static void opt_row_input_1(void) { opt_row_input(1); }
 #endif
 
 /* Race render (cdecl, no arguments): cube-face views off for the call. */
@@ -887,6 +903,19 @@ void sub_00016050(void)
 {
     uint8_t keep[6];
     int n;
+
+    /* NFSU1 XDK presentation interval (0x1DE94C): initialization in
+     * sub_000156F0 requests 0x80000002, and D3D uses the low bits as
+     * the vblank count per flip. Keep its immediate-when-late flag and
+     * change only the normal one/two-vblank intervals. Do not alter the
+     * 60 Hz kernel clock, simulation time, or special D3D intervals.
+     * Reapply at each race render so device resets cannot lose the option. */
+    {
+        uint32_t interval = MEM32(0x001DE94Cu);
+        uint32_t count = interval & 0x7FFFFFFFu;
+        if (count == 1 || count == 2)
+            MEM32(0x001DE94Cu) = (interval & 0x80000000u) | (s_fps60 ? 1u : 2u);
+    }
 
     if (s_refl) {
         sub_00016050_gen();
@@ -1047,6 +1076,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
             opt_row_input_0,
 #ifdef NFSU2_VULKAN
             opt_row_input_1, opt_row_input_2, opt_row_input_3, opt_row_input_4,
+            opt_row_input_5,
+#else
+            opt_row_input_1,
 #endif
         };
         return row_input[xbox_va - ROW_HANDLER_VA];
