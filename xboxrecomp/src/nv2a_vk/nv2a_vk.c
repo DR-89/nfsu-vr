@@ -213,6 +213,7 @@ static Frame  s_fr[VK_FRAMES];
 static Frame *s_f;             /* the frame being recorded */
 static uint32_t s_fi;
 static VkCommandBuffer s_cb;   /* s_f->cb while recording */
+static uint32_t s_ring_gen; /* invalidates cached constants when the ring resets */
 static uint32_t s_cb_gen;      /* bumped at every vkBeginCommandBuffer */
 static int s_dyn_valid;
 
@@ -267,6 +268,7 @@ static void frame_begin(void)
     }
     garbage_free(s_f);
     s_f->ring_off = 0;
+    s_ring_gen++;
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_f->cb, &bi);
@@ -2726,6 +2728,7 @@ static void flush_frame_wait(void)
     vkResetFences(s_dev, 1, &s_f->fence);
     garbage_free(s_f);
     s_f->ring_off = 0;
+    s_ring_gen++;
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_cb, &bi);
@@ -3245,7 +3248,7 @@ static struct {
     size_t       idx_cap;
 } s_pend;
 static int s_inst_on = -1, s_inst_alt;
-static uint32_t s_st_draws, s_st_calls, s_st_inst;
+static uint32_t s_st_draws, s_st_calls, s_st_inst, s_st_creuse;
 
 static void pend_flush(void)
 {
@@ -3469,6 +3472,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             if (need > RING_BYTES) return;
             ring_alloc(RING_BYTES, 16, &tmp);       /* forces the flush */
             s_f->ring_off = 0;
+            s_ring_gen++;
         }
     }
 #ifdef __ANDROID__
@@ -3564,10 +3568,33 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         }
     }
     {
-        /* Constants last: repeats append theirs right behind (pend_append). */
-        VkDeviceSize cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map), range;
-        if (!map) return;
-        memcpy(map, b->vp_consts, VK_CONST_SIZE);
+        /* Constants last: repeats append theirs right behind (pend_append).
+         * A draw that cannot start an instanced run, with the constants of
+         * the last set uploaded (same generation, still in this ring),
+         * points at that set instead of copying 3 KB again: HUD and 2D
+         * passes draw many quads under one matrix. RECOMP_VK_CONST_REUSE=0
+         * off. */
+        static int reuse_on = -1;
+        static VkDeviceSize last_at;
+        static uint32_t last_gen, last_ring_gen;
+        VkDeviceSize cat, range;
+        int eligible = pend_eligible(b);
+        if (reuse_on < 0) {
+            const char *e = getenv("RECOMP_VK_CONST_REUSE");
+            reuse_on = !(e && *e == '0');
+        }
+        if (reuse_on && !eligible && b->vp_const_gen && b->vp_const_gen == last_gen
+         && last_ring_gen == s_ring_gen && last_at + VK_CONST_SIZE <= s_f->ring_off) {
+            cat = last_at;
+            s_st_creuse++;
+        } else {
+            cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map);
+            if (!map) return;
+            memcpy(map, b->vp_consts, VK_CONST_SIZE);
+            last_at = cat;
+            last_gen = b->vp_const_gen;
+            last_ring_gen = s_ring_gen;
+        }
         range = (VkDeviceSize)VK_CONST_SIZE * VK_INST_MAX;
         if (range > s_ubo_range) range = s_ubo_range;
         if (cat + range > RING_BYTES) range = RING_BYTES - cat;
@@ -4051,10 +4078,10 @@ static void vk_flip(void)
             st = e && *e == '1';
         }
         if (st && s_frame - st_frame >= 300) {
-            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended)\n",
+            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended, %u constant sets reused)\n",
                     s_st_draws / (s_frame - st_frame), s_st_calls / (s_frame - st_frame),
-                    s_st_inst / (s_frame - st_frame));
-            s_st_draws = s_st_calls = s_st_inst = 0;
+                    s_st_inst / (s_frame - st_frame), s_st_creuse / (s_frame - st_frame));
+            s_st_draws = s_st_calls = s_st_inst = s_st_creuse = 0;
             st_frame = s_frame;
         }
     }

@@ -279,6 +279,9 @@ typedef struct w32_object {
     /* event */
     int             signaled;
     int             manual_reset;
+    int             ev_waiters;     /* threads blocked in wait_single */
+    unsigned        pulse_gen;      /* PulseEvent count */
+    int             pulse_tokens;   /* wake-ups the last pulse handed out */
 
     /* semaphore */
     long            sem_count;
@@ -327,6 +330,7 @@ typedef struct w32_object {
     int             fd;
     SIZE_T          map_size;
     char           *file_path;
+    int             delete_on_close;   /* NT delete disposition: at last close */
 } w32_object;
 
 /* pseudo handles for "current thread"/"current process" */
@@ -450,6 +454,13 @@ static void obj_release(w32_object *o)
     reg_remove(o);
     if (o->kind == K_FILE) {
         if (o->fd >= 0) close(o->fd);
+        /* Deleted only now that the handle is closed: Horizon refuses to
+         * delete a file or directory that is still open. A directory (a save
+         * game's folder, after XDK removed its files) goes by rmdir. */
+        if (o->delete_on_close && o->file_path && unlink(o->file_path) != 0
+            && rmdir(o->file_path) != 0)
+            fprintf(stderr, "  [FILE] delete on close of %s failed, errno %d\n",
+                    o->file_path, errno);
         free(o->file_path);
     } else if (o->kind == K_FILEMAP) {
         if (o->fd >= 0) close(o->fd);
@@ -481,6 +492,13 @@ const char *w32_handle_path(HANDLE h)
 {
     w32_object *o = obj_from(h);
     return (o && o->kind == K_FILE) ? o->file_path : NULL;
+}
+
+void w32_handle_delete_on_close(HANDLE h, int on)
+{
+    w32_object *o = obj_from(h);
+    if (o && o->kind == K_FILE)
+        o->delete_on_close = on;
 }
 
 BOOL CloseHandle(HANDLE h)
@@ -576,11 +594,19 @@ static DWORD wait_single(w32_object *o, DWORD ms)
 
     pthread_mutex_lock(&o->lock);
     DWORD result = WAIT_OBJECT_0;
+    unsigned pulse_gen = o->pulse_gen;
+    int waiting = 0;
 
     for (;;) {
         int ready = 0;
         switch (o->kind) {
-        case K_EVENT:  ready = o->signaled; break;
+        case K_EVENT:
+            ready = o->signaled;
+            if (!ready && waiting && o->pulse_gen != pulse_gen && o->pulse_tokens > 0) {
+                o->pulse_tokens--;             /* woken by a PulseEvent */
+                ready = 2;
+            }
+            break;
         case K_THREAD: ready = o->exited;   break;
         case K_SEM:    ready = (o->sem_count > 0); break;
         case K_MUTEX:
@@ -590,6 +616,10 @@ static DWORD wait_single(w32_object *o, DWORD ms)
         default:       ready = 1; break;
         }
         if (ready) break;
+        if (o->kind == K_EVENT && !waiting) {
+            waiting = 1;
+            o->ev_waiters++;
+        }
 
         /* An armed timer has its own deadline. Waiting on the caller's alone
          * would sleep straight past the due time, so take whichever comes
@@ -608,9 +638,11 @@ static DWORD wait_single(w32_object *o, DWORD ms)
         }
     }
 
+    if (waiting)
+        o->ev_waiters--;
     if (result == WAIT_OBJECT_0) {
         switch (o->kind) {
-        case K_EVENT: if (!o->manual_reset) o->signaled = 0; break;
+        case K_EVENT: if (!o->manual_reset && o->signaled) o->signaled = 0; break;
         case K_WAITABLE_TIMER:
             if (!o->waitable_manual_reset) { o->waitable_triggered = 0; o->waitable_armed = 0; }
             break;
@@ -734,10 +766,18 @@ BOOL PulseEvent(HANDLE h)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_EVENT) return FALSE;
+    /* Wakes the threads waiting right now -- one for an auto-reset event,
+     * all for a manual-reset one -- and leaves the event unsignaled. Setting
+     * and clearing `signaled` around the broadcast woke nobody: a waiter
+     * re-tests it only after taking the lock back, by when it was 0 again,
+     * so a title that pulses its worker events waited for good. */
     pthread_mutex_lock(&o->lock);
-    o->signaled = 1;
-    pthread_cond_broadcast(&o->cond);
     o->signaled = 0;
+    if (o->ev_waiters > 0) {
+        o->pulse_gen++;
+        o->pulse_tokens = o->manual_reset ? o->ev_waiters : 1;
+        pthread_cond_broadcast(&o->cond);
+    }
     pthread_mutex_unlock(&o->lock);
     return TRUE;
 }

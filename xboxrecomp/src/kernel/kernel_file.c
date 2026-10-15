@@ -924,6 +924,8 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     }
 
     *FileHandle = w32_open_handle(fd, host_path);
+    if (CreateOptions & 0x00001000) /* FILE_DELETE_ON_CLOSE */
+        w32_handle_delete_on_close(*FileHandle, 1);
     if (IoStatusBlock) {
         IoStatusBlock->Status = STATUS_SUCCESS;
         IoStatusBlock->Information = (CreateDisposition == XBOX_FILE_CREATE) ? 2 : 1;
@@ -1133,12 +1135,8 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
         }
         case XboxFileDispositionInformation: {
             PXBOX_FILE_DISPOSITION_INFORMATION info = (PXBOX_FILE_DISPOSITION_INFORMATION)FileInformation;
-            /* POSIX: unlinking an open file removes it on last close -- this
-             * matches NT "delete on close" semantics exactly. */
-            if (info->DeleteFile) {
-                const char* p = w32_handle_path(FileHandle);
-                if (p) unlink(p);
-            }
+            /* Save profiles delete their empty directory at final close. */
+            w32_handle_delete_on_close(FileHandle, info->DeleteFile != 0);
             IoStatusBlock->Status = STATUS_SUCCESS;
             return STATUS_SUCCESS;
         }
