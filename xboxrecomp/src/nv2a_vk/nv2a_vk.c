@@ -186,6 +186,7 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements rq, VkMemoryPropertyFlags w
 /* ── Frames in flight ─────────────────────────────────────────────── */
 
 #define VK_FRAMES 2
+#define VK_CBS 8
 #define RING_BYTES (48u << 20)
 
 typedef struct {
@@ -194,7 +195,8 @@ typedef struct {
 
 typedef struct {
     VkCommandPool   pool;
-    VkCommandBuffer cb;
+    VkCommandBuffer cbs[VK_CBS];
+    uint32_t        ncb; /* current buffer; the last one is reserved for flip */
     VkFence         fence;
     VkSemaphore     acquired, rendered;
     VkBuffer        ring;
@@ -214,7 +216,8 @@ typedef struct {
 static Frame  s_fr[VK_FRAMES];
 static Frame *s_f;             /* the frame being recorded */
 static uint32_t s_fi;
-static VkCommandBuffer s_cb;   /* s_f->cb while recording */
+static VkCommandBuffer s_cb;   /* s_f->cbs[s_f->ncb] while recording */
+static uint32_t s_kick_draws, s_st_kicks;
 static uint32_t s_ring_gen; /* invalidates cached constants when the ring resets */
 static uint32_t s_cb_gen;      /* bumped at every vkBeginCommandBuffer */
 static int s_dyn_valid;
@@ -274,10 +277,12 @@ static void frame_begin(void)
     s_ring_gen++;
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(s_f->cb, &bi);
-    s_cb = s_f->cb;
+    s_f->ncb = 0;
+    s_cb = s_f->cbs[0];
+    vkBeginCommandBuffer(s_cb, &bi);
     s_cb_gen++;
     s_dyn_valid = 0;
+    s_kick_draws = 0;
 }
 
 /* Space in this frame's ring: returns the offset, *ptr the mapping. */
@@ -2691,8 +2696,9 @@ static int ready(void)
         vkCreateCommandPool(s_dev, &cpi, NULL, &f->pool);
         cai.commandPool = f->pool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        vkAllocateCommandBuffers(s_dev, &cai, &f->cb);
+        cai.commandBufferCount = VK_CBS;
+        if (vkAllocateCommandBuffers(s_dev, &cai, f->cbs) != VK_SUCCESS)
+            return 0;
         vkCreateFence(s_dev, &fci, NULL, &f->fence);
         vkCreateSemaphore(s_dev, &sci, NULL, &f->acquired);
 #ifndef __ANDROID__
@@ -2736,29 +2742,7 @@ static int ready(void)
     return 1;
 }
 
-/* Submit what is recorded and wait for it, then keep recording in the same
- * frame (ring full). */
-static void flush_frame_wait(void)
-{
-    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    end_rendering();
-    s_rt = NULL;
-    vkEndCommandBuffer(s_cb);
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &s_cb;
-    vkQueueSubmit(s_queue, 1, &si, s_f->fence);
-    vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
-    vkResetFences(s_dev, 1, &s_f->fence);
-    garbage_free(s_f);
-    s_f->ring_off = 0;
-    s_ring_gen++;
-    vkResetCommandPool(s_dev, s_f->pool, 0);
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(s_cb, &bi);
-    s_cb_gen++;
-    s_dyn_valid = 0;
-}
+#include "nv2a_vk_submit.h"
 
 /* ── Render state ─────────────────────────────────────────────────── */
 
@@ -3480,6 +3464,12 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         return;
 #endif
 
+    /* Submit before this draw uploads/binds vertices. Android's vertex
+     * bindings would otherwise be lost if begin_rendering switched buffers. */
+    if (kick_due(s_in_render && s_rt == s && s_rt_depth == d))
+        kick_submit();
+    s_kick_draws++;
+
     {
         /* Everything this draw puts in the ring, reserved now: a flush
          * later in the draw would reuse the ring under its own uniforms. */
@@ -4092,7 +4082,11 @@ static void vk_flip(void)
         return;
     pend_flush();
     s_frame++;
-    if (s_frame % 300 == 0) pool_report();
+    if (s_frame % 300 == 0) {
+        pool_report();
+        fprintf(stderr, "[vkkick] threshold %d, %u early submits (frame %u)\n",
+                s_kick_n, s_st_kicks, s_frame);
+    }
     if (s_inst_alt)
         s_inst_on = s_frame & 1;
     {
