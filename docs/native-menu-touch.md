@@ -200,3 +200,24 @@ leaving the garage, nested browser identity, shared arrows, icon activation
 separate label activation, both swipe directions, vertical-drag cancellation,
 release-only activation and no repeats while held. Queue/mapping and UI-aspect
 checks passed as well. Not every purchasable part or garage screen was tested.
+
+### ColorPicker palette and inspection, 2026-10-16
+
+ColorPicker (vtable 1FDD74, native input C8A10) owns 60 swatch records,
+starting at screen+58 with stride 2C. Each record supplies its FEng sprite
+(+0C), color data (+10), row (+24) and column (+28). Touch captures a
+populated swatch using that sprite's current rendered bounds. On a short
+release it validates the same record, updates native cursor coordinates
+B08/B0C and invokes C74C0, C7B40 and C7A80(100). Mode 100 is the game's
+preview path with native lock checks; mode 101/Accept is never synthesized.
+A swatch drag cancels selection and cannot rotate the preview or swipe a
+category. Empty cells cannot select the previously focused color.
+
+The active ColorPicker also owns empty-space camera gestures, using the
+same direct pitch/yaw path as the garage. Palette and camera ownership are
+exclusive. Regression tests cover populated and empty cells, preview-only
+mode, release selection, swatch-drag cancellation and camera rotation in
+ColorPicker. The root APK build and the touch/geometry/UI-aspect checks pass.
+At the user's request the running game was not restarted and this APK was
+not installed: physical palette selection and paint-camera validation remain
+pending on the new build.

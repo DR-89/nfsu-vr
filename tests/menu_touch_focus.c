@@ -18,6 +18,7 @@ static const uint32_t yes = 0x20000, no = 0x21000;
 static uint32_t expected;
 static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
+static int palette_updates, palette_previews;
 static unsigned draw_mask = 3;
 static int keyboard_layout, stale_mouse_edge;
 void sub_000D8B10(void);
@@ -70,6 +71,20 @@ static void draw_bounds(void)
     }
     g_esp = 0x10000;
     sub_000DC090();
+}
+void sub_000C74C0(void)
+{
+    assert(g_ecx == 0x28000);
+    assert(MEM32(g_ecx + 0xB08) == 0 && MEM32(g_ecx + 0xB0C) == 3);
+    palette_updates++;
+    g_esp += 4;
+}
+void sub_000C7B40(void) { assert(g_ecx == 0x28000); g_esp += 4; }
+void sub_000C7A80(void)
+{
+    assert(g_ecx == 0x28000 && MEM32(g_esp + 4) == 100);
+    palette_previews++;
+    g_esp += 8;
 }
 void sub_000DE540(void)
 {
@@ -362,5 +377,57 @@ int main(void)
     menu_touch_event(MENU_TOUCH_MOVE, .35f, .8f, 1280, 720); update();
     menu_touch_event(MENU_TOUCH_UP, .35f, .8f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 7); /* vertical drag is no tap */
+    /* Paint's own controller owns rotation and its native swatch records.
+     * A click selects a rendered, populated swatch and previews without accept. */
+    MEM32(screen) = 0x1FDD74;
+    uint32_t swatch = screen + 0x58 + 3 * 0x2C;
+    memset((void *)XBOX_PTR(screen + 0x58), 0, 60 * 0x2C);
+    MEM32(swatch) = 0x1FDD70;
+    MEM32(swatch + 0xC) = yes;
+    MEM32(swatch + 0x10) = 0x2E000;
+    MEM32(swatch + 0x24) = 0;
+    MEM32(swatch + 0x28) = 3;
+    tap(.3f, yes);
+    assert(palette_updates == 1 && palette_previews == 1);
+    assert(MEM8(screen + 0xAFC) == 1);
+    MEM32(swatch + 0x10) = 0;
+    tap(.3f, yes); /* empty cell cannot select the old color */
+    assert(palette_updates == 1 && palette_previews == 1);
+    MEM32(swatch + 0x10) = 0x2E000;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
+    assert(palette_previews == 1); /* swatch drag is neither carousel nor camera */
+    float paint_yaw;
+    memcpy(&paint_yaw, (void *)XBOX_PTR(0x2C044), 4);
+    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .07f, .5f, 1280, 720); update();
+    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+    assert(fabsf(after - paint_yaw - 3.6f) < .001f);
+    menu_touch_cancel(); update();
+    /* Replace the retail Y Help footer with localized Back. Its label and
+     * retained icon geometry both invoke B on the active screen, once. */
+    MEM32(screen) = 0x1FC384;
+    MEM32(0x1FC384 + 4) = 0xD3720;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x10) = 0xA87927BE;
+    MEM32(yes + 0x5C) = 0x169268;
+    MEM32(no + 0x10) = 0x7492B591;
+    MEM32(no + 0x5C) = 0x349EB9C2;
+    draw_mask = 3; draw_bounds();
+    assert(MEM32(yes + 0x5C) == 0x1335F0);
+    expected_message = 0x911AB364;
+    before_actions = controller_selects;
+    tap(.3f, yes);
+    tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2); /* Back drag does not swipe */
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }

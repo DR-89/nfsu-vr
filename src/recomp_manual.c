@@ -611,12 +611,15 @@ extern void sub_000E53C0(void);
 extern void sub_000D6D30(void);
 extern void sub_000D7A00(void);
 extern void sub_000DE540(void);
+extern void sub_000C74C0(void);
+extern void sub_000C7B40(void);
+extern void sub_000C7A80(void);
 #ifdef __ANDROID__
 #include "menu_touch.h"
 static RECOMP_TLS short s_touch_x, s_touch_y;
 static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
 typedef struct {
-    uint32_t package, target, message, fired, screen, armed;
+    uint32_t package, target, message, fired, screen, armed, palette_entry, back;
     short start_x, start_y;
     float travel;
 } TouchTarget;
@@ -675,6 +678,52 @@ static int touch_object_bounds(uint32_t object, TouchBounds *out, unsigned depth
     return found;
 }
 
+/* Retail footer labels use HELP while the adjacent icon uses
+ * FENG_HELP_BUTTON. Keep native text layout/localization and replace its role. */
+static int touch_back_label(uint32_t object)
+{
+    if (!object || MEM32(object + 0x18) != 2) return 0;
+    uint32_t language = MEM32(object + 0x5C);
+    if (language != 0x00169268u && language != 0x001335F0u) return 0;
+    switch (MEM32(object + 0x10)) {
+    case 0xA87927BEu: case 0x936D3402u: case 0x0C39BA77u:
+    case 0x0C39AA39u: case 0x0C39BAFBu: case 0x0C39BAB9u:
+    case 0x0C39BF5Du: case 0x00169268u: case 0x5B9D84DBu:
+        return 1;
+    default: return 0;
+    }
+}
+static int touch_help_icon(uint32_t object)
+{
+    return object && MEM32(object + 0x18) == 2 &&
+        MEM32(object + 0x5C) == 0x349EB9C2u;
+}
+static uint32_t touch_back_hit(void)
+{
+    int has_icon = 0;
+    for (unsigned i = 0; i < s_touch_bounds_count; i++)
+        if (touch_help_icon(s_touch_bounds[i].object)) has_icon = 1;
+    if (!has_icon) return 0;
+    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        TouchBounds *b = &s_touch_bounds[i];
+        if ((touch_back_label(b->object) || touch_help_icon(b->object)) &&
+            x >= b->left && x < b->right && y >= b->top && y < b->bottom)
+            return b->object;
+    }
+    return 0;
+}
+static uint32_t touch_active_screen(void)
+{
+    uint32_t reg = MEM32(0x002BCB9Cu);
+    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
+        uint32_t package = MEM32(reg - 4 + 0x18);
+        uint32_t screen = MEM32(reg - 4 + 0x14);
+        if (package && screen && (MEM32(package + 0x1C) & 1)) return screen;
+    }
+    return 0;
+}
+
 static uint32_t touch_rendered_named_hit(uint32_t hash)
 {
     float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
@@ -699,6 +748,7 @@ static uint32_t touch_garage_screen(void)
         if (!package || !screen || !(MEM32(package + 0x1C) & 1)) continue;
         uint32_t vtable = MEM32(screen);
         uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
+        if (vtable == 0x001FDD74u) return screen; /* native ColorPicker */
         return handler >= 0x000EB000u && handler < 0x000F7000u &&
             MEM32(screen + 0x48) == 0x001FF870u ? screen : 0;
     }
@@ -786,9 +836,44 @@ void sub_000D8730(void)
         for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
             uint32_t screen = MEM32(reg - 4 + 0x14);
             if (MEM32(reg - 4 + 0x18) != package || !screen) continue;
+            if (screen == touch_active_screen()) {
+                uint32_t object = touch_back_hit();
+                if (object) {
+                    TouchTarget *target = &s_touch_targets[slot];
+                    target->target = object;
+                    target->message = 0x911AB364u; /* native B/Cancel */
+                    target->screen = screen;
+                    target->back = 1;
+                    target->start_x = s_touch_x;
+                    target->start_y = s_touch_y;
+                    continue;
+                }
+            }
             /* Horizontal browsers draw their arrows in a shared backdrop
              * package. Route those visible objects to the active browser. */
-            if (screen == touch_garage_screen()) {
+            if (screen == touch_garage_screen() && MEM32(screen) == 0x001FDD74u) {
+                for (unsigned i = 0; i < 60; i++) {
+                    uint32_t entry = screen + 0x58 + i * 0x2C;
+                    uint32_t object = MEM32(entry + 0xC);
+                    TouchBounds bounds;
+                    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+                    if (!MEM32(entry + 0x10) || !object ||
+                        !touch_object_bounds(object, &bounds, 0) ||
+                        x < bounds.left || x >= bounds.right ||
+                        y < bounds.top || y >= bounds.bottom) continue;
+                    TouchTarget *target = &s_touch_targets[slot];
+                    target->target = object;
+                    target->message = 1; /* palette selection, no purchase/accept */
+                    target->screen = screen;
+                    target->palette_entry = entry;
+                    target->start_x = s_touch_x;
+                    target->start_y = s_touch_y;
+                    break;
+                }
+                continue;
+            }
+            if (screen == touch_garage_screen() &&
+                MEM32(screen + 0x48) == 0x001FF870u) {
                 uint32_t object = touch_rendered_named_hit(0x543398D3u);
                 uint32_t message = 0x9120409Eu;
                 if (!object) {
@@ -841,17 +926,38 @@ void sub_000D8730(void)
             if (s_touch_buttons) target->armed = 1;
             fire = !s_touch_buttons && !s_touch_prepare && target->armed && !target->fired;
             if (fire) {
-                if (fabsf(dx) >= 20 && fabsf(dx) > fabsf(dy) * 1.25f)
+                if (!target->back && !target->palette_entry && fabsf(dx) >= 20 && fabsf(dx) > fabsf(dy) * 1.25f)
                     message = dx > 0 ? 0x9120409Eu : 0xB5971BF1u;
                 else if (target->travel >= 12) fire = 0; /* moved, not a tap */
-                if (target->screen != touch_garage_screen()) fire = 0;
+                uint32_t current_screen = target->back ? touch_active_screen() : touch_garage_screen();
+                if (target->screen != current_screen) fire = 0;
                 target->fired = 1;
             }
         }
         if (fire) {
             target->fired = 1;
             uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-            if (target->screen) {
+            if (target->palette_entry) {
+                uint32_t entry = target->palette_entry, screen = target->screen;
+                uint32_t row = MEM32(entry + 0x24), column = MEM32(entry + 0x28);
+                if (row < 6 && column < 10 && MEM32(entry + 0x10) &&
+                    MEM32(entry + 0xC) == target->target) {
+                    MEM32(screen + 0xB08) = row;
+                    MEM32(screen + 0xB0C) = column;
+                    PUSH32(esp, 0);
+                    ecx = screen;
+                    sub_000C74C0(); /* cursor, current sample and native lock UI */
+                    PUSH32(esp, 0);
+                    ecx = screen;
+                    sub_000C7B40();
+                    PUSH32(esp, 100); /* preview only; 101 is the accept path */
+                    PUSH32(esp, 0);
+                    ecx = screen;
+                    sub_000C7A80();
+                    MEM8(screen + 0xAFC) = 1;
+                    MEM32(screen + 0xAF8) = MEM32(0x002CA448u);
+                }
+            } else if (target->screen) {
                 /* Dispatch to the same active screen entry used by native
                  * package notifications, independent of mouse script focus. */
                 PUSH32(esp, package);
@@ -1161,6 +1267,11 @@ void sub_000D9D00(void)
 #ifdef __ANDROID__
     uint32_t previous = s_touch_draw_object;
     s_touch_draw_object = MEM32(esp + 4);
+    if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_back_label(s_touch_draw_object) &&
+        MEM32(s_touch_draw_object + 0x5C) == 0x00169268u) {
+        MEM32(s_touch_draw_object + 0x5C) = 0x001335F0u; /* localized BACK */
+        MEM32(s_touch_draw_object + 0x1C) |= 0x02400000u; /* rebuild text cache */
+    }
 #endif
     sub_000D9D00_gen();
 #ifdef __ANDROID__
@@ -1217,6 +1328,10 @@ void sub_000F8B80(void)
                 touch_bounds_add(s_touch_draw_object, x, y);
             }
             entry = MEM32(entry);
+        }
+        if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_help_icon(s_touch_draw_object)) {
+            esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
+            return;
         }
     }
 #endif
