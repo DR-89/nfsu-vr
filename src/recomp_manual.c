@@ -608,11 +608,12 @@ extern void sub_000DB860_gen(void);
 extern void sub_000D8730_gen(void);
 extern void sub_000DDB60(void);
 extern void sub_000E53C0(void);
+extern void sub_000D6D30(void);
 #ifdef __ANDROID__
 #include "menu_touch.h"
 static RECOMP_TLS short s_touch_x, s_touch_y;
 static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
-typedef struct { uint32_t package, target; } TouchTarget;
+typedef struct { uint32_t package, target, message; } TouchTarget;
 static RECOMP_TLS TouchTarget s_touch_targets[32];
 static RECOMP_TLS unsigned s_touch_target_count, s_touch_target_slot;
 static RECOMP_TLS unsigned s_touch_collect_hit;
@@ -635,6 +636,13 @@ static void touch_bounds_add(uint32_t object, float x, float y)
     TouchBounds *bounds = &s_touch_bounds[i];
     bounds->left = fminf(bounds->left, x); bounds->right = fmaxf(bounds->right, x);
     bounds->top = fminf(bounds->top, y); bounds->bottom = fmaxf(bounds->bottom, y);
+}
+
+static int touch_has_message(uint32_t node, uint32_t message)
+{
+    for (unsigned i = 0; node && i < 1024; i++, node = MEM32(node + 4))
+        if (MEM32(node + 0xC) == message) return 1;
+    return 0;
 }
 
 static int touch_object_bounds(uint32_t object, TouchBounds *out, unsigned depth)
@@ -670,7 +678,7 @@ void nfsu_touch_hit(void)
 #ifdef __ANDROID__
     uint32_t object = MEM32(esp + 12);
     if (s_touch_poll) {
-        TouchBounds bounds;
+        TouchBounds bounds = {0};
         float x = (float)s_touch_x + 320.0f, y = (float)s_touch_y + 240.0f;
         int hit = touch_object_bounds(object, &bounds, 0) &&
             x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom;
@@ -692,18 +700,81 @@ void sub_000D8730(void)
 #ifdef __ANDROID__
     uint32_t feng = ecx, package = MEM32(esp + 4);
     uint32_t objects = MEM32(package + 0x84), count = MEM32(package + 0x88);
-    int interactive = s_touch_poll && objects && count && count <= 4096 &&
-        (MEM32(package + 0x1C) & 1);
+    int active = s_touch_poll && (MEM32(package + 0x1C) & 1);
+    int interactive = active && objects && count && count <= 4096;
     unsigned slot;
     for (slot = 0; slot < s_touch_target_count; slot++)
         if (s_touch_targets[slot].package == package) break;
-    if (interactive && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
-        s_touch_targets[slot] = (TouchTarget){ package, 0 };
+    if (active && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
+        s_touch_targets[slot] = (TouchTarget){ package, 0, 0 };
         s_touch_target_count++;
+    }
+    /* The common screen base owns mouse_over_l/r even when the package
+     * has no selectable rows (for example Statistics). Use these native
+     * object identities and their rendered geometry, never screen zones. */
+    if (active && s_touch_prepare && slot < s_touch_target_count) {
+        uint32_t reg = MEM32(0x002BCB9Cu);
+        for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
+            uint32_t screen = MEM32(reg - 4 + 0x14);
+            if (MEM32(reg - 4 + 0x18) != package || !screen) continue;
+            for (unsigned side = 0; side < 2; side++) {
+                uint32_t object = MEM32(screen + 0x24 + side * 4);
+                TouchBounds bounds;
+                uint32_t hash = side ? 0xAA68BFD4u : 0xAA68BFCEu;
+                if (!object || MEM32(object + 0x10) != hash ||
+                    (MEM32(object + 0x1C) & 0x04000000u) ||
+                    !touch_object_bounds(object, &bounds, 0)) continue;
+                float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+                if (x < bounds.left || x >= bounds.right ||
+                    y < bounds.top || y >= bounds.bottom) continue;
+                s_touch_targets[slot].target = object;
+                s_touch_targets[slot].message = side ? 0xB5971BF1u : 0x9120409Eu;
+            }
+        }
+    }
+    if (active && slot < s_touch_target_count && s_touch_targets[slot].message) {
+        if ((MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
+            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
+            PUSH32(esp, 1);
+            PUSH32(esp, (uint32_t)-2); /* screen action, not feedback */
+            PUSH32(esp, package);
+            PUSH32(esp, s_touch_targets[slot].target);
+            PUSH32(esp, s_touch_targets[slot].message);
+            PUSH32(esp, 0);
+            ecx = feng;
+            sub_000D6D30();
+            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
+        }
+        esp += 8;
+        return;
     }
     if (interactive && s_touch_prepare && slot < s_touch_target_count) {
         s_touch_target_slot = slot;
         s_touch_collect_hit = 1;
+        /* Some lists start with no native FEng focus. The Xbox mouse path
+         * exits before scanning candidates in that state. Bootstrap only
+         * from a rendered, enabled selectable object under this gesture. */
+        if (!MEM32(package + 0x80)) {
+            float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+            for (uint32_t i = 0; i < count; i++) {
+                uint32_t object = MEM32(objects + i * 4);
+                TouchBounds bounds;
+                if (!object || (MEM32(object + 0x1C) & 0x04000000u) ||
+                    !touch_object_bounds(object, &bounds, 0) ||
+                    x < bounds.left || x >= bounds.right ||
+                    y < bounds.top || y >= bounds.bottom) continue;
+                uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
+                PUSH32(esp, 1);
+                PUSH32(esp, object);
+                PUSH32(esp, feng);
+                PUSH32(esp, 0);
+                ecx = package;
+                sub_000E53C0();
+                eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
+                s_touch_targets[slot].target = object;
+                break;
+            }
+        }
     }
     if (interactive && (MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
         uint32_t target = slot < s_touch_target_count ? s_touch_targets[slot].target : 0;
@@ -724,6 +795,53 @@ void sub_000D8730(void)
             ecx = package;
             sub_000E53C0();
             eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
+        }
+        /* This retail list has a separate data cursor: FEng focus alone
+         * does not select a profile, and its controller ignores MouseClick. */
+        int profile_select = 0;
+        uint32_t registry = MEM32(0x002BCB9Cu);
+        for (unsigned n = 0; registry && registry != 0x002BCB9Cu && n < 64; n++) {
+            uint32_t record = registry - 4;
+            uint32_t screen = MEM32(record + 0x14);
+            if (MEM32(record + 0x18) == package && screen &&
+                MEM32(screen) == 0x001FC384u && MEM32(screen + 0x3C) == 0x000BD7E0u) {
+                uint32_t row = MEM32(screen + 0x88);
+                uint32_t data = MEM32(screen + 0x9C);
+                for (unsigned r = 0; row && row != screen + 0x88 &&
+                     data && data != screen + 0x90 && r < 5; r++) {
+                    uint32_t cell = MEM32(row + 8);
+                    for (unsigned c = 0; cell && cell != row + 8 && c < 16; c++) {
+                        if (MEM32(cell + 8) == target) {
+                            MEM32(screen + 0x98) = data;
+                            MEM32(screen + 0xA0) = row;
+                            profile_select = 1;
+                            break;
+                        }
+                        cell = MEM32(cell);
+                    }
+                    if (profile_select) break;
+                    row = MEM32(row);
+                    data = MEM32(data);
+                }
+            }
+            registry = MEM32(registry);
+        }
+        /* Retail Xbox screens may expose a selectable row without mouse
+         * scripts. Pad dispatch still notifies the screen controller in
+         * that case; mouse dispatch silently drops the activation. */
+        if (profile_select || (!touch_has_message(MEM32(target + 0x3C), 0x0C407210u) &&
+            !touch_has_message(MEM32(package + 0x50), 0x406415E3u))) {
+            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
+            PUSH32(esp, 1);
+            PUSH32(esp, (uint32_t)-2);
+            PUSH32(esp, package);
+            PUSH32(esp, target);
+            PUSH32(esp, 0x406415E3u);
+            PUSH32(esp, 0);
+            ecx = feng;
+            sub_000D6D30();
+            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp + 8;
+            return;
         }
     }
 #endif

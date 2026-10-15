@@ -125,3 +125,37 @@ per tap. Test text was cleared without creating a profile. Tests used ADB
 touchscreen events; physical-finger edge accuracy across all keys and screen
 aspect ratios still requires broader device testing. APK build, cached-geometry
 regressions, touch queue/mapping and existing UI aspect checks passed.
+
+### Profile list activation, 2026-10-16
+
+The profile list controller (`BC750` delegating to `BD7E0`) ignores the
+object MouseClick message. It owns a separate data cursor from FEng focus.
+Touch activation resolves the rendered row through its native list cells,
+synchronizes the data cursor against the visible data window, and queues
+Select for that package. Queue route -2 dispatches the action to the screen;
+route -5 only requests feedback through the screen's input-feedback virtual
+method, which explains a click sound without confirmation. A regression
+covers this list even when an object MouseClick script is present.
+
+The corrected APK was built and installed on Retroid. The user confirmed
+physical touch activation now works ("заработало!"). Earlier apparent success
+was caused by a physical Select press and is not counted as touch validation.
+Queue/mapping, rendered-bounds/focus/profile routing and UI-aspect regressions
+all passed. Multiple saved profiles and scrolling remain untested on device.
+
+### Native screen arrows, 2026-10-16
+
+The common screen base stores its `mouse_over_l` and `mouse_over_r` objects
+at +0x24/+0x28 (hashes AA68BFCE/AA68BFD4). Statistics renders these objects
+but exposes zero selectable rows. Touch now captures a visible arrow by its
+native identity and cached rendered bounds, then queues Left (9120409E) or
+Right (B5971BF1) through screen-action route -2. The original Statistics
+controller D3720 performs the switch, redraw and endpoint handling.
+No overlay or fixed screen rectangle is used. Other screens sharing these
+native base arrows use the same binding; their behavior still needs testing.
+
+Regression checks cover both directions with zero selectable rows, one action
+per tap, misses and an arrow absent from the current rendered frame. The APK
+built successfully and was installed on Retroid; the user confirmed that the
+arrows work on the Statistics screen. Physical input from the user overlapped
+ADB checks, so screenshots alone are not treated as isolated direction tests.

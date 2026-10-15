@@ -15,7 +15,8 @@ static unsigned char ram[0x300000];
 static const uint32_t feng = 0x12000, package = 0x18000;
 static const uint32_t yes = 0x20000, no = 0x21000;
 static uint32_t expected;
-static int presses, focus_changes, steal_focus;
+static uint32_t expected_message = 0x406415E3u;
+static int presses, focus_changes, steal_focus, controller_selects;
 static unsigned draw_mask = 3;
 static int keyboard_layout;
 void sub_000D8B10(void);
@@ -69,6 +70,19 @@ static void draw_bounds(void)
     g_esp = 0x10000;
     sub_000DC090();
 }
+void sub_000D6D30(void)
+{
+    assert(g_ecx == feng);
+    assert(MEM32(g_esp + 4) == expected_message);
+    assert(MEM32(g_esp + 8) == expected);
+    assert(MEM32(g_esp + 12) == package);
+    assert(MEM32(g_esp + 16) == (uint32_t)-2 && MEM32(g_esp + 20) == 1);
+    if (expected_message == 0x406415E3u) assert(MEM32(package + 0x80) == expected);
+    controller_selects++; presses++;
+    g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
+    g_esp += 24;
+}
+
 void sub_000E53C0(void)
 {
     assert(g_ecx == package && MEM32(g_esp + 4) == feng);
@@ -83,10 +97,13 @@ void sub_000D8730_gen(void)
     assert(g_ecx == feng && MEM32(g_esp + 4) == package);
     assert(g_eax == 0x1234 && g_edx == 0x5678);
     assert(g_esi == 0x1111 && g_fp_top == 2 && g_fp_stack[2] == 42);
+    if (!MEM32(package + 0x88)) { g_esp += 8; return; }
     if ((MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
         assert(MEM32(package + 0x80) == expected);
         presses++;
     }
+    /* Retail mouse dispatch returns before scanning when focus is null. */
+    if (!MEM32(package + 0x80)) { g_esp += 8; return; }
     uint32_t entry = g_esp;
     uint32_t pair[2] = { MEM32(0x22000), MEM32(0x22004) };
     for (unsigned i = 0; i < 2; i++) {
@@ -157,6 +174,8 @@ int main(void)
     MEM32(yes + 0x10) = 0xB8A7C6CCu;
     MEM32(no + 0x10) = 0xB8A7C6CDu;
     MEM32(package + 0x80) = no;
+    MEM32(yes + 0x3C) = MEM32(no + 0x3C) = 0x26000;
+    MEM32(0x2600C) = 0x0C407210u;
     draw_bounds();
     tap(.3f, yes);
     tap(.7f, no);
@@ -177,6 +196,7 @@ int main(void)
     tap_at(415.0f / 640, 287.5f / 480, no);
     assert(presses == 5 && focus_changes == 5);
     uint32_t group = 0x23000;
+    MEM32(group + 0x3C) = 0x26000;
     MEM32(group + 0x18) = 5;
     MEM32(group + 0x60) = yes;
     MEM32(yes + 4) = 0;
@@ -187,5 +207,64 @@ int main(void)
     draw_bounds(); /* hidden/not-drawn L must not reuse the previous frame */
     tap_at(415.0f / 640, 287.5f / 480, no);
     assert(presses == 6);
+    /* Profile lists can start without FEng focus. A miss must leave it null,
+     * while the visible row must bootstrap focus and activate normally. */
+    MEM32(package + 0x80) = 0;
+    expected = no;
+    menu_touch_event(MENU_TOUCH_DOWN, .99f, .99f, 1280, 720);
+    menu_touch_event(MENU_TOUCH_UP, .99f, .99f, 1280, 720);
+    for (unsigned i = 0; i < 4; i++) update();
+    assert(MEM32(package + 0x80) == 0 && presses == 6);
+    tap_at(445.0f / 640, 252.5f / 480, group);
+    assert(presses == 7 && controller_selects == 0);
+    /* Xbox list rows with no mouse scripts still notify their real screen
+     * controller once; neither a miss nor a disabled row may do so. */
+    MEM32(group + 0x3C) = 0;
+    tap_at(445.0f / 640, 252.5f / 480, group);
+    assert(presses == 8 && controller_selects == 1);
+    tap_at(.99f, .99f, group);
+    assert(presses == 8 && controller_selects == 1);
+    /* The profile controller ignores MouseClick even with object scripts.
+     * Resolve the tapped visual row against the visible data window. */
+    MEM32(group + 0x3C) = 0x26000;
+    uint32_t registry = 0x27000, screen = 0x28000;
+    uint32_t row = 0x29000, cell = 0x29100, data = 0x29200;
+    MEM32(0x2BCB9C) = registry;
+    MEM32(registry) = 0x2BCB9C;
+    MEM32(registry - 4 + 0x18) = package;
+    MEM32(registry - 4 + 0x14) = screen;
+    MEM32(screen) = 0x1FC384;
+    MEM32(screen + 0x3C) = 0xBD7E0;
+    MEM32(screen + 0x88) = row;
+    MEM32(screen + 0x9C) = data;
+    MEM32(row) = screen + 0x88;
+    MEM32(row + 8) = cell;
+    MEM32(cell) = row + 8;
+    MEM32(cell + 8) = group;
+    MEM32(data) = screen + 0x90;
+    tap_at(445.0f / 640, 252.5f / 480, group);
+    assert(presses == 9 && controller_selects == 2);
+    assert(MEM32(screen + 0x98) == data && MEM32(screen + 0xA0) == row);
+    /* Statistics has no selectable rows. Its base-screen arrows still
+     * dispatch one directional action per tap, independent of pad focus. */
+    MEM32(package + 0x88) = 0;
+    MEM32(screen + 0x24) = yes;
+    MEM32(screen + 0x28) = no;
+    MEM32(yes + 0x10) = 0xAA68BFCEu;
+    MEM32(no + 0x10) = 0xAA68BFD4u;
+    keyboard_layout = 0;
+    draw_mask = 3;
+    draw_bounds();
+    expected_message = 0x9120409Eu;
+    tap(.3f, yes);
+    expected_message = 0xB5971BF1u;
+    tap(.7f, no);
+    assert(presses == 11 && controller_selects == 4);
+    tap_at(.99f, .99f, no);
+    assert(presses == 11);
+    draw_mask = 1;
+    draw_bounds();
+    tap(.7f, no); /* hidden arrow has no current rendered geometry */
+    assert(presses == 11);
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }
