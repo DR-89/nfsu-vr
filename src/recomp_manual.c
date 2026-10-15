@@ -598,6 +598,204 @@ void sub_00018E60(void)
  * itself tests `cmp [0x283434], 3`). */
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
 
+/* The retail Xbox FEng retains its native mouse dispatcher (D8730), focus
+ * notifications (E53C0) and object hit test (DDB60 -> DD880 -> DCDC0).
+ * Only input acquisition is a no-op: cFEng vtable 1FF4D8, slot +44 = DB860.
+ * Feed that exact call, leaving every other use of the shared no-op alone.
+ * No host overlay, screen-name map, object bounds or activation hashes here. */
+extern void sub_000D8B10_gen(void);
+extern void sub_000DB860_gen(void);
+extern void sub_000D8730_gen(void);
+extern void sub_000DDB60(void);
+extern void sub_000E53C0(void);
+#ifdef __ANDROID__
+#include "menu_touch.h"
+static RECOMP_TLS short s_touch_x, s_touch_y;
+static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
+typedef struct { uint32_t package, target; } TouchTarget;
+static RECOMP_TLS TouchTarget s_touch_targets[32];
+static RECOMP_TLS unsigned s_touch_target_count, s_touch_target_slot;
+static RECOMP_TLS unsigned s_touch_collect_hit;
+static RECOMP_TLS uint32_t s_touch_draw_object;
+typedef struct { uint32_t object; float left, top, right, bottom; } TouchBounds;
+static TouchBounds s_touch_bounds[2048];
+static unsigned s_touch_bounds_count;
+
+static void touch_bounds_add(uint32_t object, float x, float y)
+{
+    if (!object || !isfinite(x) || !isfinite(y)) return;
+    unsigned i;
+    for (i = 0; i < s_touch_bounds_count; i++)
+        if (s_touch_bounds[i].object == object) break;
+    if (i == s_touch_bounds_count) {
+        if (i == sizeof(s_touch_bounds) / sizeof(s_touch_bounds[0])) return;
+        s_touch_bounds_count++;
+        s_touch_bounds[i] = (TouchBounds){ object, x, y, x, y };
+    }
+    TouchBounds *bounds = &s_touch_bounds[i];
+    bounds->left = fminf(bounds->left, x); bounds->right = fmaxf(bounds->right, x);
+    bounds->top = fminf(bounds->top, y); bounds->bottom = fmaxf(bounds->bottom, y);
+}
+
+static int touch_object_bounds(uint32_t object, TouchBounds *out, unsigned depth)
+{
+    if (!object || depth > 16) return 0;
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        if (s_touch_bounds[i].object == object) { *out = s_touch_bounds[i]; return 1; }
+    }
+    if (MEM32(object + 0x18) != 5) return 0;
+    int found = 0;
+    uint32_t child = MEM32(object + 0x60);
+    for (unsigned i = 0; child && i < 1024; i++, child = MEM32(child + 4)) {
+        TouchBounds bounds;
+        if (!touch_object_bounds(child, &bounds, depth + 1)) continue;
+        if (!found) *out = bounds;
+        else {
+            out->left = fminf(out->left, bounds.left);
+            out->right = fmaxf(out->right, bounds.right);
+            out->top = fminf(out->top, bounds.top);
+            out->bottom = fmaxf(out->bottom, bounds.bottom);
+        }
+        found = 1;
+    }
+    return found;
+}
+
+#endif
+
+/* Observe the result of the native virtual hit test. Calling its generated
+ * body directly avoids recursion through recomp_lookup_manual. */
+void nfsu_touch_hit(void)
+{
+#ifdef __ANDROID__
+    uint32_t object = MEM32(esp + 12);
+    if (s_touch_poll) {
+        TouchBounds bounds;
+        float x = (float)s_touch_x + 320.0f, y = (float)s_touch_y + 240.0f;
+        int hit = touch_object_bounds(object, &bounds, 0) &&
+            x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom;
+        eax = (eax & 0xFFFFFF00u) | (unsigned)hit;
+        esp += 16;
+    } else
+#endif
+    sub_000DDB60();
+#ifdef __ANDROID__
+    if (s_touch_collect_hit && (eax & 0xFF))
+        s_touch_targets[s_touch_target_slot].target = object;
+#endif
+}
+
+/* Activate the object found under this gesture in the active package. This
+ * applies to menu rows, keyboard keys and dialogs, without screen-name rules. */
+void sub_000D8730(void)
+{
+#ifdef __ANDROID__
+    uint32_t feng = ecx, package = MEM32(esp + 4);
+    uint32_t objects = MEM32(package + 0x84), count = MEM32(package + 0x88);
+    int interactive = s_touch_poll && objects && count && count <= 4096 &&
+        (MEM32(package + 0x1C) & 1);
+    unsigned slot;
+    for (slot = 0; slot < s_touch_target_count; slot++)
+        if (s_touch_targets[slot].package == package) break;
+    if (interactive && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
+        s_touch_targets[slot] = (TouchTarget){ package, 0 };
+        s_touch_target_count++;
+    }
+    if (interactive && s_touch_prepare && slot < s_touch_target_count) {
+        s_touch_target_slot = slot;
+        s_touch_collect_hit = 1;
+    }
+    if (interactive && (MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
+        uint32_t target = slot < s_touch_target_count ? s_touch_targets[slot].target : 0;
+        int member = 0;
+        for (uint32_t i = 0; target && i < count; i++)
+            if (MEM32(objects + i * 4) == target) { member = 1; break; }
+        if (!member || (MEM32(target + 0x1C) & 0x04000000u)) {
+            MEM32(feng + 0x94) = 0;
+            esp += 8; /* A miss must not invoke generic Select on old focus. */
+            return;
+        }
+        if (target != MEM32(package + 0x80)) {
+            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
+            PUSH32(esp, 1);
+            PUSH32(esp, target);
+            PUSH32(esp, feng);
+            PUSH32(esp, 0);
+            ecx = package;
+            sub_000E53C0();
+            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
+        }
+    }
+#endif
+    sub_000D8730_gen();
+#ifdef __ANDROID__
+    s_touch_collect_hit = 0;
+#endif
+}
+
+void sub_000D8B10(void)
+{
+#ifdef __ANDROID__
+    uint32_t feng = ecx;
+    uint8_t mouse_enabled = MEM8(feng + 2);
+    MenuTouchSample sample = menu_touch_sample();
+    float menu_size;
+    memcpy(&menu_size, (void *)XBOX_PTR(0x00295B00u), sizeof(menu_size));
+    /* First implementation is limited to the front end. Game flow 6 also
+     * includes HUD/pause/results; those need separate device validation. */
+    int enabled = MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
+        menu_touch_position(&sample, xbox_video_widescreen(), menu_size,
+                            &s_touch_x, &s_touch_y);
+    if (sample.reset || (!enabled && sample.active)) {
+        memset((void *)XBOX_PTR(feng + 0xC), 0, 0x20);
+        MEM32(feng + 0x94) = 0; /* mouse press capture, not controller focus */
+    }
+    if (MEM32(NFSU1_GAMEFLOW_STATE) != 3) menu_touch_cancel();
+    if (enabled && sample.prepare) {
+        /* Ensure hover is resolved even for a tap at (0,0), or a second tap
+         * at the same position after controller navigation changed focus. */
+        MEM32(feng + 0xC) = 0xFFFF8000u;
+        MEM32(feng + 0x10) = 0xFFFF8000u;
+    }
+    s_touch_buttons = enabled && sample.down ? 1 : 0;
+    s_touch_poll = enabled;
+    s_touch_prepare = sample.prepare;
+    if (sample.prepare || sample.reset) s_touch_target_count = 0;
+    MEM8(feng + 2) = enabled;
+    sub_000D8B10_gen();
+    MEM8(feng + 2) = mouse_enabled;
+    s_touch_poll = 0;
+    if (enabled && sample.prepare) {
+        unsigned count = 0;
+        for (uint32_t package = MEM32(feng + 0xE4); package && count++ < 8;
+             package = MEM32(package + 4)) {
+            uint32_t focus = MEM32(package + 0x80);
+            fprintf(stderr, "[touch] package=%08X flags=%08X selectable=%u focus=%08X\n",
+                    package, MEM32(package + 0x1C), MEM32(package + 0x88),
+                    focus ? MEM32(focus + 0x10) : 0);
+        }
+    }
+#else
+    sub_000D8B10_gen();
+#endif
+}
+
+void sub_000DB860(void)
+{
+#ifdef __ANDROID__
+    if (s_touch_poll && MEM32(esp) == 0x000D8B5Eu) {
+        uint32_t output = MEM32(esp + 4);
+        MEM16(output) = (uint16_t)s_touch_x;
+        MEM16(output + 2) = (uint16_t)s_touch_y;
+        MEM16(output + 4) = 0; /* wheel */
+        MEM16(output + 6) = (uint16_t)s_touch_buttons;
+        esp += 8; /* thiscall, ret 4 */
+        return;
+    }
+#endif
+    sub_000DB860_gen();
+}
+
 void sub_00018E40(void)
 {
     uint32_t v = s_proj_view;
@@ -680,6 +878,21 @@ void sub_0014B510(void)
     MEM32(centre) = original;
 }
 
+/* Associate cached draw geometry with its actual FEng object, including
+ * the reused-cache path. Group hit bounds are the union of drawn children. */
+extern void sub_000D9D00_gen(void);
+void sub_000D9D00(void)
+{
+#ifdef __ANDROID__
+    uint32_t previous = s_touch_draw_object;
+    s_touch_draw_object = MEM32(esp + 4);
+#endif
+    sub_000D9D00_gen();
+#ifdef __ANDROID__
+    s_touch_draw_object = previous;
+#endif
+}
+
 /* FEng renders the rest of the HUD through a cached circular list of
  * quads. This path is shared by sprites and text (one quad per glyph).
  * Select one anchor from the complete object's bounds, then translate all
@@ -701,6 +914,9 @@ void sub_000DC090(void)
 {
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
+#ifdef __ANDROID__
+    if (!previous) s_touch_bounds_count = 0;
+#endif
     sub_000DC090_gen();
     s_feng_menu_draw = previous;
 }
@@ -714,6 +930,21 @@ void sub_000F8B80(void)
     int previous_draw = s_feng_draw;
     unsigned count = 0;
 
+#ifdef __ANDROID__
+    if (s_feng_menu_draw && s_touch_draw_object) {
+        uint32_t entry = node;
+        unsigned visited = 0;
+        while (entry && entry != head && visited++ < 4096) {
+            for (unsigned i = 0; i < 4; i++) {
+                float x, y;
+                memcpy(&x, (void *)XBOX_PTR(entry + 0x20 + i * 16), 4);
+                memcpy(&y, (void *)XBOX_PTR(entry + 0x24 + i * 16), 4);
+                touch_bounds_add(s_touch_draw_object, x, y);
+            }
+            entry = MEM32(entry);
+        }
+    }
+#endif
     s_feng_shift = 0.0f;
     s_feng_draw = s_ui_aspect_active;
     if (s_feng_draw && !s_feng_menu_draw &&
@@ -1262,6 +1493,9 @@ void sub_0011BC20(void)
  */
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
+#ifdef __ANDROID__
+    if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
+#endif
     /*
      * TODO: Add your overrides here. Examples:
      *

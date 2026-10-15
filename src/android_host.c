@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "menu_touch.h"
 
 int android_host_boot(int argc, char **argv)
 {
@@ -72,6 +73,7 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_GameActivity_nativeSurfaceChanged(
     host_window.window = window;
     host_window.width = width;
     host_window.height = height;
+    menu_touch_cancel();
     if (old != window) host_window.generation++;
     fprintf(stderr, "[ANDROID] window generation=%llu size=%dx%d available=%d\n",
             (unsigned long long)host_window.generation, width, height, window != NULL);
@@ -130,6 +132,9 @@ int android_host_run(void)
 {
     extern void nfsu_audio_diag_poll(void);
     extern void nfsu_diag_poll(void);
+    SDL_FingerID touch_finger = 0;
+    SDL_TouchID touch_device = 0;
+    int touching = 0;
     for (;;) {
         SDL_Event e;
         nfsu_audio_diag_poll();
@@ -140,10 +145,33 @@ int android_host_run(void)
         if (finished) return 0;
         if (!SDL_WaitEventTimeout(&e, 50)) continue;
         if (e.type == SDL_QUIT) _exit(0);
+        if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERMOTION || e.type == SDL_FINGERUP) {
+            if (e.type == SDL_FINGERDOWN && !touching) {
+                touching = 1;
+                touch_finger = e.tfinger.fingerId;
+                touch_device = e.tfinger.touchId;
+            } else if (e.type == SDL_FINGERDOWN) continue;
+            if (!touching || e.tfinger.fingerId != touch_finger ||
+                e.tfinger.touchId != touch_device) continue;
+            int width, height;
+            SDL_GetWindowSize(host_sdl_window, &width, &height);
+            enum MenuTouchEvent event = e.type == SDL_FINGERDOWN ? MENU_TOUCH_DOWN :
+                e.type == SDL_FINGERUP ? MENU_TOUCH_UP : MENU_TOUCH_MOVE;
+            menu_touch_event(event, e.tfinger.x, e.tfinger.y, width, height);
+            if (e.type == SDL_FINGERUP) touching = 0;
+        }
+        if (e.type == SDL_APP_WILLENTERBACKGROUND ||
+            (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                                         e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))) {
+            touching = 0;
+            menu_touch_cancel();
+        }
         if (e.type == SDL_APP_DIDENTERBACKGROUND || e.type == SDL_APP_DIDENTERFOREGROUND) {
             int active = e.type == SDL_APP_DIDENTERFOREGROUND;
             pthread_mutex_lock(&host_mutex);
             host_active = active;
+            touching = 0;
+            menu_touch_cancel();
             fprintf(stderr, "[ANDROID] foreground=%d\n", active);
             pthread_cond_broadcast(&host_changed);
             pthread_mutex_unlock(&host_mutex);

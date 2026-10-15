@@ -70,7 +70,7 @@ set(GAME_SOURCES
 
 if(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} ${RECOMP_GEN_SOURCES}
-        src/android_host.c src/android_saf.c src/android_diagnostics.c)
+        src/android_host.c src/android_saf.c src/android_diagnostics.c src/menu_touch.c)
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 log android)
     target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
     foreach(call open open64 __open_2 fopen fopen64 stat stat64 opendir readdir readdir64 closedir)
