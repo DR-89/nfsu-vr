@@ -181,6 +181,8 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements rq, VkMemoryPropertyFlags w
     return m;
 }
 
+#include "nv2a_vk_image_pool.h"
+
 /* ── Frames in flight ─────────────────────────────────────────────── */
 
 #define VK_FRAMES 2
@@ -252,6 +254,7 @@ static void garbage_free(Frame *f)
         if (f->garbage[i].view) vkDestroyImageView(s_dev, f->garbage[i].view, NULL);
         if (f->garbage[i].image) vkDestroyImage(s_dev, f->garbage[i].image, NULL);
         if (f->garbage[i].mem) vkFreeMemory(s_dev, f->garbage[i].mem, NULL);
+        else if (f->garbage[i].image) pool_release(f->garbage[i].image);
         if (f->garbage[i].pipe) vkDestroyPipeline(s_dev, f->garbage[i].pipe, NULL);
     }
     f->ngarbage = 0;
@@ -513,13 +516,33 @@ static int make_image_ml(uint32_t w, uint32_t h, uint32_t layers, uint32_t level
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(s_dev, &ci, NULL, img) != VK_SUCCESS)
         return 0;
-    vkGetImageMemoryRequirements(s_dev, *img, &rq);
-    *mem = alloc_mem(rq, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (!*mem || vkBindImageMemory(s_dev, *img, *mem, 0) != VK_SUCCESS) {
-        vkDestroyImage(s_dev, *img, NULL);
-        if (*mem) vkFreeMemory(s_dev, *mem, NULL);
-        *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
-        return 0;
+    /* Vulkan 1.1: a driver may require or prefer a dedicated allocation. */
+    VkMemoryDedicatedRequirements dedicated = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS };
+    VkMemoryRequirements2 requirements = { VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
+    VkImageMemoryRequirementsInfo2 query = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2 };
+    query.image = *img;
+    requirements.pNext = &dedicated;
+    vkGetImageMemoryRequirements2(s_dev, &query, &requirements);
+    rq = requirements.memoryRequirements;
+    *mem = VK_NULL_HANDLE;
+    int standalone = dedicated.requiresDedicatedAllocation || dedicated.prefersDedicatedAllocation;
+    if (standalone || !pool_bind(*img, &rq)) {
+        VkMemoryDedicatedAllocateInfo image_alloc = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
+        VkMemoryAllocateInfo allocate = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+        image_alloc.image = *img;
+        allocate.pNext = standalone ? &image_alloc : NULL;
+        allocate.allocationSize = rq.size;
+        allocate.memoryTypeIndex = mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocate.memoryTypeIndex != UINT32_MAX
+            && vkAllocateMemory(s_dev, &allocate, NULL, mem) != VK_SUCCESS)
+            *mem = VK_NULL_HANDLE;
+        if (!*mem || vkBindImageMemory(s_dev, *img, *mem, 0) != VK_SUCCESS) {
+            vkDestroyImage(s_dev, *img, NULL);
+            if (*mem) vkFreeMemory(s_dev, *mem, NULL);
+            *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
+            return 0;
+        }
+        s_pool_fallbacks++;
     }
     vi.image = *img;
     vi.viewType = layers == 6 ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
@@ -531,7 +554,8 @@ static int make_image_ml(uint32_t w, uint32_t h, uint32_t layers, uint32_t level
         vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     if (vkCreateImageView(s_dev, &vi, NULL, view) != VK_SUCCESS) {
         vkDestroyImage(s_dev, *img, NULL);
-        vkFreeMemory(s_dev, *mem, NULL);
+        if (*mem) vkFreeMemory(s_dev, *mem, NULL);
+        else pool_release(*img);
         *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
         return 0;
     }
@@ -4068,6 +4092,7 @@ static void vk_flip(void)
         return;
     pend_flush();
     s_frame++;
+    if (s_frame % 300 == 0) pool_report();
     if (s_inst_alt)
         s_inst_on = s_frame & 1;
     {
