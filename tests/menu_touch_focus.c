@@ -71,6 +71,16 @@ static void draw_bounds(void)
     g_esp = 0x10000;
     sub_000DC090();
 }
+void sub_000DE540(void)
+{
+    assert(g_ecx == 0x28000);
+    assert(MEM32(g_esp + 4) == expected_message);
+    assert(MEM32(g_esp + 8) == expected);
+    assert(MEM32(g_esp + 12) == 1 && MEM32(g_esp + 16) == package);
+    controller_selects++; presses++;
+    g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
+    g_esp += 20;
+}
 void sub_000D7A00(void) { g_esp += 4; }
 void sub_000D6D30(void)
 {
@@ -331,8 +341,26 @@ int main(void)
     menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
     update(); update();
     for (unsigned i = 0; i < 5; i++) update();
-    assert(controller_selects == before_actions + 5); /* no repeats while held */
+    assert(controller_selects == before_actions + 4); /* wait for tap vs swipe */
     menu_touch_event(MENU_TOUCH_UP, .3f, .6f, 1280, 720);
     update(); update();
+    assert(controller_selects == before_actions + 5);
+    expected_message = 0xB5971BF1;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .2f, .6f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .2f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 6); /* swipe left -> next */
+    expected_message = 0x9120409E;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 7); /* swipe right -> previous */
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .35f, .8f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .35f, .8f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 7); /* vertical drag is no tap */
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }

@@ -610,11 +610,16 @@ extern void sub_000DDB60(void);
 extern void sub_000E53C0(void);
 extern void sub_000D6D30(void);
 extern void sub_000D7A00(void);
+extern void sub_000DE540(void);
 #ifdef __ANDROID__
 #include "menu_touch.h"
 static RECOMP_TLS short s_touch_x, s_touch_y;
 static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
-typedef struct { uint32_t package, target, message, fired; } TouchTarget;
+typedef struct {
+    uint32_t package, target, message, fired, screen, armed;
+    short start_x, start_y;
+    float travel;
+} TouchTarget;
 static RECOMP_TLS TouchTarget s_touch_targets[32];
 static RECOMP_TLS unsigned s_touch_target_count, s_touch_target_slot;
 static RECOMP_TLS unsigned s_touch_collect_hit;
@@ -770,7 +775,7 @@ void sub_000D8730(void)
     for (slot = 0; slot < s_touch_target_count; slot++)
         if (s_touch_targets[slot].package == package) break;
     if (active && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
-        s_touch_targets[slot] = (TouchTarget){ package, 0, 0, 0 };
+        s_touch_targets[slot] = (TouchTarget){ .package = package };
         s_touch_target_count++;
     }
     /* The common screen base owns mouse_over_l/r even when the package
@@ -784,14 +789,6 @@ void sub_000D8730(void)
             /* Horizontal browsers draw their arrows in a shared backdrop
              * package. Route those visible objects to the active browser. */
             if (screen == touch_garage_screen()) {
-                float tx=s_touch_x+320.0f,ty=s_touch_y+240.0f;
-                uint32_t nd=MEM32(screen+0x54),th=nd?MEM32(nd+0xC):0;
-                fprintf(stderr,"[category] screen=%08X handler=%08X node=%08X thumb=%08X icon=%08X point=%.0f,%.0f\n",screen,MEM32(MEM32(screen)+4),nd,th,th?MEM32(th+0xC):0,tx,ty);
-                for(unsigned bi=0;bi<s_touch_bounds_count;bi++) {
-                    TouchBounds *bb=&s_touch_bounds[bi];
-                    if(tx>=bb->left && tx<bb->right && ty>=bb->top && ty<bb->bottom)
-                        fprintf(stderr,"[category-hit] object=%08X hash=%08X type=%u\n",bb->object,MEM32(bb->object+0x10),MEM32(bb->object+0x18));
-                }
                 uint32_t object = touch_rendered_named_hit(0x543398D3u);
                 uint32_t message = 0x9120409Eu;
                 if (!object) {
@@ -813,6 +810,9 @@ void sub_000D8730(void)
                 if (object) {
                     s_touch_targets[slot].target = object;
                     s_touch_targets[slot].message = message;
+                    s_touch_targets[slot].screen = screen;
+                    s_touch_targets[slot].start_x = s_touch_x;
+                    s_touch_targets[slot].start_y = s_touch_y;
                     continue;
                 }
             }
@@ -832,21 +832,48 @@ void sub_000D8730(void)
         }
     }
     if (active && slot < s_touch_target_count && s_touch_targets[slot].message) {
-        if (s_touch_buttons && !s_touch_prepare && !s_touch_targets[slot].fired) {
-            s_touch_targets[slot].fired = 1;
-            fprintf(stderr,"[category-action] object=%08X message=%08X\n",s_touch_targets[slot].target,s_touch_targets[slot].message);
+        TouchTarget *target = &s_touch_targets[slot];
+        int fire = s_touch_buttons && !s_touch_prepare && !target->fired;
+        uint32_t message = target->message;
+        if (target->screen) {
+            float dx = s_touch_x - target->start_x, dy = s_touch_y - target->start_y;
+            target->travel = fmaxf(target->travel, hypotf(dx, dy));
+            if (s_touch_buttons) target->armed = 1;
+            fire = !s_touch_buttons && !s_touch_prepare && target->armed && !target->fired;
+            if (fire) {
+                if (fabsf(dx) >= 20 && fabsf(dx) > fabsf(dy) * 1.25f)
+                    message = dx > 0 ? 0x9120409Eu : 0xB5971BF1u;
+                else if (target->travel >= 12) fire = 0; /* moved, not a tap */
+                if (target->screen != touch_garage_screen()) fire = 0;
+                target->fired = 1;
+            }
+        }
+        if (fire) {
+            target->fired = 1;
             uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-            PUSH32(esp, 1);
-            PUSH32(esp, (uint32_t)-2); /* screen action, not feedback */
-            PUSH32(esp, package);
-            PUSH32(esp, s_touch_targets[slot].target);
-            PUSH32(esp, s_touch_targets[slot].message);
-            PUSH32(esp, 0);
-            ecx = feng;
-            sub_000D6D30();
-            PUSH32(esp, 0);
-            ecx = feng;
-            sub_000D7A00();
+            if (target->screen) {
+                /* Dispatch to the same active screen entry used by native
+                 * package notifications, independent of mouse script focus. */
+                PUSH32(esp, package);
+                PUSH32(esp, 1);
+                PUSH32(esp, target->target);
+                PUSH32(esp, message);
+                PUSH32(esp, 0);
+                ecx = target->screen;
+                sub_000DE540();
+            } else {
+                PUSH32(esp, 1);
+                PUSH32(esp, (uint32_t)-2);
+                PUSH32(esp, package);
+                PUSH32(esp, target->target);
+                PUSH32(esp, message);
+                PUSH32(esp, 0);
+                ecx = feng;
+                sub_000D6D30();
+                PUSH32(esp, 0);
+                ecx = feng;
+                sub_000D7A00();
+            }
             eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
         }
         esp += 8;

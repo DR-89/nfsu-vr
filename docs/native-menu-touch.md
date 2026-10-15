@@ -166,13 +166,23 @@ Customize browsers use a native horizontal-browser instance (vtable 1FF870)
 at screen+48. Their visible `Select_arrow_left/right` objects are rendered
 by the shared HorizontalBrowserBack package; the screen's own mouse_over
 markers are hidden. Bind the visible arrow identity and rendered quad to
-the active browser's directional action. The selected browser node +0C points directly to its FEng icon object. Its
-separate category-name text fields are FAC7F994 / 4AB1E821. Tapping the
-icon or text queues the controller's MouseClick action through route -2.
+the active browser's directional action. The selected browser node +0C
+points directly to its FEng icon object. Its separate category-name text
+fields are FAC7F994 / 4AB1E821. Visible category labels can carry the retail
+noninteractive flag; their rendered geometry still supplies the touch target.
+
+Garage controls capture the gesture and dispatch on release through the
+native screen entry DE540, using the active browser controller. A short tap
+on an icon or label invokes MouseClick; an arrow tap invokes its direction.
+A horizontal swipe of at least 20 logical pixels selects next (swipe left)
+or previous (swipe right), once per gesture. Movement cancels tap activation;
+vertical/ambiguous drags do not open a category. This avoids dependence on
+retail mouse-button edges or script availability in nested menus.
 
 An empty-space gesture on a typed Customize browser directly changes the
 SelectCarCameraMover pitch/yaw (+40/+44), proportional to finger displacement:
-180 degrees per screen width (horizontal direction reversed at the user's request) and 90 degrees per screen height. It does not
+180 degrees per screen width (horizontal direction reversed at the user's
+request) and 90 degrees per screen height. It does not
 emulate stick speed, use a stick dead zone or integrate elapsed frame time.
 Native pitch limits (85..140 degrees) remain. Manual rotation clears native
 angular velocity and refreshes the idle-orbit timestamp. Control gestures
@@ -182,8 +192,11 @@ clear gesture ownership. Nested Customize browsers share the gesture binding.
 The user rejected the initial stick-emulation prototype; that implementation
 was removed, including its input wrapper and linker change. The user confirmed
 direct rotation, directional arrows and rotation in the expanded garage
-context. The final icon/text-label correction built and installed;
-physical confirmation for that final category click correction is pending.
+context. After correcting icon/text selection, native screen dispatch and
+adding swipe/tap discrimination, the final APK built and installed. The user
+confirmed the resulting controls work on Retroid.
 Tests cover proportional reversible motion, stationary-finger stability,
 leaving the garage, nested browser identity, shared arrows, icon activation
-and separate label activation. Queue/mapping and UI-aspect checks also run.
+separate label activation, both swipe directions, vertical-drag cancellation,
+release-only activation and no repeats while held. Queue/mapping and UI-aspect
+checks passed as well. Not every purchasable part or garage screen was tested.
