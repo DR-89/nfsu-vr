@@ -2,6 +2,7 @@
  * focus adapter. See docs/native-menu-touch.md. */
 #include <assert.h>
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include "recomp_types.h"
 #include "menu_touch.h"
@@ -18,7 +19,7 @@ static uint32_t expected;
 static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
 static unsigned draw_mask = 3;
-static int keyboard_layout;
+static int keyboard_layout, stale_mouse_edge;
 void sub_000D8B10(void);
 void sub_000D8730(void);
 void sub_000DB860(void);
@@ -70,6 +71,7 @@ static void draw_bounds(void)
     g_esp = 0x10000;
     sub_000DC090();
 }
+void sub_000D7A00(void) { g_esp += 4; }
 void sub_000D6D30(void)
 {
     assert(g_ecx == feng);
@@ -127,6 +129,7 @@ void sub_000D8B10_gen(void)
     assert(g_esp == entry);
     MEM16(feng + 0x18) = MEM16(feng + 0x1A);
     MEM16(feng + 0x1A) = MEM16(0x11006);
+    if (stale_mouse_edge) MEM16(feng + 0x18) = MEM16(feng + 0x1A);
     /* Simulate pad polling/dialog code changing focus after hover. */
     if (steal_focus) MEM32(package + 0x80) = expected == yes ? no : yes;
     g_esp -= 8;
@@ -266,5 +269,70 @@ int main(void)
     draw_bounds();
     tap(.7f, no); /* hidden arrow has no current rendered geometry */
     assert(presses == 11);
+    /* Only an empty-space drag in the active garage can drive the camera. */
+    MEM32(0x1FC384 + 4) = 0xEEB80;
+    MEM32(screen + 0x48) = 0x1FF870;
+    MEM32(registry) = 0x2A000;
+    MEM32(0x2A000) = 0x2BCB9C;
+    MEM32(0x2A000 - 4 + 0x14) = 0x2B000;
+    MEM32(0x2B000) = 0x1FB0CC;
+    MEM32(0x2B05C) = 0x2C000;
+    MEM32(0x2C000) = 0x1F8E90;
+    float pitch = 100, initial_yaw = 115;
+    memcpy((void *)XBOX_PTR(0x2C040), &pitch, 4);
+    memcpy((void *)XBOX_PTR(0x2C044), &initial_yaw, 4);
+    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720);
+    update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .07f, .5f, 1280, 720);
+    update();
+    float yaw;
+    memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+    assert(yaw > 118.59f && yaw < 118.61f);
+    assert(MEM32(0x2C184) == 0 && MEM32(0x2C188) == 0);
+    update(); /* stationary finger has no continued rotation */
+    float stationary;
+    memcpy(&stationary, (void *)XBOX_PTR(0x2C044), 4);
+    assert(stationary == yaw);
+    menu_touch_event(MENU_TOUCH_MOVE, .06f, .5f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .05f, .5f, 1280, 720); update();
+    memcpy(&stationary, (void *)XBOX_PTR(0x2C044), 4);
+    assert(fabsf(stationary - initial_yaw) < .001f);
+    yaw = stationary;
+    MEM32(0x1FC384 + 4) = 0xD3720;
+    menu_touch_event(MENU_TOUCH_MOVE, .09f, .5f, 1280, 720);
+    update();
+    float after;
+    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+    assert(after == yaw);
+    menu_touch_cancel(); update();
+    /* Customize's visible arrows live in the shared browser backdrop,
+     * unlike its hidden mouse_over markers. Category icons open the node. */
+    MEM32(0x1FC384 + 4) = 0xEEE00; /* nested garage category screen */
+    MEM32(screen + 0x24) = MEM32(screen + 0x28) = 0;
+    MEM32(yes + 0x10) = 0x543398D3;
+    MEM32(no + 0x10) = 0xDB157AC6;
+    draw_mask = 3; draw_bounds();
+    int before_actions = controller_selects;
+    stale_mouse_edge = 1; /* gesture actions do not depend on retail mouse edges */
+    expected_message = 0x9120409E; tap(.3f, yes);
+    expected_message = 0xB5971BF1; tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    MEM32(yes + 0x10) = 0x11111111;
+    MEM32(screen + 0x54) = 0x2D000;
+    MEM32(0x2D00C) = yes;
+    expected_message = 0x0C407210; tap(.3f, yes);
+    assert(controller_selects == before_actions + 3);
+    MEM32(0x2D00C) = 0; /* separate text label opens the same category */
+    MEM32(yes + 0x1C) = 0x04000000; /* noninteractive label is still drawn */
+    MEM32(yes + 0x10) = 0x4AB1E821;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions + 4);
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720);
+    update(); update();
+    for (unsigned i = 0; i < 5; i++) update();
+    assert(controller_selects == before_actions + 5); /* no repeats while held */
+    menu_touch_event(MENU_TOUCH_UP, .3f, .6f, 1280, 720);
+    update(); update();
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }

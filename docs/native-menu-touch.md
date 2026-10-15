@@ -159,3 +159,31 @@ per tap, misses and an arrow absent from the current rendered frame. The APK
 built successfully and was installed on Retroid; the user confirmed that the
 arrows work on the Statistics screen. Physical input from the user overlapped
 ADB checks, so screenshots alone are not treated as isolated direction tests.
+
+### Customize touch inspection, 2026-10-16
+
+Customize browsers use a native horizontal-browser instance (vtable 1FF870)
+at screen+48. Their visible `Select_arrow_left/right` objects are rendered
+by the shared HorizontalBrowserBack package; the screen's own mouse_over
+markers are hidden. Bind the visible arrow identity and rendered quad to
+the active browser's directional action. The selected browser node +0C points directly to its FEng icon object. Its
+separate category-name text fields are FAC7F994 / 4AB1E821. Tapping the
+icon or text queues the controller's MouseClick action through route -2.
+
+An empty-space gesture on a typed Customize browser directly changes the
+SelectCarCameraMover pitch/yaw (+40/+44), proportional to finger displacement:
+180 degrees per screen width (horizontal direction reversed at the user's request) and 90 degrees per screen height. It does not
+emulate stick speed, use a stick dead zone or integrate elapsed frame time.
+Native pitch limits (85..140 degrees) remain. Manual rotation clears native
+angular velocity and refreshes the idle-orbit timestamp. Control gestures
+cannot own the camera. Modal screens, leaving Customize and lifecycle cancel
+clear gesture ownership. Nested Customize browsers share the gesture binding.
+
+The user rejected the initial stick-emulation prototype; that implementation
+was removed, including its input wrapper and linker change. The user confirmed
+direct rotation, directional arrows and rotation in the expanded garage
+context. The final icon/text-label correction built and installed;
+physical confirmation for that final category click correction is pending.
+Tests cover proportional reversible motion, stationary-finger stability,
+leaving the garage, nested browser identity, shared arrows, icon activation
+and separate label activation. Queue/mapping and UI-aspect checks also run.

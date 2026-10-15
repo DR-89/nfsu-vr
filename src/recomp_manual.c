@@ -609,11 +609,12 @@ extern void sub_000D8730_gen(void);
 extern void sub_000DDB60(void);
 extern void sub_000E53C0(void);
 extern void sub_000D6D30(void);
+extern void sub_000D7A00(void);
 #ifdef __ANDROID__
 #include "menu_touch.h"
 static RECOMP_TLS short s_touch_x, s_touch_y;
 static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
-typedef struct { uint32_t package, target, message; } TouchTarget;
+typedef struct { uint32_t package, target, message, fired; } TouchTarget;
 static RECOMP_TLS TouchTarget s_touch_targets[32];
 static RECOMP_TLS unsigned s_touch_target_count, s_touch_target_slot;
 static RECOMP_TLS unsigned s_touch_collect_hit;
@@ -669,6 +670,69 @@ static int touch_object_bounds(uint32_t object, TouchBounds *out, unsigned depth
     return found;
 }
 
+static uint32_t touch_rendered_named_hit(uint32_t hash)
+{
+    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        TouchBounds *bounds = &s_touch_bounds[i];
+        uint32_t object = bounds->object;
+        if (MEM32(object + 0x10) == hash &&
+            x >= bounds->left && x < bounds->right &&
+            y >= bounds->top && y < bounds->bottom) return object;
+    }
+    return 0;
+}
+
+/* The active typed Customize browser owns the preview gesture. A modal
+ * registered ahead of it takes ownership and disables camera touch. */
+static uint32_t touch_garage_screen(void)
+{
+    uint32_t reg = MEM32(0x002BCB9Cu);
+    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
+        uint32_t package = MEM32(reg - 4 + 0x18);
+        uint32_t screen = MEM32(reg - 4 + 0x14);
+        if (!package || !screen || !(MEM32(package + 0x1C) & 1)) continue;
+        uint32_t vtable = MEM32(screen);
+        uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
+        return handler >= 0x000EB000u && handler < 0x000F7000u &&
+            MEM32(screen + 0x48) == 0x001FF870u ? screen : 0;
+    }
+    return 0;
+}
+static uint32_t touch_preview_camera(void)
+{
+    uint32_t reg = MEM32(0x002BCB9Cu);
+    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
+        uint32_t screen = MEM32(reg - 4 + 0x14);
+        if (!screen || MEM32(screen) != 0x001FB0CCu) continue;
+        uint32_t camera = MEM32(screen + 0x5C);
+        if (camera && MEM32(camera) == 0x001F8E90u) return camera;
+    }
+    return 0;
+}
+static void touch_camera_orbit(float dx, float dy)
+{
+    uint32_t camera = touch_preview_camera();
+    if (!camera || MEM32(camera + 0x2C) == 2) return; /* scripted transition */
+    float pitch, yaw;
+    memcpy(&pitch, (void *)XBOX_PTR(camera + 0x40), 4);
+    memcpy(&yaw, (void *)XBOX_PTR(camera + 0x44), 4);
+    if (!isfinite(pitch) || !isfinite(yaw)) return;
+    pitch = fmaxf(85, fminf(140, pitch + dy * 90));
+    yaw = fmodf(yaw + dx * 180 + 360, 360);
+    memcpy((void *)XBOX_PTR(camera + 0x40), &pitch, 4);
+    memcpy((void *)XBOX_PTR(camera + 0x44), &yaw, 4);
+    MEM32(camera + 0x2C) = 3;
+    MEM32(camera + 0x180) = MEM32(camera + 0x184) = MEM32(camera + 0x188) = 0;
+    /* Treat touch as manual inspection, resetting the native idle orbit. */
+    MEM32(0x002B7570u) = MEM32(0x002CA448u);
+    MEM32(0x00247D38u) = 0;
+}
+static RECOMP_TLS uint32_t s_touch_camera_screen;
+static RECOMP_TLS float s_touch_camera_x, s_touch_camera_y;
+static RECOMP_TLS float s_touch_camera_start_x, s_touch_camera_start_y;
+static RECOMP_TLS int s_touch_camera_moving;
+
 #endif
 
 /* Observe the result of the native virtual hit test. Calling its generated
@@ -706,7 +770,7 @@ void sub_000D8730(void)
     for (slot = 0; slot < s_touch_target_count; slot++)
         if (s_touch_targets[slot].package == package) break;
     if (active && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
-        s_touch_targets[slot] = (TouchTarget){ package, 0, 0 };
+        s_touch_targets[slot] = (TouchTarget){ package, 0, 0, 0 };
         s_touch_target_count++;
     }
     /* The common screen base owns mouse_over_l/r even when the package
@@ -717,6 +781,41 @@ void sub_000D8730(void)
         for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
             uint32_t screen = MEM32(reg - 4 + 0x14);
             if (MEM32(reg - 4 + 0x18) != package || !screen) continue;
+            /* Horizontal browsers draw their arrows in a shared backdrop
+             * package. Route those visible objects to the active browser. */
+            if (screen == touch_garage_screen()) {
+                float tx=s_touch_x+320.0f,ty=s_touch_y+240.0f;
+                uint32_t nd=MEM32(screen+0x54),th=nd?MEM32(nd+0xC):0;
+                fprintf(stderr,"[category] screen=%08X handler=%08X node=%08X thumb=%08X icon=%08X point=%.0f,%.0f\n",screen,MEM32(MEM32(screen)+4),nd,th,th?MEM32(th+0xC):0,tx,ty);
+                for(unsigned bi=0;bi<s_touch_bounds_count;bi++) {
+                    TouchBounds *bb=&s_touch_bounds[bi];
+                    if(tx>=bb->left && tx<bb->right && ty>=bb->top && ty<bb->bottom)
+                        fprintf(stderr,"[category-hit] object=%08X hash=%08X type=%u\n",bb->object,MEM32(bb->object+0x10),MEM32(bb->object+0x18));
+                }
+                uint32_t object = touch_rendered_named_hit(0x543398D3u);
+                uint32_t message = 0x9120409Eu;
+                if (!object) {
+                    object = touch_rendered_named_hit(0xDB157AC6u);
+                    message = 0xB5971BF1u;
+                }
+                if (!object) {
+                    uint32_t node = MEM32(screen + 0x54);
+                    object = node ? MEM32(node + 0xC) : 0;
+                    TouchBounds bounds;
+                    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+                    if (!object || !touch_object_bounds(object, &bounds, 0) ||
+                        x < bounds.left || x >= bounds.right ||
+                        y < bounds.top || y >= bounds.bottom) object = 0;
+                    if (!object) object = touch_rendered_named_hit(0xFAC7F994u);
+                    if (!object) object = touch_rendered_named_hit(0x4AB1E821u);
+                    message = 0x0C407210u; /* controller's category activation */
+                }
+                if (object) {
+                    s_touch_targets[slot].target = object;
+                    s_touch_targets[slot].message = message;
+                    continue;
+                }
+            }
             for (unsigned side = 0; side < 2; side++) {
                 uint32_t object = MEM32(screen + 0x24 + side * 4);
                 TouchBounds bounds;
@@ -733,7 +832,9 @@ void sub_000D8730(void)
         }
     }
     if (active && slot < s_touch_target_count && s_touch_targets[slot].message) {
-        if ((MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
+        if (s_touch_buttons && !s_touch_prepare && !s_touch_targets[slot].fired) {
+            s_touch_targets[slot].fired = 1;
+            fprintf(stderr,"[category-action] object=%08X message=%08X\n",s_touch_targets[slot].target,s_touch_targets[slot].message);
             uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
             PUSH32(esp, 1);
             PUSH32(esp, (uint32_t)-2); /* screen action, not feedback */
@@ -743,6 +844,9 @@ void sub_000D8730(void)
             PUSH32(esp, 0);
             ecx = feng;
             sub_000D6D30();
+            PUSH32(esp, 0);
+            ecx = feng;
+            sub_000D7A00();
             eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
         }
         esp += 8;
@@ -883,6 +987,32 @@ void sub_000D8B10(void)
     sub_000D8B10_gen();
     MEM8(feng + 2) = mouse_enabled;
     s_touch_poll = 0;
+    uint32_t garage = enabled ? touch_garage_screen() : 0;
+    if (sample.reset || !sample.active || garage != s_touch_camera_screen)
+        s_touch_camera_screen = 0;
+    if (enabled && sample.prepare) {
+        int control = 0;
+        for (unsigned i = 0; i < s_touch_target_count; i++)
+            if (s_touch_targets[i].target) control = 1;
+        s_touch_camera_screen = control ? 0 : garage;
+        s_touch_camera_start_x = s_touch_camera_x = sample.x;
+        s_touch_camera_start_y = s_touch_camera_y = sample.y;
+        s_touch_camera_moving = 0;
+    }
+    float camera_dx = 0, camera_dy = 0;
+    if (s_touch_camera_screen && sample.active && !sample.prepare) {
+        if (fabsf(sample.x - s_touch_camera_start_x) +
+            fabsf(sample.y - s_touch_camera_start_y) > 0.006f)
+            s_touch_camera_moving = 1;
+        if (s_touch_camera_moving) {
+            camera_dx = sample.x - s_touch_camera_x;
+            camera_dy = sample.y - s_touch_camera_y;
+        }
+        s_touch_camera_x = sample.x;
+        s_touch_camera_y = sample.y;
+    }
+    if (s_touch_camera_screen && (sample.down || s_touch_camera_moving))
+        touch_camera_orbit(camera_dx, camera_dy);
     if (enabled && sample.prepare) {
         unsigned count = 0;
         for (uint32_t package = MEM32(feng + 0xE4); package && count++ < 8;
