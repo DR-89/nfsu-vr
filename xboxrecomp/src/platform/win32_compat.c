@@ -16,6 +16,8 @@
 #define __STDC_WANT_LIB_EXT1__ 1
 
 #include "win32_compat.h"
+#include "thread_observer.h"
+#include "dispatcher_backend.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -28,6 +30,32 @@
 #include <unistd.h>
 #include <sched.h>
 #include <fenv.h>
+
+static const HostDispatcherBackend *dispatcher_backend;
+void host_set_dispatcher_backend(const HostDispatcherBackend *backend)
+{ __atomic_store_n(&dispatcher_backend, backend, __ATOMIC_RELEASE); }
+static const HostDispatcherBackend *dispatcher_get(void)
+{ return __atomic_load_n(&dispatcher_backend, __ATOMIC_ACQUIRE); }
+static const HostThreadObserver *thread_observer;
+/* Preserve metadata/notification order across concurrent suspend/resume or
+ * priority updates without calling observers under native object locks. */
+static pthread_mutex_t thread_update_lock = PTHREAD_MUTEX_INITIALIZER;
+void host_set_thread_observer(const HostThreadObserver *observer)
+{
+    __atomic_store_n(&thread_observer, observer, __ATOMIC_RELEASE);
+}
+static const HostThreadObserver *observer_get(void)
+{ return __atomic_load_n(&thread_observer, __ATOMIC_ACQUIRE); }
+static void observe_wait_begin(uintptr_t object)
+{
+    const HostThreadObserver *o = observer_get();
+    if (o && o->wait_begin) o->wait_begin(GetCurrentThreadId(), object);
+}
+static void observe_wait_end(void)
+{
+    const HostThreadObserver *o = observer_get();
+    if (o && o->wait_end) o->wait_end(GetCurrentThreadId());
+}
 #if defined(__SWITCH__)
 /* Horizon: no mmap. Memory is kernel objects mapped at chosen addresses
  * (see "Virtual memory" below). Only the kernel headers are pulled in --
@@ -273,6 +301,7 @@ typedef enum { K_EVENT, K_SEM, K_MUTEX, K_THREAD, K_TIMER, K_HEAP,
 typedef struct w32_object {
     w32_kind        kind;
     LONG            refcount;
+    void           *dispatcher;
     pthread_mutex_t lock;
     pthread_cond_t  cond;
 
@@ -435,6 +464,12 @@ static w32_object *obj_from(HANDLE h)
     return hit;
 }
 
+int host_dispatcher_manages(HANDLE handle)
+{
+    w32_object *o = obj_from(handle);
+    return o && o->dispatcher != NULL;
+}
+
 static w32_object *obj_alloc(w32_kind kind)
 {
     w32_object *o = (w32_object *)calloc(1, sizeof(w32_object));
@@ -452,6 +487,7 @@ static void obj_release(w32_object *o)
     if (InterlockedDecrement(&o->refcount) > 0)
         return;
     reg_remove(o);
+    if (o->dispatcher) dispatcher_get()->destroy(o->dispatcher);
     if (o->kind == K_FILE) {
         if (o->fd >= 0) close(o->fd);
         /* Deleted only now that the handle is closed: Horizon refuses to
@@ -663,7 +699,14 @@ DWORD WaitForSingleObject(HANDLE h, DWORD ms)
         w32_object *o = obj_from(h);
         if (!o)
             return WAIT_FAILED;
-        return wait_single(o, ms);
+        if (o->dispatcher) {
+            void *object = o->dispatcher;
+            return dispatcher_get()->wait(1, &object, 0, ms);
+        }
+        if (ms) observe_wait_begin((uintptr_t)h);
+        DWORD result = wait_single(o, ms);
+        if (ms) observe_wait_end();
+        return result;
     }
 }
 
@@ -683,7 +726,7 @@ DWORD WaitForMultipleObjects(DWORD count, const HANDLE *handles, BOOL waitAll, D
     return WaitForMultipleObjectsEx(count, handles, waitAll, ms, FALSE);
 }
 
-DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+static DWORD wait_multiple_impl(DWORD count, const HANDLE *handles, BOOL waitAll,
                                DWORD ms, BOOL alertable)
 {
     struct timespec ts;
@@ -733,6 +776,11 @@ HANDLE CreateEventA(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialStat
     w32_object *o = obj_alloc(K_EVENT);
     o->manual_reset = manualReset ? 1 : 0;
     o->signaled     = initialState ? 1 : 0;
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend) {
+        o->dispatcher = backend->create(0, manualReset, initialState, 1);
+        if (!o->dispatcher) { obj_release(o); return NULL; }
+    }
     return (HANDLE)o;
 }
 HANDLE CreateEventW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialState, LPCWSTR name)
@@ -741,10 +789,32 @@ HANDLE CreateEventW(LPSECURITY_ATTRIBUTES sa, BOOL manualReset, BOOL initialStat
     return CreateEventA(sa, manualReset, initialState, NULL);
 }
 
+DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+                               DWORD ms, BOOL alertable)
+{
+    if (count && count <= MAXIMUM_WAIT_OBJECTS) {
+        void *objects[MAXIMUM_WAIT_OBJECTS];
+        unsigned i;
+        for (i = 0; i < count; i++) {
+            w32_object *o = obj_from(handles[i]);
+            if (!o || !o->dispatcher) break;
+            objects[i] = o->dispatcher;
+        }
+        if (i == count && !alertable) {
+            return dispatcher_get()->wait(count, objects, waitAll, ms);
+        }
+    }
+    if (ms) observe_wait_begin(0);
+    DWORD result = wait_multiple_impl(count, handles, waitAll, ms, alertable);
+    if (ms) observe_wait_end();
+    return result;
+}
+
 BOOL SetEvent(HANDLE h)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_EVENT) return FALSE;
+    if (o->dispatcher) return dispatcher_get()->signal(o->dispatcher, 1, NULL, 0);
     pthread_mutex_lock(&o->lock);
     o->signaled = 1;
     pthread_cond_broadcast(&o->cond);
@@ -756,6 +826,7 @@ BOOL ResetEvent(HANDLE h)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_EVENT) return FALSE;
+    if (o->dispatcher) return dispatcher_get()->reset(o->dispatcher);
     pthread_mutex_lock(&o->lock);
     o->signaled = 0;
     pthread_mutex_unlock(&o->lock);
@@ -766,6 +837,7 @@ BOOL PulseEvent(HANDLE h)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_EVENT) return FALSE;
+    if (o->dispatcher) return dispatcher_get()->signal(o->dispatcher, 1, NULL, 1);
     /* Wakes the threads waiting right now -- one for an auto-reset event,
      * all for a manual-reset one -- and leaves the event unsignaled. Setting
      * and clearing `signaled` around the broadcast woke nobody: a waiter
@@ -792,6 +864,11 @@ HANDLE CreateSemaphoreA(LPSECURITY_ATTRIBUTES sa, LONG initial, LONG maximum, LP
     w32_object *o = obj_alloc(K_SEM);
     o->sem_count = initial;
     o->sem_max   = maximum;
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend) {
+        o->dispatcher = backend->create(1, 0, initial, maximum);
+        if (!o->dispatcher) { obj_release(o); return NULL; }
+    }
     return (HANDLE)o;
 }
 HANDLE CreateSemaphoreW(LPSECURITY_ATTRIBUTES sa, LONG initial, LONG maximum, LPCWSTR name)
@@ -804,6 +881,8 @@ BOOL ReleaseSemaphore(HANDLE h, LONG releaseCount, PLONG previousCount)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_SEM) return FALSE;
+    if (o->dispatcher)
+        return dispatcher_get()->signal(o->dispatcher, releaseCount, previousCount, 0);
     pthread_mutex_lock(&o->lock);
     if (previousCount) *previousCount = (LONG)o->sem_count;
     o->sem_count += releaseCount;
@@ -1102,6 +1181,9 @@ static void *thread_trampoline(void *arg)
 
     DWORD rc = o->start ? o->start(o->start_param) : 0;
 
+    const HostThreadObserver *observer = observer_get();
+    if (observer && observer->exit) observer->exit(GetCurrentThreadId());
+
     pthread_mutex_lock(&o->lock);
     o->exit_code = rc;
     o->exited    = 1;
@@ -1127,6 +1209,11 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);
+#ifdef __ANDROID__
+    /* HANDLE lifetime is reference counted separately from the native stack.
+     * Windows thread waits do not perform pthread_join(). */
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+#endif
 #if defined(__SWITCH__)
     /* Recompiled code nests host calls as deep as the guest nests its own,
      * and Horizon's default thread stack is a fraction of the 8 MB a Linux
@@ -1145,7 +1232,9 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
         return NULL;
     }
     pthread_attr_destroy(&attr);
+#ifndef __ANDROID__
     o->thread_joinable = 1;
+#endif
 
     if (threadId) *threadId = o->tid;
     return (HANDLE)o;
@@ -1153,6 +1242,8 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
 
 VOID ExitThread(DWORD exitCode)
 {
+    const HostThreadObserver *observer = observer_get();
+    if (observer && observer->exit) observer->exit(GetCurrentThreadId());
     w32_object *o = t_self_obj;
     if (o) {
         pthread_mutex_lock(&o->lock);
@@ -1180,24 +1271,34 @@ DWORD ResumeThread(HANDLE h)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return (DWORD)-1;
+    pthread_mutex_lock(&thread_update_lock);
     pthread_mutex_lock(&o->lock);
     DWORD prev = (DWORD)o->suspend_count;
     if (o->suspend_count > 0 && --o->suspend_count == 0)
         pthread_cond_broadcast(&o->gate);
+    unsigned count = (unsigned)o->suspend_count;
     pthread_mutex_unlock(&o->lock);
+    const HostThreadObserver *observer = observer_get();
+    if (observer && observer->suspend) observer->suspend(o->tid, count);
+    pthread_mutex_unlock(&thread_update_lock);
     return prev;
 }
 
 DWORD SuspendThread(HANDLE h)
 {
-    /* True mid-run suspension is not supported on POSIX; only the
-     * CREATE_SUSPENDED start gate is. Track the count for ResumeThread. */
+    /* Native execution uses a start gate. An installed guest scheduler also
+     * applies the count cooperatively at generated safe points. */
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return (DWORD)-1;
+    pthread_mutex_lock(&thread_update_lock);
     pthread_mutex_lock(&o->lock);
     DWORD prev = (DWORD)o->suspend_count;
     o->suspend_count++;
+    unsigned count = (unsigned)o->suspend_count;
     pthread_mutex_unlock(&o->lock);
+    const HostThreadObserver *observer = observer_get();
+    if (observer && observer->suspend) observer->suspend(o->tid, count);
+    pthread_mutex_unlock(&thread_update_lock);
     return prev;
 }
 
@@ -1239,7 +1340,7 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
 static void host_priority_apply(w32_object *o)
 {
     const char *e = getenv("RECOMP_NX_GUEST_RT");
-    int rt = o->priority >= THREAD_PRIORITY_TIME_CRITICAL;
+    int rt = __atomic_load_n(&o->priority, __ATOMIC_RELAXED) >= THREAD_PRIORITY_TIME_CRITICAL;
     if (!(e && *e == '1') || rt == o->host_rt)
         return;
 #if defined(__SWITCH__)
@@ -1269,8 +1370,12 @@ BOOL SetThreadPriority(HANDLE h, int priority)
 {
     w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : obj_from(h);
     if (o && o->kind == K_THREAD) {
-        o->priority = priority;
+        pthread_mutex_lock(&thread_update_lock);
+        __atomic_store_n(&o->priority, priority, __ATOMIC_RELAXED);
         host_priority_apply(o);
+        const HostThreadObserver *observer = observer_get();
+        if (observer && observer->priority) observer->priority(o->tid, priority);
+        pthread_mutex_unlock(&thread_update_lock);
     }
     return TRUE;
 }
@@ -1278,7 +1383,19 @@ BOOL SetThreadPriority(HANDLE h, int priority)
 int GetThreadPriority(HANDLE h)
 {
     w32_object *o = (h == PSEUDO_CURRENT_THREAD) ? t_self_obj : obj_from(h);
-    return (o && o->kind == K_THREAD) ? o->priority : THREAD_PRIORITY_NORMAL;
+    return (o && o->kind == K_THREAD)
+        ? __atomic_load_n(&o->priority, __ATOMIC_RELAXED) : THREAD_PRIORITY_NORMAL;
+}
+
+int host_current_thread_state(int *priority, unsigned *suspended)
+{
+    w32_object *o = t_self_obj;
+    if (!o) return 0;
+    pthread_mutex_lock(&o->lock);
+    *priority = __atomic_load_n(&o->priority, __ATOMIC_RELAXED);
+    *suspended = (unsigned)o->suspend_count;
+    pthread_mutex_unlock(&o->lock);
+    return 1;
 }
 
 VOID SwitchToThread(void) { sched_yield(); }
@@ -1306,8 +1423,10 @@ DWORD QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data)
 VOID Sleep(DWORD ms)
 {
     if (ms == 0) { sched_yield(); return; }
+    observe_wait_begin(0);
     struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L };
     while (nanosleep(&ts, &ts) == -1 && errno == EINTR) { }
+    observe_wait_end();
 }
 
 DWORD SleepEx(DWORD ms, BOOL alertable)

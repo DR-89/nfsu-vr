@@ -5,6 +5,9 @@
 #include <pthread.h>
 #include "../xboxrecomp/src/platform/android_host.h"
 #include <android/log.h>
+#include <sys/system_properties.h>
+#include "android_diagnostics.h"
+#include "../xboxrecomp/include/nfsu_perf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,13 +41,37 @@ int android_host_boot(int argc, char **argv)
     if (!freopen(log_path, "w", stdout) || dup2(fileno(stdout), fileno(stderr)) < 0)
         return 0;
     setenv("RECOMP_QUIET", "1", 0);
+    /* One APK supports both sides of the diagnostic-overhead comparison. */
+    char diagnostics[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.diagnostics", diagnostics);
+    nfsu_diagnostics_enabled = strcmp(diagnostics, "1") == 0;
+    fprintf(stderr, "[ANDROID] detailed diagnostics=%d\n", nfsu_diagnostics_enabled);
+    char perf_mode[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.perf", perf_mode);
+    nfsu_perf_enabled = strcmp(perf_mode, "0") != 0;
+    fprintf(stderr, "[ANDROID] performance counters=%d\n", nfsu_perf_enabled);
     setenv("NFSU2_GAME_DIR", argv[1], 1);
     setenv("NFSU2_SAVE_DIR", save, 1);
     setenv("RECOMP_PROG_CACHE", cache, 1);
-    setenv("RECOMP_GIL_EAGER", "1", 0);
+    /* Read once before guest threads start; the runtime caches this mode. */
+    char gil_eager[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.gil_eager", gil_eager);
+    if (*gil_eager && strcmp(gil_eager, "0") != 0 && strcmp(gil_eager, "1") != 0)
+        fprintf(stderr, "[ANDROID] invalid debug.nfsu.gil_eager=%s; using 1\n", gil_eager);
+    const char *gil_mode = strcmp(gil_eager, "0") == 0 ? "0" : "1";
+    setenv("RECOMP_GIL_EAGER", gil_mode, 1);
+    fprintf(stderr, "[ANDROID] GIL eager=%s (debug.nfsu.gil_eager)\n", gil_mode);
+    char gil_quantum[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.gil_quantum_us", gil_quantum);
+    setenv("RECOMP_GIL_MAIN_QUANTUM_US", *gil_quantum ? gil_quantum : "0", 1);
+    char scheduler[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.scheduler", scheduler);
+    setenv("RECOMP_GUEST_SCHEDULER", strcmp(scheduler, "0") == 0 ? "0" : "1", 1);
+    fprintf(stderr, "[ANDROID] guest scheduler=%s\n", getenv("RECOMP_GUEST_SCHEDULER"));
     setenv("RECOMP_CULL", "0", 0);
     setenv("RECOMP_VK_INSTANCE", "0", 0);
-    setenv("RECOMP_INPUT_DIAG", "1", 0);
+    if (nfsu_diagnostics_enabled) setenv("RECOMP_INPUT_DIAG", "1", 1);
+    else unsetenv("RECOMP_INPUT_DIAG");
     /* Retail XPP 1EF01B maps (root_port - 1) XOR 2 to Xbox player slot.
      * HC0 port index 2 is player one; HC1 is not started by this title. */
     setenv("RECOMP_USB_HC", "0", 1);

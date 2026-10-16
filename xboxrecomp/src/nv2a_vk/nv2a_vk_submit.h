@@ -19,8 +19,12 @@ static void flush_frame_wait(void)
     vkEndCommandBuffer(s_cb);
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s_cb;
+    uint64_t perf_submit = nfsu_perf_begin();
     vkQueueSubmit(s_queue, 1, &si, s_f->fence);
+    nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
+    uint64_t perf_fence = nfsu_perf_begin();
     vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
+    nfsu_perf_end(NFSU_PERF_VK_FENCE, perf_fence);
     vkResetFences(s_dev, 1, &s_f->fence);
     garbage_free(s_f);
     s_f->ring_off = 0;
@@ -71,11 +75,13 @@ static void kick_submit(void)
     s_rt_depth = NULL;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s_cb;
+    uint64_t perf_submit = nfsu_perf_begin();
     if (vkEndCommandBuffer(s_cb) != VK_SUCCESS
         || vkQueueSubmit(s_queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) {
         LOGE("early submit failed\n");
         abort();
     }
+    nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
     s_cb = s_f->cbs[++s_f->ncb];
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) {

@@ -510,7 +510,26 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
         xbox_guest_backtrace(10);
         fflush(stderr);
     }
+    int scheduler_depth = 0;
+#ifdef __ANDROID__
+    extern int xbox_guest_scheduler_active(void);
+    extern int xbox_gil_suspend(void);
+    extern void xbox_gil_resume(int);
+    extern void xgs_wait_begin(uintptr_t);
+    extern void xgs_wait_end(void);
+    int scheduler_active = xbox_guest_scheduler_active();
+    if (scheduler_active) {
+        scheduler_depth = xbox_gil_suspend();
+        xgs_wait_begin((uintptr_t)cs);
+    }
+#endif
     EnterCriticalSection(cs);
+#ifdef __ANDROID__
+    if (scheduler_active) xgs_wait_end();
+    if (scheduler_depth) xbox_gil_resume(scheduler_depth);
+#else
+    (void)scheduler_depth;
+#endif
     xbox_cs_note_owner(cs);
     if (g_cs_contention_reports <= 16) {
         fprintf(stderr, "  [CS] thread %lu acquired 0x%08X\n",

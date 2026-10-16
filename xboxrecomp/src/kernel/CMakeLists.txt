@@ -28,6 +28,12 @@ set(KERNEL_SOURCES
 )
 
 add_library(xbox_kernel STATIC ${KERNEL_SOURCES})
+if(NOT WIN32 AND NOT NINTENDO_SWITCH)
+    target_sources(xbox_kernel PRIVATE guest_scheduler.c)
+    if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_sources(xbox_kernel PRIVATE guest_dispatcher.c)
+    endif()
+endif()
 
 # The device-model side of the kernel: interrupt lines and the contiguous
 # arena's bus range. Its own library so xbox_apu and xbox_usb can link it

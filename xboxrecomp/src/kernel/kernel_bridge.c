@@ -43,6 +43,33 @@
 #include <string.h>
 #include <ctype.h>
 #include <wctype.h>
+#include "../../include/nfsu_perf.h"
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+#include "guest_scheduler.h"
+#include "platform/dispatcher_backend.h"
+static int s_guest_scheduler_on;
+static void gil_wait_park_account(void);
+static void gil_wait_resume_account(uint64_t queue, uint64_t handoff);
+extern volatile int g_gil_contended;
+#endif
+
+int xbox_guest_scheduler_active(void)
+{
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    return s_guest_scheduler_on;
+#else
+    return 0;
+#endif
+}
+
+void xbox_guest_scheduler_dispatch(int raised)
+{
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on) xgs_dispatch_changed(raised);
+#else
+    (void)raised;
+#endif
+}
 
 #ifdef __ANDROID__
 extern void nfsu_diag_kernel(uint32_t, uint32_t, const uint32_t *, uint32_t, int)
@@ -584,20 +611,66 @@ static uint32_t guest_thread_by_tid(DWORD tid)
  * per thread: t_gil_depth counts entries, and a kernel call parks the whole
  * count and restores it. */
 static CRITICAL_SECTION   s_gil_cs;
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+#include "gil_handoff.h"
+static GilWaitQueue s_gil_queue;
+#else
 static CONDITION_VARIABLE s_gil_cv;
+#endif
 static volatile uint64_t  s_gil_next, s_gil_serving;
 static volatile int       s_gil_on = -1;
 static RECOMP_TLS int     t_gil_depth;
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+static uint64_t s_gil_main_quantum_ns;
+static RECOMP_TLS uint64_t t_gil_quantum_start;
+
+static uint64_t gil_quantum_now(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+}
+#endif
 
 static int gil_enabled(void)
 {
     if (s_gil_on < 0) {
         const char *e = getenv("RECOMP_GIL");
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+        const char *scheduler = getenv("RECOMP_GUEST_SCHEDULER");
+        s_guest_scheduler_on = !(scheduler && *scheduler == '0') && !(e && *e == '0');
+        if (s_guest_scheduler_on) {
+            xgs_init((volatile LONG *)&g_gil_contended);
+            xgs_diagnostics(nfsu_perf_enabled);
+            xgs_wait_accounting(gil_wait_park_account, gil_wait_resume_account);
+            fprintf(stderr, "  [THREAD] guest scheduler: priority ready queue, native stacks\n");
+            fprintf(stderr, "  [THREAD] guest dispatcher: handle events/semaphores, atomic waits\n");
+        }
+#endif
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+        const char *quantum = getenv("RECOMP_GIL_MAIN_QUANTUM_US");
+        if (quantum && *quantum) {
+            char *end;
+            long us = strtol(quantum, &end, 10);
+            if (end != quantum && !*end && us >= 0 && us <= 1000)
+                s_gil_main_quantum_ns = (uint64_t)us * 1000;
+            else fprintf(stderr, "  [THREAD] invalid main quantum '%s'; using 0\n", quantum);
+        }
+        if (!xbox_guest_scheduler_active())
+            fprintf(stderr, "  [THREAD] main PREEMPT quantum=%llu us\n",
+                    (unsigned long long)(s_gil_main_quantum_ns / 1000));
+#endif
         InitializeCriticalSection(&s_gil_cs);
+#if !defined(__ANDROID__) && !defined(NFSU_GIL_HANDOFF_TEST)
         InitializeConditionVariable(&s_gil_cv);
+#endif
         s_gil_on = !(e && *e == '0');
         if (s_gil_on)
             fprintf(stderr, "  [THREAD] guest code serialised under one lock (RECOMP_GIL)\n");
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+        if (s_gil_on && !xbox_guest_scheduler_active())
+            fprintf(stderr, "  [THREAD] GIL handoff: targeted FIFO wake, 1 ms preemption timeout\n");
+#endif
     }
     return s_gil_on;
 }
@@ -630,7 +703,14 @@ int xbox_thread_holds_dispatch(void);     /* kernel_hal.c */
  *     work is not audible.
  * ISRs and DPCs are never pre-empted (t_gil_nopreempt), as before. */
 static RECOMP_TLS int t_gil_main;
-void xbox_gil_mark_main(void) { t_gil_main = 1; }
+void xbox_gil_mark_main(void)
+{
+    t_gil_main = 1;
+    nfsu_perf_role("main");
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    xgs_mark_main();
+#endif
+}
 
 static int gil_eager(void)
 {
@@ -665,23 +745,59 @@ static int gil_higher_waiting(int p)
     return 0;
 }
 
+static RECOMP_TLS uint64_t t_gil_perf_held;
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+static void gil_wait_park_account(void)
+{
+    nfsu_perf_end(NFSU_PERF_GIL_HELD, t_gil_perf_held);
+    t_gil_perf_held = 0;
+}
+static void gil_wait_resume_account(uint64_t queue, uint64_t handoff)
+{
+    nfsu_perf_add(NFSU_PERF_GIL_WAIT, queue + handoff);
+    nfsu_perf_add(NFSU_PERF_GIL_QUEUE, queue);
+    nfsu_perf_add(NFSU_PERF_GIL_HANDOFF, handoff);
+    t_gil_perf_held = nfsu_perf_begin();
+}
+#endif
+
 static void gil_lock(void)
 {
+    uint64_t perf_wait = nfsu_perf_begin();
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on) {
+        XgsAcquire acquired = xgs_acquire(GetCurrentThreadId(),
+            GetThreadPriority(GetCurrentThread()), xbox_thread_holds_dispatch());
+        if (perf_wait) {
+            nfsu_perf_add(NFSU_PERF_GIL_QUEUE, acquired.queued_ns);
+            nfsu_perf_add(NFSU_PERF_GIL_HANDOFF, acquired.handoff_ns);
+        }
+        nfsu_perf_end(NFSU_PERF_GIL_WAIT, perf_wait);
+        t_gil_perf_held = nfsu_perf_begin();
+        return;
+    }
+#endif
     uint64_t me;
     int eager = gil_eager(), prio = eager ? gil_prio_now() : 0, counted = 0;
     EnterCriticalSection(&s_gil_cs);
+    uint64_t perf_enqueued = nfsu_perf_begin();
     me = s_gil_next++;
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    GilWaiter waiter;
+    int queued = me != s_gil_serving;
+    if (queued) gil_waiter_enqueue(&s_gil_queue, &waiter);
+#endif
     if (me != s_gil_serving && eager) {
         s_gil_waiting[prio]++;
         counted = 1;
         if ((prio >= GIL_CRITICAL && prio > s_gil_holder_prio)
             || (t_gil_main && prio >= s_gil_holder_prio))
-            g_gil_contended = 1;
+            InterlockedExchange((volatile LONG *)&g_gil_contended, 1);
     }
     /* A thread at DISPATCH (an ISR/DPC, or a raised section) runs before
      * anything below it on the Xbox: ask for the lock at once. */
     if (me != s_gil_serving && xbox_thread_holds_dispatch()) {
-        g_gil_contended = 1;
+        InterlockedExchange((volatile LONG *)&g_gil_contended, 1);
     }
 #ifdef __ANDROID__
     int diagnostic_wait = me != s_gil_serving && nfsu_diag_kernel;
@@ -692,8 +808,17 @@ static void gil_lock(void)
         nfsu_diag_kernel(0x80000001u, g_xbox_kernel_caller, diagnostic_tickets, 0, 1);
 #endif
     while (me != s_gil_serving)
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+        if (!SleepConditionVariableCS(&waiter.wake, &s_gil_cs, 1))
+#else
         if (!SleepConditionVariableCS(&s_gil_cv, &s_gil_cs, 1))
-            g_gil_contended = 1;           /* 1 ms and still waiting */
+#endif
+            InterlockedExchange((volatile LONG *)&g_gil_contended, 1);           /* 1 ms and still waiting */
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    uint64_t perf_acquired = nfsu_perf_begin();
+    uint64_t perf_granted = queued ? waiter.granted_ns : 0;
+    if (queued) gil_waiter_remove_head(&s_gil_queue, &waiter);
+#endif
     if (eager) {
         if (counted)
             s_gil_waiting[prio]--;
@@ -706,23 +831,56 @@ static void gil_lock(void)
         }
         /* Keep asking while someone above us waits; lower waiters raise it
          * again when their millisecond runs out. */
-        g_gil_contended = gil_higher_waiting(prio);
+        InterlockedExchange((volatile LONG *)&g_gil_contended, gil_higher_waiting(prio));
     } else if (s_gil_next - s_gil_serving <= 1) {
-        g_gil_contended = 0;               /* nobody behind us */
+        InterlockedExchange((volatile LONG *)&g_gil_contended, 0);               /* nobody behind us */
     }
     LeaveCriticalSection(&s_gil_cs);
+    if (perf_wait && perf_enqueued >= perf_wait)
+        nfsu_perf_add(NFSU_PERF_GIL_CS, perf_enqueued - perf_wait);
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    if (perf_enqueued && perf_granted >= perf_enqueued && perf_acquired >= perf_granted) {
+        nfsu_perf_add(NFSU_PERF_GIL_QUEUE, perf_granted - perf_enqueued);
+        nfsu_perf_add(NFSU_PERF_GIL_HANDOFF, perf_acquired - perf_granted);
+    }
+#endif
 #ifdef __ANDROID__
     if (diagnostic_wait)
         nfsu_diag_kernel(0x80000001u, g_xbox_kernel_caller, diagnostic_tickets, 0, 0);
+#endif
+    nfsu_perf_end(NFSU_PERF_GIL_WAIT, perf_wait);
+    t_gil_perf_held = nfsu_perf_begin();
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    if (t_gil_main && s_gil_main_quantum_ns)
+        t_gil_quantum_start = gil_quantum_now();
 #endif
 }
 
 static void gil_unlock(void)
 {
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on) {
+        nfsu_perf_end(NFSU_PERF_GIL_HELD, t_gil_perf_held);
+        t_gil_perf_held = 0;
+        xgs_release(xbox_thread_holds_dispatch());
+        xgs_poll();
+        nfsu_perf_poll();
+        return;
+    }
+#endif
     EnterCriticalSection(&s_gil_cs);
     s_gil_serving++;
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    if (s_gil_queue.head)
+        s_gil_queue.head->granted_ns = nfsu_perf_begin();
+    gil_waiter_wake_head(&s_gil_queue);
+#else
     WakeAllConditionVariable(&s_gil_cv);
+#endif
     LeaveCriticalSection(&s_gil_cs);
+    nfsu_perf_end(NFSU_PERF_GIL_HELD, t_gil_perf_held);
+    t_gil_perf_held = 0;
+    nfsu_perf_poll();
 }
 
 void xbox_gil_enter(void)
@@ -760,13 +918,47 @@ void xbox_gil_resume(int depth)
     }
 }
 
+/* Separate the two callers without counting preemption again as spin. */
+static void gil_yield_measured(int wait_metric, int total_metric)
+{
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on && t_gil_depth > 0) {
+        uint64_t start = nfsu_perf_begin();
+        XgsAcquire acquired = xgs_yield_reason(wait_metric == NFSU_PERF_SPIN_WAIT);
+        if (acquired.switched && start) {
+            if (t_gil_perf_held && start >= t_gil_perf_held)
+                nfsu_perf_add(NFSU_PERF_GIL_HELD, start - t_gil_perf_held);
+            uint64_t wait = acquired.queued_ns + acquired.handoff_ns;
+            nfsu_perf_add(NFSU_PERF_GIL_WAIT, wait);
+            nfsu_perf_add(NFSU_PERF_GIL_QUEUE, acquired.queued_ns);
+            nfsu_perf_add(NFSU_PERF_GIL_HANDOFF, acquired.handoff_ns);
+            nfsu_perf_add(wait_metric, wait);
+            nfsu_perf_end(total_metric, start);
+            t_gil_perf_held = nfsu_perf_begin();
+        }
+        nfsu_perf_poll();
+        return;
+    }
+#endif
+    int d = xbox_gil_suspend();
+    /* suspend may report/reset this thread's PERF5 window. Snapshot after it. */
+    uint64_t start = d > 0 ? nfsu_perf_begin() : 0;
+    uint64_t wait_before = nfsu_perf_gil_wait_sum();
+    SwitchToThread();
+    xbox_gil_resume(d);
+    if (start) {
+        uint64_t wait_after = nfsu_perf_gil_wait_sum();
+        if (wait_after >= wait_before)
+            nfsu_perf_add(wait_metric, wait_after - wait_before);
+        nfsu_perf_end(total_metric, start);
+    }
+}
+
 /* RECOMP_SPIN_HINT's periodic yield: a poll loop waits for another thread,
  * an interrupt or a DPC -- all of which need the lock. */
 void recomp_spin_yield(void)
 {
-    int d = xbox_gil_suspend();
-    SwitchToThread();
-    xbox_gil_resume(d);
+    gil_yield_measured(NFSU_PERF_SPIN_WAIT, NFSU_PERF_SPIN_TOTAL);
 }
 
 /* RECOMP_PREEMPT: someone is waiting -- yield, unless this is an ISR or DPC
@@ -775,11 +967,31 @@ void recomp_spin_yield(void)
  * queues for the lock to run a DPC, and the holder then never yielded to
  * that DPC until its next kernel call (40% of the timer thread's time in
  * traffic collisions). */
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+static int gil_main_quantum_pending(uint64_t now)
+{
+    return t_gil_main && s_gil_main_quantum_ns && t_gil_quantum_start && now
+        && now >= t_gil_quantum_start
+        && now - t_gil_quantum_start < s_gil_main_quantum_ns;
+}
+#endif
+
 void recomp_preempt(void)
 {
     if (t_gil_depth <= 0 || t_gil_nopreempt || xbox_thread_holds_dispatch())
         return;
-    recomp_spin_yield();
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on) {
+        if (xgs_should_preempt())
+            gil_yield_measured(NFSU_PERF_PREEMPT_WAIT, NFSU_PERF_PREEMPT_TOTAL);
+        return;
+    }
+#endif
+#if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
+    if (t_gil_main && s_gil_main_quantum_ns && gil_main_quantum_pending(gil_quantum_now()))
+        return;
+#endif
+    gil_yield_measured(NFSU_PERF_PREEMPT_WAIT, NFSU_PERF_PREEMPT_TOTAL);
 }
 
 #define GUEST_CALL(f) do { xbox_gil_enter(); (f)(); xbox_gil_leave(); } while (0)
@@ -10136,6 +10348,33 @@ static void kernel_thunk_dispatch_body(void);
  * calls a second in a race, each one taking the lock back from the main
  * thread (race frames of 0.5-1.5 s in Eden). RECOMP_KERNEL_FAST=0 releases
  * it for these too. */
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+static int dispatcher_call_keeps_gil(ULONG ord)
+{
+    /* Called before the dispatch body pops the guest return address. */
+    uint32_t object, args = g_esp + 4;
+    switch (ord) {
+    case 145: case 123: case 132: case 138: case 159:
+        object = BRIDGE_MEM32(args);
+        return host_dispatcher_manages(ke_shadow_lookup(object));
+    case 186: case 205: case 222: case 225: case 233: case 234:
+        return host_dispatcher_manages(bridge_resolve_handle(BRIDGE_MEM32(args)));
+    case 158: case 235: {
+        uint32_t count = BRIDGE_MEM32(args), array = BRIDGE_MEM32(args + 4);
+        if (!count || count > MAXIMUM_WAIT_OBJECTS || !array) return 0;
+        for (uint32_t i = 0; i < count; i++) {
+            object = BRIDGE_MEM32(array + i * 4);
+            HANDLE h = ord == 158 ? ke_shadow_lookup(object) : NULL;
+            if (!h) h = bridge_resolve_handle(object);
+            if (!host_dispatcher_manages(h)) return 0;
+        }
+        return 1;
+    }
+    default: return 0;
+    }
+}
+#endif
+
 static int kernel_call_keeps_gil(int slot)
 {
     static int on = -1;
@@ -10147,6 +10386,10 @@ static int kernel_call_keeps_gil(int slot)
     if (!on || slot < 0 || slot >= XBOX_KERNEL_THUNK_TABLE_SIZE)
         return 0;
     ord = g_slot_ordinals[slot];
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on && (ord == 277 || ord == 278 || ord == 294 || ord == 295))
+        return 1; /* Rtl CS fast paths; a contended Enter parks explicitly. */
+#endif
     return ord == 125 || ord == 126 || ord == 127 || ord == 128    /* KeQuery* time */
         || ord == 103 || ord == 129 || ord == 130                    /* KeGetCurrentIrql, */
         || ord == 160 || ord == 161;          /* KeRaiseIrqlTo*, KfRaise/LowerIrql */
@@ -10158,12 +10401,44 @@ static void kernel_thunk_dispatch(void)
         kernel_thunk_dispatch_body();
         return;
     }
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on && g_kernel_dispatch_slot >= 0 &&
+        g_kernel_dispatch_slot < XBOX_KERNEL_THUNK_TABLE_SIZE &&
+        dispatcher_call_keeps_gil(g_slot_ordinals[g_kernel_dispatch_slot])) {
+        uint32_t ord = g_slot_ordinals[g_kernel_dispatch_slot];
+        uint32_t caller = g_esp ? BRIDGE_MEM32(g_esp) : 0;
+        uint64_t start = nfsu_perf_begin(), before = nfsu_perf_gil_wait_sum();
+        pending_start_flush(GetCurrentThreadId());
+        xbox_kernel_busy(1);
+        kernel_thunk_dispatch_body();
+        xbox_kernel_busy(-1);
+        if (start) {
+            uint64_t end = nfsu_perf_begin();
+            uint64_t waited = nfsu_perf_gil_wait_sum() - before;
+            uint64_t elapsed = end - start;
+            nfsu_perf_kernel_resume(ord, caller, elapsed > waited ? elapsed - waited : 0, before);
+        }
+        return;
+    }
+#endif
+    /* Snapshot before the bridge pops the guest stack or runs callbacks. */
+    uint64_t perf_call_start = nfsu_perf_begin();
+    int perf_slot = g_kernel_dispatch_slot;
+    uint32_t perf_ordinal = perf_call_start && perf_slot >= 0 && perf_slot < XBOX_KERNEL_THUNK_TABLE_SIZE
+        ? g_slot_ordinals[perf_slot] : UINT32_MAX;
+    uint32_t perf_caller = perf_call_start && g_esp ? BRIDGE_MEM32(g_esp) : 0;
     int gil = xbox_gil_suspend();                /* the kernel is not guest code */
+    uint64_t perf_kernel_start = gil > 0 && perf_call_start ? nfsu_perf_begin() : 0;
     pending_start_flush(GetCurrentThreadId());   /* threads this one created */
     xbox_kernel_busy(1);
     kernel_thunk_dispatch_body();
     xbox_kernel_busy(-1);
+    uint64_t perf_kernel_end = perf_kernel_start ? nfsu_perf_begin() : 0;
+    uint64_t perf_wait_before = nfsu_perf_gil_wait_sum();
     xbox_gil_resume(gil);
+    if (perf_kernel_start && perf_kernel_end >= perf_kernel_start)
+        nfsu_perf_kernel_resume(perf_ordinal, perf_caller,
+            perf_kernel_end - perf_kernel_start, perf_wait_before);
 }
 
 static void kernel_thunk_dispatch_body(void)

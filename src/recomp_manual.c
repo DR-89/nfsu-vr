@@ -35,6 +35,7 @@
 #include <time.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include "android_diagnostics.h"
 
 /* Boundary snapshots, not asynchronous stack unwinding. The SDL host thread
  * can report them even when a guest worker or its GIL stops making progress. */
@@ -57,6 +58,7 @@ static uint64_t audio_diag_ms(void)
 
 static void audio_diag_boundary(uint32_t function, unsigned running, int tick)
 {
+    if (!nfsu_diagnostics_enabled) return;
     AudioDiagnostic *d;
     if (audio_diag_lane < 0) return;
     pthread_mutex_lock(&audio_diag_mutex);
@@ -82,6 +84,7 @@ static void audio_diag_boundary(uint32_t function, unsigned running, int tick)
  * No guest register or stack changes, no signals, and no forced completion. */
 void nfsu_audio_diag_kernel(uint32_t ordinal, uint32_t caller, int entering)
 {
+    if (!nfsu_diagnostics_enabled) return;
     AudioDiagnostic *d;
     if (audio_diag_lane < 0) return;
     pthread_mutex_lock(&audio_diag_mutex);
@@ -102,6 +105,7 @@ void nfsu_audio_diag_kernel(uint32_t ordinal, uint32_t caller, int entering)
 
 void nfsu_audio_diag_poll(void)
 {
+    if (!nfsu_diagnostics_enabled) return;
     static uint64_t last;
     AudioDiagnostic snapshot[2];
     uint64_t now = audio_diag_ms();
@@ -162,12 +166,12 @@ void sub_001A6110(void)
     int previous = audio_diag_lane;
     audio_diag_lane = 1;
     audio_diag_boundary(0x001A6110u, 1, 0);
-    fprintf(stderr, "[AUDTRACE] shutdown entered\n");
+    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown entered\n");
 #endif
     sub_001A6110_gen();
 #ifdef __ANDROID__
     audio_diag_boundary(0x001A6110u, 0, 0);
-    fprintf(stderr, "[AUDTRACE] shutdown returned\n");
+    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown returned\n");
     audio_diag_lane = previous;
 #endif
 }
@@ -221,7 +225,7 @@ void sub_001E6921(void)
     sub_001E6921_gen();
 #ifdef __ANDROID__
     uint32_t node = object + 0x4Cu;
-    nfsu_diag_voice(0x801E6921u, 0, node,
+    if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E6921u, 0, node,
         audio_pointer_ok(node, 8) ? MEM32(node) : 0,
         audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, parent);
 #endif
@@ -238,7 +242,7 @@ void sub_001E2880(void)
 #ifdef __ANDROID__
     /* Removed nodes need not have reciprocal links after unlink. Record the
      * bytes without applying the linked-node invariant to the removed node. */
-    nfsu_diag_voice(0x801E2880u, 0, node,
+    if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E2880u, 0, node,
         audio_pointer_ok(node, 8) ? MEM32(node) : 0,
         audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, 0);
 #endif

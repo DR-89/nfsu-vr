@@ -14,6 +14,7 @@
 
 #include "xbox_memory_layout.h"
 #include "kernel.h"
+#include "../../include/nfsu_perf.h"
 #include <stdio.h>
 #if !defined(_WIN32)
 #include <sched.h>
@@ -1334,7 +1335,11 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                         LARGE_INTEGER a, b;
                         if (!f.QuadPart) { QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t_last); }
                         QueryPerformanceCounter(&a);
+                        nfsu_perf_role("renderer");
+                        uint64_t perf_work = nfsu_perf_begin();
                         nv2a_pb_scan(put);
+                        nfsu_perf_end(NFSU_PERF_PB_WORK, perf_work);
+                        nfsu_perf_poll();
                         QueryPerformanceCounter(&b);
                         busy += b.QuadPart - a.QuadPart;
                         if (b.QuadPart - t_last.QuadPart > f.QuadPart) {

@@ -18,6 +18,18 @@ static void *produce(void *unused)
 
 int main(void)
 {
+    /* Disabled callbacks must bypass the shared mutex and retain no events. */
+    uint32_t disabled_args[4] = {0};
+    assert(!pthread_mutex_lock(&mutex));
+    nfsu_diag_kernel(219, 0, disabled_args, 0, 1);
+    nfsu_diag_kernel(219, 0, disabled_args, 0, 0);
+    nfsu_diag_voice(0, 0, 0, 0, 0, 0);
+    nfsu_diag_io(219, 0, 0, 0, 0, 0);
+    nfsu_diag_poll();
+    nfsu_diag_dump();
+    assert(sequence == 0 && dropped == 0 && thread_slot == -1);
+    assert(!pthread_mutex_unlock(&mutex));
+    nfsu_diagnostics_enabled = 1;
     pthread_t workers[8];
     for (unsigned i = 0; i < 8; i++) assert(!pthread_create(&workers[i], NULL, produce, NULL));
     for (unsigned i = 0; i < 8; i++) assert(!pthread_join(workers[i], NULL));

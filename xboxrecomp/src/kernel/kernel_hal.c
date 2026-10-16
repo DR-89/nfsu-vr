@@ -221,14 +221,32 @@ static void irql_transition(KIRQL from, KIRQL to)
     if (from < DISPATCH_LEVEL && to >= DISPATCH_LEVEL) {
         if (!TryEnterCriticalSection(&g_dispatch_lock)) {
             int gil = xbox_gil_suspend();
+#ifdef __ANDROID__
+            extern int xbox_guest_scheduler_active(void);
+            extern void xgs_wait_begin(uintptr_t);
+            extern void xgs_wait_end(void);
+            int scheduled = xbox_guest_scheduler_active();
+            if (scheduled) xgs_wait_begin((uintptr_t)&g_dispatch_lock);
+#endif
             EnterCriticalSection(&g_dispatch_lock);
+#ifdef __ANDROID__
+            if (scheduled) xgs_wait_end();
+#endif
             xbox_gil_resume(gil);
         }
         t_dispatch_held = 1;
+#ifdef __ANDROID__
+        extern void xbox_guest_scheduler_dispatch(int);
+        xbox_guest_scheduler_dispatch(1);
+#endif
         xbox_kernel_busy(1);
     } else if (from >= DISPATCH_LEVEL && to < DISPATCH_LEVEL) {
         xbox_kernel_busy(-1);
         t_dispatch_held = 0;
+#ifdef __ANDROID__
+        extern void xbox_guest_scheduler_dispatch(int);
+        xbox_guest_scheduler_dispatch(0);
+#endif
         LeaveCriticalSection(&g_dispatch_lock);
     }
 }
