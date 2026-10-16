@@ -470,6 +470,14 @@ int host_dispatcher_manages(HANDLE handle)
     return o && o->dispatcher != NULL;
 }
 
+BOOL host_dispatcher_bind_header(HANDLE handle, volatile void *header)
+{
+    w32_object *o = obj_from(handle);
+    const HostDispatcherBackend *backend = dispatcher_get();
+    return o && o->dispatcher && backend && backend->bind_header
+        ? backend->bind_header(o->dispatcher, header) : FALSE;
+}
+
 static w32_object *obj_alloc(w32_kind kind)
 {
     w32_object *o = (w32_object *)calloc(1, sizeof(w32_object));

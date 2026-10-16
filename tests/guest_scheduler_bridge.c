@@ -72,6 +72,45 @@ int main(void)
     BRIDGE_MEM32(0x11104) = bridge_handle_token(native_mutex);
     assert(!dispatcher_call_keeps_gil(235));
     CloseHandle(native_mutex);
+    /* Inline XDK objects have no KeInitialize* bridge call. Their guest
+     * header remains the authoritative state after lazy adoption. */
+    BRIDGE_MEM8(0x11200) = KDISP_EVENT_SYNCHRONIZE;
+    BRIDGE_MEM8(0x11202) = 4;
+    BRIDGE_MEM32(g_esp + 4) = 0x11200;
+    assert(dispatcher_call_keeps_gil(159));
+    HANDLE inline_event = ke_shadow_lookup(0x11200);
+    assert(inline_event && !kdisp_is_guest(0x11200));
+    SetEvent(inline_event);
+    assert(BRIDGE_MEM32(0x11204) == 1);
+    BRIDGE_MEM32(0x11204) = 0; /* Inline KeClearEvent must clear the real latch. */
+    assert(WaitForSingleObject(inline_event, 0) == WAIT_TIMEOUT);
+    SetEvent(inline_event);
+    assert(WaitForSingleObject(inline_event, 0) == WAIT_OBJECT_0);
+    assert(BRIDGE_MEM32(0x11204) == 0);
+    BRIDGE_MEM8(0x11200) = KDISP_EVENT_NOTIFICATION; /* Inline reinitialization. */
+    SetEvent(inline_event);
+    assert(WaitForSingleObject(inline_event, 0) == WAIT_OBJECT_0);
+    assert(WaitForSingleObject(inline_event, 0) == WAIT_OBJECT_0);
+    ResetEvent(inline_event);
+    assert(BRIDGE_MEM32(0x11204) == 0);
+    BRIDGE_MEM8(0x11300) = KDISP_SEMAPHORE;
+    BRIDGE_MEM8(0x11302) = 5;
+    BRIDGE_MEM32(0x11304) = 1;
+    BRIDGE_MEM32(0x11310) = 2;
+    BRIDGE_MEM32(g_esp + 4) = 0x11300;
+    assert(dispatcher_call_keeps_gil(159));
+    HANDLE inline_sem = ke_shadow_lookup(0x11300);
+    assert(WaitForSingleObject(inline_sem, 0) == WAIT_OBJECT_0);
+    assert(BRIDGE_MEM32(0x11304) == 0);
+    assert(ReleaseSemaphore(inline_sem, 2, NULL));
+    assert(BRIDGE_MEM32(0x11304) == 2);
+    assert(!ReleaseSemaphore(inline_sem, 1, NULL));
+    assert(BRIDGE_MEM32(0x11304) == 2);
+    BRIDGE_MEM32(0x11310) = 3;
+    assert(ReleaseSemaphore(inline_sem, 1, NULL));
+    assert(BRIDGE_MEM32(0x11304) == 3);
+    ke_shadow_remove(0x11200);
+    ke_shadow_remove(0x11300);
     xbox_gil_enter(); xbox_gil_enter();
     uint64_t before = nfsu_perf_gil_wait_sum();
     assert(WaitForSingleObject(parked_event, INFINITE) == WAIT_OBJECT_0);

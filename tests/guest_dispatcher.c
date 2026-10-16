@@ -141,6 +141,18 @@ int main(void)
     SetEvent(event); /* A timed-out stack is no longer in the wait list. */
     CloseHandle(event);
     assert(!waiters);
+    volatile uint32_t header[5] = {0x00040001, 0, 0, 0, 0};
+    event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    assert(host_dispatcher_bind_header(event, header));
+    h[0] = start(0, 0, 0, INFINITE, WAIT_OBJECT_0); enrolled(1);
+    SetEvent(event);
+    join(h[0]);
+    assert(header[1] == 0); /* Auto-event grant consumes the guest state. */
+    SetEvent(event);
+    assert(header[1] == 1);
+    header[1] = 0; /* A guest inline clear cannot leave a separate host latch. */
+    assert(WaitForSingleObject(event, 0) == WAIT_TIMEOUT);
+    CloseHandle(event);
     ping[0] = CreateEventW(NULL, FALSE, TRUE, NULL);
     ping[1] = CreateEventW(NULL, FALSE, FALSE, NULL);
     h[0] = CreateThread(NULL, 0, ping_pong, (void *)(uintptr_t)0, 0, NULL);

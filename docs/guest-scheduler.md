@@ -35,7 +35,8 @@ keep the token; contention releases it before the native lock wait.
 ## Remaining boundaries
 
 Events and semaphores created after scheduler initialization now use the
-handle dispatcher described below. Unshadowed guest-memory objects, mutants,
+handle dispatcher described below. Valid inline guest events and semaphores
+are adopted lazily, as described below. Mutants,
 thread/file handles, objects created before initialization and mixed-object
 wait sets still use their existing paths. Alertable multiple waits retain the
 legacy APC polling path. The bridge still maps Xbox priorities into Win32
@@ -204,3 +205,32 @@ guest threads. The bridge test additionally checks
 managed fast-path argument resolution, no handoff for a ready event and GIL
 nesting/accounting across a genuinely blocking event wait. The timer race test
 runs both with the original platform events and with dispatcher-backed shadows.
+
+## Inline guest object migration
+
+Valid XDK inline event/semaphore headers (event size 4 LONGs, semaphore size
+5 LONGs) are attached to dispatcher-backed Ke shadows on first kernel use.
+The binding refers to the live header: signal, reset and successful wait
+consumption update guest SignalState directly. A guest inline KeClearEvent
+store clears that same state; there is no second host latch to get stale.
+The event reset mode and semaphore limit are read from the live header, so
+inline reinitialization of those fields is visible to subsequent operations.
+
+All-managed wait sets containing these objects now use dispatcher transactions,
+rather than the old 4 ms guest-object polling loop. A valid binding must remain
+in mapped guest RAM for the object's lifetime. Waking waiters still requires
+the kernel signal/release operation; arbitrary guest stores of a positive
+SignalState are not a notification API. Unsupported object types and failed
+shadow allocation retain the legacy path. The existing Ke shadow table still
+owns mapping lifetime and capacity; cross-type object destruction/reuse is not
+redesigned by this change.
+
+The bridge regression covers lazy adoption before fast-path classification,
+inline clears, auto-event consumption, manual-event reinitialization and live
+semaphore limits. The dispatcher regression additionally covers a blocked wait
+whose grant consumes the guest header state.
+
+This remains a native-stack migration stage, not a single native executor.
+Before replacing guest pthreads, runtime registers, FPU/SIMD, exception state
+and kernel-local TLS must belong to explicitly saved guest contexts. Existing
+native TLS cannot simply be shared between stackful guest continuations.

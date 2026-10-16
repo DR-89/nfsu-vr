@@ -9,7 +9,27 @@
 #include <time.h>
 #include <stdint.h>
 
-typedef struct { int semaphore, manual; LONG state, limit; } DispatchObject;
+typedef struct {
+    int semaphore, manual;
+    LONG state, limit;
+    volatile uint8_t *guest_header;
+} DispatchObject;
+static LONG object_state(DispatchObject *o)
+{
+    if (!o->guest_header) return o->state;
+    /* Inline reinitialization can reuse an address with a different event
+     * reset mode or semaphore limit; read the live dispatcher header. */
+    unsigned type = o->guest_header[0];
+    o->semaphore = type == 5;
+    o->manual = type == 0;
+    if (o->semaphore) o->limit = *(volatile LONG *)(o->guest_header + 16);
+    return *(volatile LONG *)(o->guest_header + 4);
+}
+static void object_set_state(DispatchObject *o, LONG state)
+{
+    if (o->guest_header) *(volatile LONG *)(o->guest_header + 4) = state;
+    else o->state = state;
+}
 typedef struct Waiter {
     struct Waiter *next;
     void *const *objects;
@@ -28,17 +48,17 @@ static int eligible(Waiter *w, int consume, DWORD *result)
     unsigned index = 0;
     if (w->all) {
         for (unsigned i = 0; i < w->count; i++)
-            if (((DispatchObject *)w->objects[i])->state <= 0) return 0;
+            if (object_state(w->objects[i]) <= 0) return 0;
     } else {
         for (; index < w->count; index++)
-            if (((DispatchObject *)w->objects[index])->state > 0) break;
+            if (object_state(w->objects[index]) > 0) break;
         if (index == w->count) return 0;
     }
     if (consume) {
         for (unsigned i = w->all ? 0 : index; i < (w->all ? w->count : index + 1); i++) {
             DispatchObject *o = w->objects[i];
-            if (o->semaphore) o->state--;
-            else if (!o->manual) o->state = 0;
+            if (o->semaphore) object_set_state(o, object_state(o) - 1);
+            else if (!o->manual) object_set_state(o, 0);
         }
     }
     *result = WAIT_OBJECT_0 + (w->all ? 0 : index);
@@ -100,14 +120,15 @@ static BOOL dispatcher_signal(void *object, LONG count, PLONG previous, int puls
 {
     DispatchObject *o = object;
     pthread_mutex_lock(&lock);
-    if (o->semaphore && (count <= 0 || count > o->limit - o->state)) {
+    LONG state = object_state(o);
+    if (o->semaphore && (state < 0 || state > o->limit || count <= 0 || count > o->limit - state)) {
         pthread_mutex_unlock(&lock);
         return FALSE;
     }
-    if (previous) *previous = o->state;
-    o->state = o->semaphore ? o->state + count : 1;
+    if (previous) *previous = state;
+    object_set_state(o, o->semaphore ? state + count : 1);
     dispatch();
-    if (pulse) o->state = 0;
+    if (pulse) object_set_state(o, 0);
     pthread_mutex_unlock(&lock);
     return TRUE;
 }
@@ -115,7 +136,7 @@ static BOOL dispatcher_signal(void *object, LONG count, PLONG previous, int puls
 static BOOL reset(void *object)
 {
     pthread_mutex_lock(&lock);
-    ((DispatchObject *)object)->state = 0;
+    object_set_state(object, 0);
     pthread_mutex_unlock(&lock);
     return TRUE;
 }
@@ -166,5 +187,18 @@ static DWORD wait_objects(unsigned count, void *const *objects, int all, DWORD m
     return w.result;
 }
 
-static const HostDispatcherBackend backend = {create, destroy, dispatcher_signal, reset, wait_objects};
+static BOOL bind_header(void *object, volatile void *header)
+{
+    if (!header) return FALSE;
+    pthread_mutex_lock(&lock);
+    DispatchObject *o = object;
+    /* Bind only before publishing a new shadow handle to guest callers. */
+    o->guest_header = header;
+    pthread_mutex_unlock(&lock);
+    return TRUE;
+}
+
+static const HostDispatcherBackend backend = {
+    create, destroy, dispatcher_signal, reset, wait_objects, bind_header
+};
 void xgd_init(void) { host_set_dispatcher_backend(&backend); }

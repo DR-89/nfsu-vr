@@ -2192,11 +2192,32 @@ static int kdisp_is_guest(uint32_t va)
         return 0;
     type = BRIDGE_MEM8(va);
     size = BRIDGE_MEM8(va + 2);
-    if (type == KDISP_EVENT_NOTIFICATION || type == KDISP_EVENT_SYNCHRONIZE)
-        return size == 4;
-    if (type == KDISP_SEMAPHORE)
-        return size == 5;
-    return 0;
+    int valid = (type == KDISP_EVENT_NOTIFICATION || type == KDISP_EVENT_SYNCHRONIZE)
+        ? size == 4 : type == KDISP_SEMAPHORE && size == 5;
+    if (!valid) return 0;
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
+    if (s_guest_scheduler_on) {
+        /* XDK inline initialization bypasses KeInitialize*. Attach a shadow
+         * whose state is the guest SignalState itself, not a mirrored latch.
+         * Inline KeClearEvent stores therefore stay visible to every wait. */
+        kdisp_init();
+        EnterCriticalSection(&g_kdisp_cs);
+        HANDLE h = ke_shadow_lookup(va);
+        if (!h) {
+            LONG state = (LONG)BRIDGE_MEM32(va + 4);
+            if (type == KDISP_SEMAPHORE)
+                h = CreateSemaphoreW(NULL, state, (LONG)BRIDGE_MEM32(va + 16), NULL);
+            else h = CreateEventW(NULL, type == KDISP_EVENT_NOTIFICATION, state > 0, NULL);
+            if (h && host_dispatcher_bind_header(h, XBOX_TO_NATIVE(va)))
+                ke_shadow_insert(va, h);
+            else if (h) CloseHandle(h);
+            h = ke_shadow_lookup(va);
+        }
+        LeaveCriticalSection(&g_kdisp_cs);
+        if (h) return 0; /* Resolve and wait through the dispatcher-backed shadow. */
+    }
+#endif
+    return 1;
 }
 
 /* Take the object if it is signalled. Caller holds g_kdisp_cs. */
@@ -10356,6 +10377,7 @@ static int dispatcher_call_keeps_gil(ULONG ord)
     switch (ord) {
     case 145: case 123: case 132: case 138: case 159:
         object = BRIDGE_MEM32(args);
+        (void)kdisp_is_guest(object); /* Promote valid inline headers before probing. */
         return host_dispatcher_manages(ke_shadow_lookup(object));
     case 186: case 205: case 222: case 225: case 233: case 234:
         return host_dispatcher_manages(bridge_resolve_handle(BRIDGE_MEM32(args)));
@@ -10364,6 +10386,7 @@ static int dispatcher_call_keeps_gil(ULONG ord)
         if (!count || count > MAXIMUM_WAIT_OBJECTS || !array) return 0;
         for (uint32_t i = 0; i < count; i++) {
             object = BRIDGE_MEM32(array + i * 4);
+            if (ord == 158) (void)kdisp_is_guest(object);
             HANDLE h = ord == 158 ? ke_shadow_lookup(object) : NULL;
             if (!h) h = bridge_resolve_handle(object);
             if (!host_dispatcher_manages(h)) return 0;

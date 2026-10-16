@@ -9,7 +9,9 @@ typedef struct HostDispatcherBackend {
     BOOL (*signal)(void *object, LONG count, PLONG previous, int pulse);
     BOOL (*reset)(void *object);
     DWORD (*wait)(unsigned count, void *const *objects, int all, DWORD ms);
+    BOOL (*bind_header)(void *object, volatile void *header);
 } HostDispatcherBackend;
 void host_set_dispatcher_backend(const HostDispatcherBackend *backend);
 int host_dispatcher_manages(HANDLE handle);
+BOOL host_dispatcher_bind_header(HANDLE handle, volatile void *header);
 #endif
