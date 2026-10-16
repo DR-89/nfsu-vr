@@ -42,6 +42,7 @@ val generateRecomp = tasks.register("generateRecomp") {
     inputs.file(xbe).withPropertyName("xbe")
     inputs.file(repository.resolve("config/seed_functions.json"))
     inputs.file(repository.resolve("src/recomp_manual.c"))
+    inputs.file(repository.resolve("xboxrecomp/templates/runtime/recomp_types.h"))
     inputs.files(fileTree(repository.resolve("xboxrecomp/tools")) {
         include("**/*.py", "**/*.json", "**/*.toml", "**/*.yaml")
         exclude("**/output/**", "**/__pycache__/**")
