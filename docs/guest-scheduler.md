@@ -234,3 +234,48 @@ This remains a native-stack migration stage, not a single native executor.
 Before replacing guest pthreads, runtime registers, FPU/SIMD, exception state
 and kernel-local TLS must belong to explicitly saved guest contexts. Existing
 native TLS cannot simply be shared between stackful guest continuations.
+
+## Explicit architectural contexts
+
+`recomp_context.h/.c` adds an explicit architectural context while preserving
+the TLS register ABI consumed by generated code. Context switches save/load
+all modeled general registers, FS and SEH frame pointers, DF, x87 stack/top/
+control/status, MMX and SSE registers, native floating point environment and
+errno. Normal instruction execution adds no register pointer indirection.
+
+Native setjmp slots now belong to the current context, with a private default
+context for each existing native thread. Generated setjmp/longjmp helper names
+are unchanged. The jump buffers stay in place when another context is active;
+register snapshots never copy them. Longjmp restores guest callee-saved
+registers from guest RAM and discards inner slots as before.
+
+Contexts are initialized before use and must stay at a fixed address until
+their associated C continuations have ended. Activation binds a context to its
+native thread; attempting to activate it from another thread or from a copied
+struct fails. Reinitializing the current context also fails. A fresh context
+starts with reset x87/control state, the supplied FS base, zero registers and
+the host default floating environment. Initializing it preserves the caller's
+current floating environment and errno.
+
+This API switches architectural state, **not C stacks**. The scheduler does
+not call it yet. Kernel bridge/HAL/platform TLS, native lock ownership and
+blocked C continuations still need an explicit ownership model before an
+executor can use it at guest scheduling boundaries. Register and longjmp state
+alone is not sufficient to replace guest pthreads. No FPS claim or additional
+device benchmark is implied by this preparatory change.
+
+Host verification:
+
+```sh
+cc -O1 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+  -Ixboxrecomp/src tests/recomp_context.c \
+  xboxrecomp/src/kernel/recomp_context.c \
+  -Wl,--gc-sections -pthread -lm -o /tmp/nfsu-recomp-context-test
+/tmp/nfsu-recomp-context-test
+```
+
+The test switches two contexts on one native thread, restores the original
+default context and verifies integer state, NaN payload preservation, FP
+rounding/exception flags, errno, independent native jump-buffer addresses for
+the same guest VA and an actual longjmp after context restoration. It also
+checks rejection of copied/foreign-thread contexts and native TLS isolation.

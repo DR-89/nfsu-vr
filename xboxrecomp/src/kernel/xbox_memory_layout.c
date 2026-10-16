@@ -1580,66 +1580,8 @@ RECOMP_TLS uint16_t g_fp_cc = 0x4000;
 extern RECOMP_TLS uint32_t g_ebp;
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi;
 
-/* ---- non-local jumps ---------------------------------------------------
- *
- * The native half of the guest's setjmp/longjmp. See recomp_types.h for why a
- * guest-only longjmp is not enough; in short, the recompiled frames are C
- * frames and something has to unwind them.
- *
- * Keyed by guest buffer address, per thread. Buffers nest, so jumping to an
- * outer one discards every inner entry -- those frames are gone.
- */
-#define RECOMP_JMPBUF_SLOTS 32
-
-typedef struct {
-    uint32_t buf_va;
-    jmp_buf  native;
-} recomp_jmp_slot;
-
-static RECOMP_TLS recomp_jmp_slot s_jmp[RECOMP_JMPBUF_SLOTS];
-static RECOMP_TLS int             s_jmp_used;
-
-jmp_buf *recomp_setjmp_slot(uint32_t buf_va)
-{
-    int i;
-
-    for (i = 0; i < s_jmp_used; i++)
-        if (s_jmp[i].buf_va == buf_va)
-            return &s_jmp[i].native;      /* the same buffer, re-armed */
-    if (s_jmp_used >= RECOMP_JMPBUF_SLOTS)
-        s_jmp_used = RECOMP_JMPBUF_SLOTS - 1;   /* keep the deepest */
-    s_jmp[s_jmp_used].buf_va = buf_va;
-    return &s_jmp[s_jmp_used++].native;
-}
-
-int recomp_guest_longjmp(uint32_t buf_va, uint32_t value)
-{
-    const uint8_t *mem = (const uint8_t *)g_memory_offset;
-    int i;
-
-    for (i = s_jmp_used - 1; i >= 0; i--) {
-        if (s_jmp[i].buf_va != buf_va)
-            continue;
-
-        /* The callee-saved registers and the stack, exactly as the CRT's
-         * longjmp restores them: esp is the setjmp-time esp plus the return
-         * address that setjmp's own ret would have popped. */
-        g_ebx = *(const uint32_t *)(mem + buf_va + 0x04);
-        g_edi = *(const uint32_t *)(mem + buf_va + 0x08);
-        g_esi = *(const uint32_t *)(mem + buf_va + 0x0C);
-        g_esp = *(const uint32_t *)(mem + buf_va + 0x10) + 4;
-
-        /* ebp is a C local in every translated function, and a local modified
-         * after setjmp is indeterminate once longjmp lands. Hand the resumed
-         * frame its saved value back through the globals it already reads. */
-        g_seh_ebp = *(const uint32_t *)(mem + buf_va + 0x00);
-        g_ebp     = g_seh_ebp;
-
-        s_jmp_used = i + 1;   /* the inner buffers died with their frames */
-        longjmp(s_jmp[i].native, value ? (int)value : 1);
-    }
-    return 0;
-}
+/* Native non-local jump tables are owned by explicit contexts in
+ * recomp_context.c. The exported helper ABI used by lifted code is unchanged. */
 
 /* Watchdog: dump the guest call stack if the title stops making progress.
  *

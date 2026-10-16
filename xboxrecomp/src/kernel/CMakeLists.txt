@@ -21,6 +21,7 @@ set(KERNEL_SOURCES
     kernel_bridge.c
     guest_vmem.c
     xbox_memory_layout.c
+    recomp_context.c
     icall_feedback.c
     recomp_trace.c
     nv2a_pb_scan.c
