@@ -60,6 +60,11 @@ set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
+if(ANDROID)
+    # Keep Android hotplug and persistent touch-controller policy project-local.
+    set_property(TARGET xbox_input PROPERTY SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/android_input.c")
+endif()
+
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "${NFSU2_GEN_DIR}/*.c")
 
 set(GAME_SOURCES
@@ -70,9 +75,11 @@ set(GAME_SOURCES
 
 if(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} ${RECOMP_GEN_SOURCES}
-        src/android_host.c src/android_saf.c src/android_diagnostics.c)
+        src/android_host.c src/android_saf.c src/android_diagnostics.c src/menu_touch.c src/feng_touch.c
+        src/race_touch.c src/android_race_controls.c)
     target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 log android)
-    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384"
+        "-Wl,--wrap=usb_gamepad_report" "-Wl,--wrap=usb_gamepad_control")
     foreach(call open open64 __open_2 fopen fopen64 stat stat64 opendir readdir readdir64 closedir)
         target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=${call}")
     endforeach()

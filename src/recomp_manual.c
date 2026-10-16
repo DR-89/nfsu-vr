@@ -598,6 +598,59 @@ void sub_00018E60(void)
  * itself tests `cmp [0x283434], 3`). */
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
 
+/* Keep guest overrides here so the recompilation scanner protects their
+ * original generated bodies. Gesture policy lives in the shared module. */
+#ifdef __ANDROID__
+#include "feng_touch.h"
+#endif
+extern void sub_000D8B10_gen(void);
+extern void sub_000DB860_gen(void);
+extern void sub_000D8730_gen(void);
+extern void sub_000DDB60(void);
+/* Native dependencies retained here for the recompiler name-protection scan. */
+extern void sub_000B8310(void);
+extern void sub_000D1AD0(void);
+extern void sub_000C74C0(void);
+extern void sub_000C7A80(void);
+extern void sub_000C7B40(void);
+extern void sub_000D6D30(void);
+extern void sub_000D7A00(void);
+extern void sub_000DE540(void);
+extern void sub_000DF160(void);
+extern void sub_000E53C0(void);
+void nfsu_touch_hit(void)
+{
+#ifdef __ANDROID__
+    feng_touch_hit();
+#else
+    sub_000DDB60();
+#endif
+}
+void sub_000D8730(void)
+{
+#ifdef __ANDROID__
+    feng_touch_dispatch();
+#else
+    sub_000D8730_gen();
+#endif
+}
+void sub_000D8B10(void)
+{
+#ifdef __ANDROID__
+    feng_touch_update();
+#else
+    sub_000D8B10_gen();
+#endif
+}
+void sub_000DB860(void)
+{
+#ifdef __ANDROID__
+    feng_touch_poll();
+#else
+    sub_000DB860_gen();
+#endif
+}
+
 void sub_00018E40(void)
 {
     uint32_t v = s_proj_view;
@@ -680,6 +733,20 @@ void sub_0014B510(void)
     MEM32(centre) = original;
 }
 
+/* Associate cached draw geometry with its actual FEng object, including
+ * the reused-cache path. Group hit bounds are the union of drawn children. */
+extern void sub_000D9D00_gen(void);
+void sub_000D9D00(void)
+{
+#ifdef __ANDROID__
+    uint32_t previous = feng_touch_draw_begin(MEM32(esp + 4));
+#endif
+    sub_000D9D00_gen();
+#ifdef __ANDROID__
+    feng_touch_draw_end(previous);
+#endif
+}
+
 /* FEng renders the rest of the HUD through a cached circular list of
  * quads. This path is shared by sprites and text (one quad per glyph).
  * Select one anchor from the complete object's bounds, then translate all
@@ -701,6 +768,9 @@ void sub_000DC090(void)
 {
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
+#ifdef __ANDROID__
+    if (!previous) feng_touch_frame_begin();
+#endif
     sub_000DC090_gen();
     s_feng_menu_draw = previous;
 }
@@ -714,6 +784,12 @@ void sub_000F8B80(void)
     int previous_draw = s_feng_draw;
     unsigned count = 0;
 
+#ifdef __ANDROID__
+    if (s_feng_menu_draw && feng_touch_draw_cache(ecx)) {
+        esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
+        return;
+    }
+#endif
     s_feng_shift = 0.0f;
     s_feng_draw = s_ui_aspect_active;
     if (s_feng_draw && !s_feng_menu_draw &&
@@ -1262,6 +1338,9 @@ void sub_0011BC20(void)
  */
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
+#ifdef __ANDROID__
+    if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
+#endif
     /*
      * TODO: Add your overrides here. Examples:
      *

@@ -1,0 +1,370 @@
+# Native FEng touch input
+
+Android touch input feeds the original Xbox FEng mouse path. There is no Android
+overlay, per-screen rectangle list, text recognition, or simulated D-pad search.
+The current scope is the front end (`GameFlow == 3`); racing controls, pause and
+post-race screens are not enabled by this change.
+
+## Executable evidence
+
+Addresses refer to the original XBE used by this port:
+
+- `0xD8B10`: FEng update. Byte `this+2` enables mouse polling and dispatch.
+- `0x1FF4D8`: cFEng vtable; slot `+0x44` points to the shared `0xDB860`
+  no-op (`ret 4`). Only its call returning to `0xD8B5E` receives touch data.
+- Input packet: four signed 16-bit fields, X/Y/wheel/buttons. `0xF8D80`
+  updates position, movement and previous/current buttons.
+- `0xD8730`: native mouse dispatch. Uses each package's selectable object
+  array (`+0x84`, count `+0x88`), skips disabled objects (`0x04000000`),
+  and resolves hover, button edges and press capture.
+- Vtable slot `+0x48` -> `0xDDB60` -> `0xDD880`: native point test.
+  `0xDCDC0` obtains bounds, including grouped objects and text dimensions.
+- `0xE53C0`: changes package focus (`+0x80`) and queues the original
+  lost/gained-focus messages. Menu activation remains in original handlers.
+
+The host queue preserves down/up edges between guest frames. Every new tap
+first provides a hover update: native mouse dispatch processes button edges
+before resolving hover, so sending down immediately could hit the old focus.
+Moves coalesce. A single SDL finger owns the gesture; additional fingers are
+ignored. Pause, focus loss, surface changes and queue overflow cancel input.
+Host and guest exchange samples under a mutex; only the guest thread touches
+guest memory and calls FEng.
+
+Coordinates are normalized surface positions mapped through the presenter's
+4:3/16:9 letterbox fit to FEng's centred 640x480 canvas, with the current
+Menu Size scale inverted. All target bounds come from the game. Changes to
+rendering/presentation must keep this conversion consistent.
+
+## Rendered hit geometry
+
+The Xbox descriptor-based hit test does not follow all render-time group
+transforms. On the keyboard, a tap at the visible P centre selected L.
+Android touch now uses bounds of the actual cached quads drawn by FEng:
+`0xD9D00` supplies object identity and `0xF8B80` supplies its final vertices.
+Bounds are rebuilt every menu render, including the cache-reuse path. Group
+bounds are the union of their rendered descendants. Touch and cached vertices
+use the same 640x480 canvas; Menu Size and presentation fit are inverted once.
+No key positions, keyboard rows or screen-specific touch zones are stored.
+Objects absent from the last render have no touch bounds. The legacy text
+measurement hit path is not called for Android touches.
+
+## Validation
+
+Host queue/mapping regression test:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Isrc tests/menu_touch.c src/menu_touch.c \
+  -pthread -lm -o /tmp/nfsu-menu-touch-test
+/tmp/nfsu-menu-touch-test
+```
+
+Covers taps shorter than a guest frame, held/moving input, consecutive taps,
+cancellation, orphan events, queue overflow, letterboxing and Menu Size.
+Build the Android APK using the root `./gradlew assembleDebug`.
+
+Native mouse support surviving in the executable does not establish that every
+Xbox screen's assets contain usable mouse actions. Device validation must check
+actual menu transitions, including dialogs and disabled items. `[touch]` log
+lines report package flags, selectable counts and resulting focus hashes after
+the hover update, without drawing diagnostic UI.
+
+Gesture target correction: observe the result of the virtual hit test
+(`0xDDB60`) during the hover update, using the rendered bounds described above.
+Each active package keeps its own target for the gesture. The press validates
+that the object is still selectable in that package and synchronizes focus
+with `0xE53C0` before original activation. A miss is consumed instead of
+invoking generic Select on the previous focus. This applies to keyboard keys,
+menu rows and dialogs through the same object path, without button-name rules.
+
+Regression test (synthetic cached quads, actual draw/hit/input wrappers):
+
+```sh
+cc -O1 -D__ANDROID__ -ffunction-sections -fdata-sections -Isrc \
+  -Iandroid/app/build/generated/recomp tests/menu_touch_focus.c \
+  src/recomp_manual.c src/feng_touch.c src/menu_touch.c -Wl,--gc-sections -pthread -lm \
+  -o /tmp/nfsu-menu-focus-test
+/tmp/nfsu-menu-focus-test
+```
+
+It forces focus to the opposite button after hover, checks Yes and No target
+selection at the press edge, verifies distinct rendered keyboard rows and stale-frame
+removal, and verifies misses/disabled buttons do not
+activate the previous selection. Guest stack and volatile registers are checked.
+
+Final binary-dialog correction was built and installed on Retroid. A tap on
+Yes while No was highlighted opened the profile-choice dialog; Load Profile
+opened the list, and No on the PAVEL load confirmation cancelled back to the
+main menu. A tap on the confirmation body did not activate either answer.
+Tests used ADB touchscreen events. A separate visual defect remains: after a
+body tap some unselected dialog text can disappear. Full visual correctness
+of the retained Xbox mouse path is not established by these action checks.
+
+### Retroid Pocket 4 Pro, 2026-10-15
+
+- Root `assembleDebug`: `BUILD SUCCESSFUL`; installed over the existing app
+  with `adb install -r`, preserving data.
+- Direct taps opened Main Menu -> Options -> Camera. Tapping the Car Reflections
+  label selected its row. After Home and returning to the game, tapping
+  Resolution Scale selected that row; the previous highlight moved correctly.
+- Camera's visible left arrow did **not** change Car Reflections. Xbox settings
+  need additional native object/event binding for directional controls. No
+  setting value was changed by that test.
+- Queue/mapping test and the existing `tests/ui_aspect.c` regression passed.
+- This is a proof of native menu selection, not complete touch-only navigation:
+  return/help controls, title-screen entry, all dialogs, car selection,
+  directional settings, pause/results and racing controls remain unverified or
+  unimplemented. Device tests used ADB-injected touchscreen events; physical
+  finger usability and fast multi-finger interaction were not validated.
+
+### Rendered keyboard validation, 2026-10-15
+
+On Retroid, the original build reproduced P -> L. With rendered bounds, taps
+on visible P, L, Q and Z produced exactly `PLQZ`. A tap in the empty input
+area left that string unchanged. The visible BACK key deleted one character
+per tap. Test text was cleared without creating a profile. Tests used ADB
+touchscreen events; physical-finger edge accuracy across all keys and screen
+aspect ratios still requires broader device testing. APK build, cached-geometry
+regressions, touch queue/mapping and existing UI aspect checks passed.
+
+### Profile list activation, 2026-10-16
+
+The profile list controller (`BC750` delegating to `BD7E0`) ignores the
+object MouseClick message. It owns a separate data cursor from FEng focus.
+Touch activation resolves the rendered row through its native list cells,
+synchronizes the data cursor against the visible data window, and queues
+Select for that package. Queue route -2 dispatches the action to the screen;
+route -5 only requests feedback through the screen's input-feedback virtual
+method, which explains a click sound without confirmation. A regression
+covers this list even when an object MouseClick script is present.
+
+The corrected APK was built and installed on Retroid. The user confirmed
+physical touch activation now works ("заработало!"). Earlier apparent success
+was caused by a physical Select press and is not counted as touch validation.
+Queue/mapping, rendered-bounds/focus/profile routing and UI-aspect regressions
+all passed. Multiple saved profiles and scrolling remain untested on device.
+
+### Native screen arrows, 2026-10-16
+
+The common screen base stores its `mouse_over_l` and `mouse_over_r` objects
+at +0x24/+0x28 (hashes AA68BFCE/AA68BFD4). Statistics renders these objects
+but exposes zero selectable rows. Touch now captures a visible arrow by its
+native identity and cached rendered bounds, then queues Left (9120409E) or
+Right (B5971BF1) through screen-action route -2. The original Statistics
+controller D3720 performs the switch, redraw and endpoint handling.
+No overlay or fixed screen rectangle is used. Other screens sharing these
+native base arrows use the same binding; their behavior still needs testing.
+
+Regression checks cover both directions with zero selectable rows, one action
+per tap, misses and an arrow absent from the current rendered frame. The APK
+built successfully and was installed on Retroid; the user confirmed that the
+arrows work on the Statistics screen. Physical input from the user overlapped
+ADB checks, so screenshots alone are not treated as isolated direction tests.
+
+### Customize touch inspection, 2026-10-16
+
+Customize browsers use a native horizontal-browser instance (vtable 1FF870)
+at screen+48. Their visible `Select_arrow_left/right` objects are rendered
+by the shared HorizontalBrowserBack package; the screen's own mouse_over
+markers are hidden. Bind the visible arrow identity and rendered quad to
+the active browser's directional action. The selected browser node +0C
+points directly to its FEng icon object. Its separate category-name text
+fields are FAC7F994 / 4AB1E821. Visible category labels can carry the retail
+noninteractive flag; their rendered geometry still supplies the touch target.
+
+Garage controls capture the gesture and dispatch on release through the
+native screen entry DE540, using the active browser controller. A short tap
+on an icon or label invokes MouseClick; an arrow tap invokes its direction.
+A horizontal swipe of at least 20 logical pixels selects next (swipe left)
+or previous (swipe right), once per gesture. Movement cancels tap activation;
+vertical/ambiguous drags do not open a category. This avoids dependence on
+retail mouse-button edges or script availability in nested menus.
+
+An empty-space gesture on a typed Customize browser directly changes the
+SelectCarCameraMover pitch/yaw (+40/+44), proportional to finger displacement:
+180 degrees per screen width (horizontal direction reversed at the user's
+request) and 90 degrees per screen height. It does not
+emulate stick speed, use a stick dead zone or integrate elapsed frame time.
+Native pitch limits (85..140 degrees) remain. Manual rotation clears native
+angular velocity and refreshes the idle-orbit timestamp. Control gestures
+cannot own the camera. Modal screens, leaving Customize and lifecycle cancel
+clear gesture ownership. Nested Customize browsers share the gesture binding.
+
+The user rejected the initial stick-emulation prototype; that implementation
+was removed, including its input wrapper and linker change. The user confirmed
+direct rotation, directional arrows and rotation in the expanded garage
+context. After correcting icon/text selection, native screen dispatch and
+adding swipe/tap discrimination, the final APK built and installed. The user
+confirmed the resulting controls work on Retroid.
+Tests cover proportional reversible motion, stationary-finger stability,
+leaving the garage, nested browser identity, shared arrows, icon activation
+separate label activation, both swipe directions, vertical-drag cancellation,
+release-only activation and no repeats while held. Queue/mapping and UI-aspect
+checks passed as well. Not every purchasable part or garage screen was tested.
+
+### ColorPicker palette and inspection, 2026-10-16
+
+ColorPicker (vtable 1FDD74, native input C8A10) owns 60 swatch records,
+starting at screen+58 with stride 2C. Each record supplies its FEng sprite
+(+0C), color data (+10), row (+24) and column (+28). Touch captures a
+populated swatch using that sprite's current rendered bounds. On a short
+release it validates the same record, updates native cursor coordinates
+B08/B0C and invokes C74C0, C7B40 and C7A80(100). Mode 100 is the game's
+preview path with native lock checks; mode 101/Accept is never synthesized.
+A swatch drag cancels selection and cannot rotate the preview or swipe a
+category. Empty cells cannot select the previously focused color.
+
+The active ColorPicker also owns empty-space camera gestures, using the
+same direct pitch/yaw path as the garage. Palette and camera ownership are
+exclusive. Regression tests cover populated and empty cells, preview-only
+mode, release selection, swatch-drag cancellation and camera rotation in
+ColorPicker. The root APK build and the touch/geometry/UI-aspect checks pass.
+At the user's request the running game was not restarted and this APK was
+not installed: physical palette selection and paint-camera validation remain
+pending on the new build.
+
+### Underground event map, footer and options touch, 2026-10-16
+
+Race Map (`MU_UG_MapScreen.fng`, vtable 1FC12C) owns a native scroll list
+at screen+3C and a separate selected event at +48. Each scroll node maps
+its event data (+08) to its rendered FEng group (+0C). A tap captures that
+pair, validates membership again on release, selects the event through
+DF160 and refreshes route/details through B8310 before native Select.
+This bypasses dependence on the package's selectable-object array without
+introducing fixed map coordinates. Drag gestures do not activate an event.
+
+Numbered `LeftArrow_N` / `RightArrow_N` objects dispatch Left/Right with
+`OptionName_N` as the event object, so the original options controller
+updates the touched row. Disabled rows and arrows absent from the current
+render cannot change values. OptionsController (vtable 1FDBC8) receives its
+layout field (EBFB7CC5) when either native base arrow or Select_arrow control
+is touched; its handler ignores directional messages aimed at an arrow object.
+These controls dispatch once on release and do not use garage swipe handling.
+
+Back accepts native localized Back labels regardless of their object name.
+Its hit area joins the caption, retained icon and gap, with eight logical
+pixels of tolerance. A visible caption remains usable when no Help icon is
+rendered. Existing Help-to-Back replacement still uses native localization.
+
+Synthetic regression coverage includes event cursor synchronization, options
+row targeting, disabled/hidden controls, controller-layout targeting and Back
+caption-only hits. Device acceptance must separately check the career Drag
+entry, the complete Back caption and both directions in both options screens.
+
+
+### Shared FEng touch module and Quick Race car preview
+
+`src/menu_touch.c` owns the synchronized host queue and surface mapping.
+`src/feng_touch.c` owns rendered bounds, gesture capture, movement cancellation,
+release dispatch and direct preview-camera rotation. Native screen bindings
+reuse these policies and provide the event object/direction expected by the
+original controller. `src/recomp_manual.c` retains short guest/render hooks
+and dependency declarations for the recompiler's name-protection scan.
+
+QuickRaceCarSelect (vtable 1FB8F4) uses the shared preview camera and arrow
+geometry. Its arrows send Left/Right to its original B25F0 controller; tapping
+the selected car's rendered scroll item sends Select. Camera drags start in
+empty space, cannot activate a control and stop when the active screen changes.
+Synthetic regressions cover both arrows, selected-car activation, proportional
+rotation and stationary-finger stability through the shared implementation.
+
+The shared-module APK passed the root `assembleDebug` build and was installed
+on Retroid with `adb install -r`, preserving data. Queue/mapping, native
+geometry/gesture regressions and UI-aspect checks passed after extraction.
+The user confirmed the preceding career/Back/options correction works.
+Quick Race car selection and rotation in the shared-module build still need
+physical touch acceptance; installation and synthetic tests are not that proof.
+
+
+Carousel capture now uses one `TouchCarousel` binding and one shared handler
+for both Quick Race cars and Customize/tuning. A binding supplies the selected
+node, native activation message, optional label identities and swipe policy.
+Arrow lookup, rendered bounds, gesture capture, movement cancellation, release
+activation and screen validation follow the same code path. Tuning retains
+horizontal swipes; car-arrow drags retain cancellation. Tests exercise both
+bindings, both directions, release-only behavior and their distinct drag policies.
+
+### Vertical screen arrows
+
+The common screen constructor DE440 stores mouse_over_u at +2C (AA68BFD7)
+and mouse_over_d at +30 (AA68BFC6). Touch binds their rendered bounds to
+native Up (72619778) and Down (911C0A4B), dispatched to the active screen
+on release. The original controller owns scrolling and endpoint behavior.
+Hidden/disabled arrows and dragged gestures cannot scroll. Synthetic checks
+cover both messages, release-only activation, hidden/disabled arrows and drag
+cancellation. APK assembly passed; Magazines physical-device acceptance is
+still pending.
+
+### Magazines cover selection
+
+UndergroundMagazineScreen (1FEA8C) uses page offset +40 and visible-slot cursor
++3C; Select in D24E0 opens their sum, independently of FEng focus. Capture
+rendered cover/lock/group identities (F1E6EA37/9DB42DF9/BBE88515 plus slot),
+then synchronize the cursor and refresh D1AD0 before native Select on release.
+A page change during the gesture cancels activation. Native lock handling stays
+in D24E0. Synthetic tests reproduce Autopress slot 3 versus old Option slot 6
+on page 8 and check page-change cancellation. Device acceptance is pending.
+
+### Car Customization car browser
+
+MainMenuCarCustomize (vtable 1FC1AC, package MU_MainMenuCarCustomize.fng)
+is now recognized as a preview owner. Its B9E80 constructor creates the
+horizontal browser at +48, selected node +54. B9D70 accepts MouseClick/Select;
+Left/Right go through B9CC0. The existing carousel binding supplies rendered
+arrow/item/label hit areas, release-only taps and horizontal swipes. Empty-space
+drags use the shared direct camera orbit; captured controls cannot rotate it.
+No additional hooks in recomp_manual.c or fixed screen rectangles are needed.
+
+Synthetic geometry/gesture regressions pass for both arrows, selected-item
+activation, both swipe directions, release-only dispatch, proportional camera
+rotation and stationary-finger stability on this screen. Queue/mapping tests
+also pass. APK assembly was blocked by the read-only Gradle cache; the requested
+permission to run the build outside the sandbox was declined. A new APK and
+physical-device validation remain pending.
+
+Car Customization carousel gaps now capture swipe-only gestures across the
+640-wide FEng canvas, from the canvas top to the selected logo's rendered bottom plus
+16 logical pixels of finger tolerance. Full-height objects (over 160 pixels)
+do not define a strip. Exact arrow/item taps retain their native actions;
+gap taps do not activate Customize. Gesture ownership is fixed at touch-down,
+so a carousel swipe cannot turn into a camera drag. Synthetic checks cover
+small logos, gap swipes in both directions, gap taps and camera movement below
+the strip. Physical touch acceptance and a rebuilt APK remain pending.
+
+Camera drags in Car Customization now check the same rendered carousel-strip
+boundary on every sample. Entering the strip freezes pitch/yaw; moving within
+it cannot rotate or switch cars. Returning below it reanchors the finger before
+resuming rotation, avoiding an accumulated delta jump. Synthetic regressions
+cover crossing, panel movement, re-entry and resumed proportional motion.
+APK assembly and physical-device verification remain pending.
+
+The strip policy is now selected through TouchCarousel.allow_swipe rather than
+the MainMenuCarCustomize vtable. Underground's typed garage browsers therefore
+share full-width swipe capture and the per-sample camera boundary with the
+main-menu browser. The same gap/swipe/camera-crossing regression runs for both
+bindings. Quick Race retains its existing arrow-drag policy. Device comparison
+of both entry paths and APK assembly remain pending.
+
+## Quick Race: Select Location
+
+The location carousel has a separate typed controller, QRTrackSelectScreen
+(vtable `0x1FB848`, constructor `0xB1630`, message handler `0xB1880`). Its
+horizontal browser is constructed by `0xDF700` at screen `+0x48`, with the
+selected node at `+0x54`. `0xB0840` updates the location-name object hash
+`0x03C8F634`; `0xB0CE0` handles Left/Right and refreshes the selected route.
+The previous carousel binding required a car-preview screen and excluded it.
+
+A separate carousel-screen resolver now recognizes this controller without
+enabling garage camera orbit. Visible arrows send native Left/Right; the
+selected thumbnail and location caption send native Select. Horizontal swipes
+in the rendered header strip change location on release. Empty strip taps do
+not select, and map drags cannot rotate a hidden preview camera. Back keeps the
+shared native Cancel path. Gesture release checks that the same typed screen
+is still active.
+
+The synthetic regression fails on the prior feng_touch.c at the location-arrow
+assertion and passes with the fix. It covers both arrows, thumbnail/caption
+activation, both swipe directions, empty strip taps, Back without selectable
+rows, screen changes during a held tap and no hidden-camera rotation. The full
+existing native-menu regression and host queue/mapping tests also pass. Android
+ARM64 syntax validation passes. A rebuilt APK and physical-device verification
+remain pending; the earlier Gradle cache escalation was declined.

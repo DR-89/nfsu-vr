@@ -36,6 +36,15 @@ all generated Android sources. No game data is packaged in the APK.
 
 Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+## Experimental menu touch
+
+Front-end menu items accept taps through the original game's FEng mouse input,
+without an overlay or manually positioned touch zones. Main Menu -> Options ->
+Camera and row selection were checked on Retroid Pocket 4 Pro. Directional
+settings arrows and complete touch-only navigation are not implemented yet;
+keep the controller available. Pause/results and racing touch controls are not
+enabled. See [native menu touch](../docs/native-menu-touch.md) for scope and tests.
+
 ## Experimental 60 FPS
 
 In the in-game **Options -> Camera** menu, set **Frame Rate** to **60 FPS**.
