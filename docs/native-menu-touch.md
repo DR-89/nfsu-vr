@@ -81,7 +81,7 @@ Regression test (synthetic cached quads, actual draw/hit/input wrappers):
 ```sh
 cc -O1 -D__ANDROID__ -ffunction-sections -fdata-sections -Isrc \
   -Iandroid/app/build/generated/recomp tests/menu_touch_focus.c \
-  src/recomp_manual.c src/menu_touch.c -Wl,--gc-sections -pthread -lm \
+  src/recomp_manual.c src/feng_touch.c src/menu_touch.c -Wl,--gc-sections -pthread -lm \
   -o /tmp/nfsu-menu-focus-test
 /tmp/nfsu-menu-focus-test
 ```
@@ -221,3 +221,125 @@ ColorPicker. The root APK build and the touch/geometry/UI-aspect checks pass.
 At the user's request the running game was not restarted and this APK was
 not installed: physical palette selection and paint-camera validation remain
 pending on the new build.
+
+### Underground event map, footer and options touch, 2026-10-16
+
+Race Map (`MU_UG_MapScreen.fng`, vtable 1FC12C) owns a native scroll list
+at screen+3C and a separate selected event at +48. Each scroll node maps
+its event data (+08) to its rendered FEng group (+0C). A tap captures that
+pair, validates membership again on release, selects the event through
+DF160 and refreshes route/details through B8310 before native Select.
+This bypasses dependence on the package's selectable-object array without
+introducing fixed map coordinates. Drag gestures do not activate an event.
+
+Numbered `LeftArrow_N` / `RightArrow_N` objects dispatch Left/Right with
+`OptionName_N` as the event object, so the original options controller
+updates the touched row. Disabled rows and arrows absent from the current
+render cannot change values. OptionsController (vtable 1FDBC8) receives its
+layout field (EBFB7CC5) when either native base arrow or Select_arrow control
+is touched; its handler ignores directional messages aimed at an arrow object.
+These controls dispatch once on release and do not use garage swipe handling.
+
+Back accepts native localized Back labels regardless of their object name.
+Its hit area joins the caption, retained icon and gap, with eight logical
+pixels of tolerance. A visible caption remains usable when no Help icon is
+rendered. Existing Help-to-Back replacement still uses native localization.
+
+Synthetic regression coverage includes event cursor synchronization, options
+row targeting, disabled/hidden controls, controller-layout targeting and Back
+caption-only hits. Device acceptance must separately check the career Drag
+entry, the complete Back caption and both directions in both options screens.
+
+
+### Shared FEng touch module and Quick Race car preview
+
+`src/menu_touch.c` owns the synchronized host queue and surface mapping.
+`src/feng_touch.c` owns rendered bounds, gesture capture, movement cancellation,
+release dispatch and direct preview-camera rotation. Native screen bindings
+reuse these policies and provide the event object/direction expected by the
+original controller. `src/recomp_manual.c` retains short guest/render hooks
+and dependency declarations for the recompiler's name-protection scan.
+
+QuickRaceCarSelect (vtable 1FB8F4) uses the shared preview camera and arrow
+geometry. Its arrows send Left/Right to its original B25F0 controller; tapping
+the selected car's rendered scroll item sends Select. Camera drags start in
+empty space, cannot activate a control and stop when the active screen changes.
+Synthetic regressions cover both arrows, selected-car activation, proportional
+rotation and stationary-finger stability through the shared implementation.
+
+The shared-module APK passed the root `assembleDebug` build and was installed
+on Retroid with `adb install -r`, preserving data. Queue/mapping, native
+geometry/gesture regressions and UI-aspect checks passed after extraction.
+The user confirmed the preceding career/Back/options correction works.
+Quick Race car selection and rotation in the shared-module build still need
+physical touch acceptance; installation and synthetic tests are not that proof.
+
+
+Carousel capture now uses one `TouchCarousel` binding and one shared handler
+for both Quick Race cars and Customize/tuning. A binding supplies the selected
+node, native activation message, optional label identities and swipe policy.
+Arrow lookup, rendered bounds, gesture capture, movement cancellation, release
+activation and screen validation follow the same code path. Tuning retains
+horizontal swipes; car-arrow drags retain cancellation. Tests exercise both
+bindings, both directions, release-only behavior and their distinct drag policies.
+
+### Vertical screen arrows
+
+The common screen constructor DE440 stores mouse_over_u at +2C (AA68BFD7)
+and mouse_over_d at +30 (AA68BFC6). Touch binds their rendered bounds to
+native Up (72619778) and Down (911C0A4B), dispatched to the active screen
+on release. The original controller owns scrolling and endpoint behavior.
+Hidden/disabled arrows and dragged gestures cannot scroll. Synthetic checks
+cover both messages, release-only activation, hidden/disabled arrows and drag
+cancellation. APK assembly passed; Magazines physical-device acceptance is
+still pending.
+
+### Magazines cover selection
+
+UndergroundMagazineScreen (1FEA8C) uses page offset +40 and visible-slot cursor
++3C; Select in D24E0 opens their sum, independently of FEng focus. Capture
+rendered cover/lock/group identities (F1E6EA37/9DB42DF9/BBE88515 plus slot),
+then synchronize the cursor and refresh D1AD0 before native Select on release.
+A page change during the gesture cancels activation. Native lock handling stays
+in D24E0. Synthetic tests reproduce Autopress slot 3 versus old Option slot 6
+on page 8 and check page-change cancellation. Device acceptance is pending.
+
+### Car Customization car browser
+
+MainMenuCarCustomize (vtable 1FC1AC, package MU_MainMenuCarCustomize.fng)
+is now recognized as a preview owner. Its B9E80 constructor creates the
+horizontal browser at +48, selected node +54. B9D70 accepts MouseClick/Select;
+Left/Right go through B9CC0. The existing carousel binding supplies rendered
+arrow/item/label hit areas, release-only taps and horizontal swipes. Empty-space
+drags use the shared direct camera orbit; captured controls cannot rotate it.
+No additional hooks in recomp_manual.c or fixed screen rectangles are needed.
+
+Synthetic geometry/gesture regressions pass for both arrows, selected-item
+activation, both swipe directions, release-only dispatch, proportional camera
+rotation and stationary-finger stability on this screen. Queue/mapping tests
+also pass. APK assembly was blocked by the read-only Gradle cache; the requested
+permission to run the build outside the sandbox was declined. A new APK and
+physical-device validation remain pending.
+
+Car Customization carousel gaps now capture swipe-only gestures across the
+640-wide FEng canvas, from the canvas top to the selected logo's rendered bottom plus
+16 logical pixels of finger tolerance. Full-height objects (over 160 pixels)
+do not define a strip. Exact arrow/item taps retain their native actions;
+gap taps do not activate Customize. Gesture ownership is fixed at touch-down,
+so a carousel swipe cannot turn into a camera drag. Synthetic checks cover
+small logos, gap swipes in both directions, gap taps and camera movement below
+the strip. Physical touch acceptance and a rebuilt APK remain pending.
+
+Camera drags in Car Customization now check the same rendered carousel-strip
+boundary on every sample. Entering the strip freezes pitch/yaw; moving within
+it cannot rotate or switch cars. Returning below it reanchors the finger before
+resuming rotation, avoiding an accumulated delta jump. Synthetic regressions
+cover crossing, panel movement, re-entry and resumed proportional motion.
+APK assembly and physical-device verification remain pending.
+
+The strip policy is now selected through TouchCarousel.allow_swipe rather than
+the MainMenuCarCustomize vtable. Underground's typed garage browsers therefore
+share full-width swipe capture and the per-sample camera boundary with the
+main-menu browser. The same gap/swipe/camera-crossing regression runs for both
+bindings. Quick Race retains its existing arrow-drag policy. Device comparison
+of both entry paths and APK assembly remain pending.

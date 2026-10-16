@@ -598,583 +598,57 @@ void sub_00018E60(void)
  * itself tests `cmp [0x283434], 3`). */
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
 
-/* The retail Xbox FEng retains its native mouse dispatcher (D8730), focus
- * notifications (E53C0) and object hit test (DDB60 -> DD880 -> DCDC0).
- * Only input acquisition is a no-op: cFEng vtable 1FF4D8, slot +44 = DB860.
- * Feed that exact call, leaving every other use of the shared no-op alone.
- * No host overlay, screen-name map, object bounds or activation hashes here. */
+/* Keep guest overrides here so the recompilation scanner protects their
+ * original generated bodies. Gesture policy lives in the shared module. */
+#ifdef __ANDROID__
+#include "feng_touch.h"
+#endif
 extern void sub_000D8B10_gen(void);
 extern void sub_000DB860_gen(void);
 extern void sub_000D8730_gen(void);
 extern void sub_000DDB60(void);
-extern void sub_000E53C0(void);
+/* Native dependencies retained here for the recompiler name-protection scan. */
+extern void sub_000B8310(void);
+extern void sub_000D1AD0(void);
+extern void sub_000C74C0(void);
+extern void sub_000C7A80(void);
+extern void sub_000C7B40(void);
 extern void sub_000D6D30(void);
 extern void sub_000D7A00(void);
 extern void sub_000DE540(void);
-extern void sub_000C74C0(void);
-extern void sub_000C7B40(void);
-extern void sub_000C7A80(void);
-#ifdef __ANDROID__
-#include "menu_touch.h"
-static RECOMP_TLS short s_touch_x, s_touch_y;
-static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
-typedef struct {
-    uint32_t package, target, message, fired, screen, armed, palette_entry, back;
-    short start_x, start_y;
-    float travel;
-} TouchTarget;
-static RECOMP_TLS TouchTarget s_touch_targets[32];
-static RECOMP_TLS unsigned s_touch_target_count, s_touch_target_slot;
-static RECOMP_TLS unsigned s_touch_collect_hit;
-static RECOMP_TLS uint32_t s_touch_draw_object;
-typedef struct { uint32_t object; float left, top, right, bottom; } TouchBounds;
-static TouchBounds s_touch_bounds[2048];
-static unsigned s_touch_bounds_count;
-
-static void touch_bounds_add(uint32_t object, float x, float y)
-{
-    if (!object || !isfinite(x) || !isfinite(y)) return;
-    unsigned i;
-    for (i = 0; i < s_touch_bounds_count; i++)
-        if (s_touch_bounds[i].object == object) break;
-    if (i == s_touch_bounds_count) {
-        if (i == sizeof(s_touch_bounds) / sizeof(s_touch_bounds[0])) return;
-        s_touch_bounds_count++;
-        s_touch_bounds[i] = (TouchBounds){ object, x, y, x, y };
-    }
-    TouchBounds *bounds = &s_touch_bounds[i];
-    bounds->left = fminf(bounds->left, x); bounds->right = fmaxf(bounds->right, x);
-    bounds->top = fminf(bounds->top, y); bounds->bottom = fmaxf(bounds->bottom, y);
-}
-
-static int touch_has_message(uint32_t node, uint32_t message)
-{
-    for (unsigned i = 0; node && i < 1024; i++, node = MEM32(node + 4))
-        if (MEM32(node + 0xC) == message) return 1;
-    return 0;
-}
-
-static int touch_object_bounds(uint32_t object, TouchBounds *out, unsigned depth)
-{
-    if (!object || depth > 16) return 0;
-    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
-        if (s_touch_bounds[i].object == object) { *out = s_touch_bounds[i]; return 1; }
-    }
-    if (MEM32(object + 0x18) != 5) return 0;
-    int found = 0;
-    uint32_t child = MEM32(object + 0x60);
-    for (unsigned i = 0; child && i < 1024; i++, child = MEM32(child + 4)) {
-        TouchBounds bounds;
-        if (!touch_object_bounds(child, &bounds, depth + 1)) continue;
-        if (!found) *out = bounds;
-        else {
-            out->left = fminf(out->left, bounds.left);
-            out->right = fmaxf(out->right, bounds.right);
-            out->top = fminf(out->top, bounds.top);
-            out->bottom = fmaxf(out->bottom, bounds.bottom);
-        }
-        found = 1;
-    }
-    return found;
-}
-
-/* Retail footer labels use HELP while the adjacent icon uses
- * FENG_HELP_BUTTON. Keep native text layout/localization and replace its role. */
-static int touch_back_label(uint32_t object)
-{
-    if (!object || MEM32(object + 0x18) != 2) return 0;
-    uint32_t language = MEM32(object + 0x5C);
-    if (language != 0x00169268u && language != 0x001335F0u) return 0;
-    switch (MEM32(object + 0x10)) {
-    case 0xA87927BEu: case 0x936D3402u: case 0x0C39BA77u:
-    case 0x0C39AA39u: case 0x0C39BAFBu: case 0x0C39BAB9u:
-    case 0x0C39BF5Du: case 0x00169268u: case 0x5B9D84DBu:
-        return 1;
-    default: return 0;
-    }
-}
-static int touch_help_icon(uint32_t object)
-{
-    return object && MEM32(object + 0x18) == 2 &&
-        MEM32(object + 0x5C) == 0x349EB9C2u;
-}
-static uint32_t touch_back_hit(void)
-{
-    int has_icon = 0;
-    for (unsigned i = 0; i < s_touch_bounds_count; i++)
-        if (touch_help_icon(s_touch_bounds[i].object)) has_icon = 1;
-    if (!has_icon) return 0;
-    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
-        TouchBounds *b = &s_touch_bounds[i];
-        if ((touch_back_label(b->object) || touch_help_icon(b->object)) &&
-            x >= b->left && x < b->right && y >= b->top && y < b->bottom)
-            return b->object;
-    }
-    return 0;
-}
-static uint32_t touch_active_screen(void)
-{
-    uint32_t reg = MEM32(0x002BCB9Cu);
-    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
-        uint32_t package = MEM32(reg - 4 + 0x18);
-        uint32_t screen = MEM32(reg - 4 + 0x14);
-        if (package && screen && (MEM32(package + 0x1C) & 1)) return screen;
-    }
-    return 0;
-}
-
-static uint32_t touch_rendered_named_hit(uint32_t hash)
-{
-    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
-        TouchBounds *bounds = &s_touch_bounds[i];
-        uint32_t object = bounds->object;
-        if (MEM32(object + 0x10) == hash &&
-            x >= bounds->left && x < bounds->right &&
-            y >= bounds->top && y < bounds->bottom) return object;
-    }
-    return 0;
-}
-
-/* The active typed Customize browser owns the preview gesture. A modal
- * registered ahead of it takes ownership and disables camera touch. */
-static uint32_t touch_garage_screen(void)
-{
-    uint32_t reg = MEM32(0x002BCB9Cu);
-    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
-        uint32_t package = MEM32(reg - 4 + 0x18);
-        uint32_t screen = MEM32(reg - 4 + 0x14);
-        if (!package || !screen || !(MEM32(package + 0x1C) & 1)) continue;
-        uint32_t vtable = MEM32(screen);
-        uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
-        if (vtable == 0x001FDD74u) return screen; /* native ColorPicker */
-        return handler >= 0x000EB000u && handler < 0x000F7000u &&
-            MEM32(screen + 0x48) == 0x001FF870u ? screen : 0;
-    }
-    return 0;
-}
-static uint32_t touch_preview_camera(void)
-{
-    uint32_t reg = MEM32(0x002BCB9Cu);
-    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
-        uint32_t screen = MEM32(reg - 4 + 0x14);
-        if (!screen || MEM32(screen) != 0x001FB0CCu) continue;
-        uint32_t camera = MEM32(screen + 0x5C);
-        if (camera && MEM32(camera) == 0x001F8E90u) return camera;
-    }
-    return 0;
-}
-static void touch_camera_orbit(float dx, float dy)
-{
-    uint32_t camera = touch_preview_camera();
-    if (!camera || MEM32(camera + 0x2C) == 2) return; /* scripted transition */
-    float pitch, yaw;
-    memcpy(&pitch, (void *)XBOX_PTR(camera + 0x40), 4);
-    memcpy(&yaw, (void *)XBOX_PTR(camera + 0x44), 4);
-    if (!isfinite(pitch) || !isfinite(yaw)) return;
-    pitch = fmaxf(85, fminf(140, pitch + dy * 90));
-    yaw = fmodf(yaw + dx * 180 + 360, 360);
-    memcpy((void *)XBOX_PTR(camera + 0x40), &pitch, 4);
-    memcpy((void *)XBOX_PTR(camera + 0x44), &yaw, 4);
-    MEM32(camera + 0x2C) = 3;
-    MEM32(camera + 0x180) = MEM32(camera + 0x184) = MEM32(camera + 0x188) = 0;
-    /* Treat touch as manual inspection, resetting the native idle orbit. */
-    MEM32(0x002B7570u) = MEM32(0x002CA448u);
-    MEM32(0x00247D38u) = 0;
-}
-static RECOMP_TLS uint32_t s_touch_camera_screen;
-static RECOMP_TLS float s_touch_camera_x, s_touch_camera_y;
-static RECOMP_TLS float s_touch_camera_start_x, s_touch_camera_start_y;
-static RECOMP_TLS int s_touch_camera_moving;
-
-#endif
-
-/* Observe the result of the native virtual hit test. Calling its generated
- * body directly avoids recursion through recomp_lookup_manual. */
+extern void sub_000DF160(void);
+extern void sub_000E53C0(void);
 void nfsu_touch_hit(void)
 {
 #ifdef __ANDROID__
-    uint32_t object = MEM32(esp + 12);
-    if (s_touch_poll) {
-        TouchBounds bounds = {0};
-        float x = (float)s_touch_x + 320.0f, y = (float)s_touch_y + 240.0f;
-        int hit = touch_object_bounds(object, &bounds, 0) &&
-            x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom;
-        eax = (eax & 0xFFFFFF00u) | (unsigned)hit;
-        esp += 16;
-    } else
-#endif
+    feng_touch_hit();
+#else
     sub_000DDB60();
-#ifdef __ANDROID__
-    if (s_touch_collect_hit && (eax & 0xFF))
-        s_touch_targets[s_touch_target_slot].target = object;
 #endif
 }
-
-/* Activate the object found under this gesture in the active package. This
- * applies to menu rows, keyboard keys and dialogs, without screen-name rules. */
 void sub_000D8730(void)
 {
 #ifdef __ANDROID__
-    uint32_t feng = ecx, package = MEM32(esp + 4);
-    uint32_t objects = MEM32(package + 0x84), count = MEM32(package + 0x88);
-    int active = s_touch_poll && (MEM32(package + 0x1C) & 1);
-    int interactive = active && objects && count && count <= 4096;
-    unsigned slot;
-    for (slot = 0; slot < s_touch_target_count; slot++)
-        if (s_touch_targets[slot].package == package) break;
-    if (active && s_touch_prepare && slot == s_touch_target_count && slot < 32) {
-        s_touch_targets[slot] = (TouchTarget){ .package = package };
-        s_touch_target_count++;
-    }
-    /* The common screen base owns mouse_over_l/r even when the package
-     * has no selectable rows (for example Statistics). Use these native
-     * object identities and their rendered geometry, never screen zones. */
-    if (active && s_touch_prepare && slot < s_touch_target_count) {
-        uint32_t reg = MEM32(0x002BCB9Cu);
-        for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
-            uint32_t screen = MEM32(reg - 4 + 0x14);
-            if (MEM32(reg - 4 + 0x18) != package || !screen) continue;
-            if (screen == touch_active_screen()) {
-                uint32_t object = touch_back_hit();
-                if (object) {
-                    TouchTarget *target = &s_touch_targets[slot];
-                    target->target = object;
-                    target->message = 0x911AB364u; /* native B/Cancel */
-                    target->screen = screen;
-                    target->back = 1;
-                    target->start_x = s_touch_x;
-                    target->start_y = s_touch_y;
-                    continue;
-                }
-            }
-            /* Horizontal browsers draw their arrows in a shared backdrop
-             * package. Route those visible objects to the active browser. */
-            if (screen == touch_garage_screen() && MEM32(screen) == 0x001FDD74u) {
-                for (unsigned i = 0; i < 60; i++) {
-                    uint32_t entry = screen + 0x58 + i * 0x2C;
-                    uint32_t object = MEM32(entry + 0xC);
-                    TouchBounds bounds;
-                    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-                    if (!MEM32(entry + 0x10) || !object ||
-                        !touch_object_bounds(object, &bounds, 0) ||
-                        x < bounds.left || x >= bounds.right ||
-                        y < bounds.top || y >= bounds.bottom) continue;
-                    TouchTarget *target = &s_touch_targets[slot];
-                    target->target = object;
-                    target->message = 1; /* palette selection, no purchase/accept */
-                    target->screen = screen;
-                    target->palette_entry = entry;
-                    target->start_x = s_touch_x;
-                    target->start_y = s_touch_y;
-                    break;
-                }
-                continue;
-            }
-            if (screen == touch_garage_screen() &&
-                MEM32(screen + 0x48) == 0x001FF870u) {
-                uint32_t object = touch_rendered_named_hit(0x543398D3u);
-                uint32_t message = 0x9120409Eu;
-                if (!object) {
-                    object = touch_rendered_named_hit(0xDB157AC6u);
-                    message = 0xB5971BF1u;
-                }
-                if (!object) {
-                    uint32_t node = MEM32(screen + 0x54);
-                    object = node ? MEM32(node + 0xC) : 0;
-                    TouchBounds bounds;
-                    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-                    if (!object || !touch_object_bounds(object, &bounds, 0) ||
-                        x < bounds.left || x >= bounds.right ||
-                        y < bounds.top || y >= bounds.bottom) object = 0;
-                    if (!object) object = touch_rendered_named_hit(0xFAC7F994u);
-                    if (!object) object = touch_rendered_named_hit(0x4AB1E821u);
-                    message = 0x0C407210u; /* controller's category activation */
-                }
-                if (object) {
-                    s_touch_targets[slot].target = object;
-                    s_touch_targets[slot].message = message;
-                    s_touch_targets[slot].screen = screen;
-                    s_touch_targets[slot].start_x = s_touch_x;
-                    s_touch_targets[slot].start_y = s_touch_y;
-                    continue;
-                }
-            }
-            for (unsigned side = 0; side < 2; side++) {
-                uint32_t object = MEM32(screen + 0x24 + side * 4);
-                TouchBounds bounds;
-                uint32_t hash = side ? 0xAA68BFD4u : 0xAA68BFCEu;
-                if (!object || MEM32(object + 0x10) != hash ||
-                    (MEM32(object + 0x1C) & 0x04000000u) ||
-                    !touch_object_bounds(object, &bounds, 0)) continue;
-                float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-                if (x < bounds.left || x >= bounds.right ||
-                    y < bounds.top || y >= bounds.bottom) continue;
-                s_touch_targets[slot].target = object;
-                s_touch_targets[slot].message = side ? 0xB5971BF1u : 0x9120409Eu;
-            }
-        }
-    }
-    if (active && slot < s_touch_target_count && s_touch_targets[slot].message) {
-        TouchTarget *target = &s_touch_targets[slot];
-        int fire = s_touch_buttons && !s_touch_prepare && !target->fired;
-        uint32_t message = target->message;
-        if (target->screen) {
-            float dx = s_touch_x - target->start_x, dy = s_touch_y - target->start_y;
-            target->travel = fmaxf(target->travel, hypotf(dx, dy));
-            if (s_touch_buttons) target->armed = 1;
-            fire = !s_touch_buttons && !s_touch_prepare && target->armed && !target->fired;
-            if (fire) {
-                if (!target->back && !target->palette_entry && fabsf(dx) >= 20 && fabsf(dx) > fabsf(dy) * 1.25f)
-                    message = dx > 0 ? 0x9120409Eu : 0xB5971BF1u;
-                else if (target->travel >= 12) fire = 0; /* moved, not a tap */
-                uint32_t current_screen = target->back ? touch_active_screen() : touch_garage_screen();
-                if (target->screen != current_screen) fire = 0;
-                target->fired = 1;
-            }
-        }
-        if (fire) {
-            target->fired = 1;
-            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-            if (target->palette_entry) {
-                uint32_t entry = target->palette_entry, screen = target->screen;
-                uint32_t row = MEM32(entry + 0x24), column = MEM32(entry + 0x28);
-                if (row < 6 && column < 10 && MEM32(entry + 0x10) &&
-                    MEM32(entry + 0xC) == target->target) {
-                    MEM32(screen + 0xB08) = row;
-                    MEM32(screen + 0xB0C) = column;
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C74C0(); /* cursor, current sample and native lock UI */
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C7B40();
-                    PUSH32(esp, 100); /* preview only; 101 is the accept path */
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C7A80();
-                    MEM8(screen + 0xAFC) = 1;
-                    MEM32(screen + 0xAF8) = MEM32(0x002CA448u);
-                }
-            } else if (target->screen) {
-                /* Dispatch to the same active screen entry used by native
-                 * package notifications, independent of mouse script focus. */
-                PUSH32(esp, package);
-                PUSH32(esp, 1);
-                PUSH32(esp, target->target);
-                PUSH32(esp, message);
-                PUSH32(esp, 0);
-                ecx = target->screen;
-                sub_000DE540();
-            } else {
-                PUSH32(esp, 1);
-                PUSH32(esp, (uint32_t)-2);
-                PUSH32(esp, package);
-                PUSH32(esp, target->target);
-                PUSH32(esp, message);
-                PUSH32(esp, 0);
-                ecx = feng;
-                sub_000D6D30();
-                PUSH32(esp, 0);
-                ecx = feng;
-                sub_000D7A00();
-            }
-            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
-        }
-        esp += 8;
-        return;
-    }
-    if (interactive && s_touch_prepare && slot < s_touch_target_count) {
-        s_touch_target_slot = slot;
-        s_touch_collect_hit = 1;
-        /* Some lists start with no native FEng focus. The Xbox mouse path
-         * exits before scanning candidates in that state. Bootstrap only
-         * from a rendered, enabled selectable object under this gesture. */
-        if (!MEM32(package + 0x80)) {
-            float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-            for (uint32_t i = 0; i < count; i++) {
-                uint32_t object = MEM32(objects + i * 4);
-                TouchBounds bounds;
-                if (!object || (MEM32(object + 0x1C) & 0x04000000u) ||
-                    !touch_object_bounds(object, &bounds, 0) ||
-                    x < bounds.left || x >= bounds.right ||
-                    y < bounds.top || y >= bounds.bottom) continue;
-                uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-                PUSH32(esp, 1);
-                PUSH32(esp, object);
-                PUSH32(esp, feng);
-                PUSH32(esp, 0);
-                ecx = package;
-                sub_000E53C0();
-                eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
-                s_touch_targets[slot].target = object;
-                break;
-            }
-        }
-    }
-    if (interactive && (MEM16(feng + 0x1A) & 1) && !(MEM16(feng + 0x18) & 1)) {
-        uint32_t target = slot < s_touch_target_count ? s_touch_targets[slot].target : 0;
-        int member = 0;
-        for (uint32_t i = 0; target && i < count; i++)
-            if (MEM32(objects + i * 4) == target) { member = 1; break; }
-        if (!member || (MEM32(target + 0x1C) & 0x04000000u)) {
-            MEM32(feng + 0x94) = 0;
-            esp += 8; /* A miss must not invoke generic Select on old focus. */
-            return;
-        }
-        if (target != MEM32(package + 0x80)) {
-            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-            PUSH32(esp, 1);
-            PUSH32(esp, target);
-            PUSH32(esp, feng);
-            PUSH32(esp, 0);
-            ecx = package;
-            sub_000E53C0();
-            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp;
-        }
-        /* This retail list has a separate data cursor: FEng focus alone
-         * does not select a profile, and its controller ignores MouseClick. */
-        int profile_select = 0;
-        uint32_t registry = MEM32(0x002BCB9Cu);
-        for (unsigned n = 0; registry && registry != 0x002BCB9Cu && n < 64; n++) {
-            uint32_t record = registry - 4;
-            uint32_t screen = MEM32(record + 0x14);
-            if (MEM32(record + 0x18) == package && screen &&
-                MEM32(screen) == 0x001FC384u && MEM32(screen + 0x3C) == 0x000BD7E0u) {
-                uint32_t row = MEM32(screen + 0x88);
-                uint32_t data = MEM32(screen + 0x9C);
-                for (unsigned r = 0; row && row != screen + 0x88 &&
-                     data && data != screen + 0x90 && r < 5; r++) {
-                    uint32_t cell = MEM32(row + 8);
-                    for (unsigned c = 0; cell && cell != row + 8 && c < 16; c++) {
-                        if (MEM32(cell + 8) == target) {
-                            MEM32(screen + 0x98) = data;
-                            MEM32(screen + 0xA0) = row;
-                            profile_select = 1;
-                            break;
-                        }
-                        cell = MEM32(cell);
-                    }
-                    if (profile_select) break;
-                    row = MEM32(row);
-                    data = MEM32(data);
-                }
-            }
-            registry = MEM32(registry);
-        }
-        /* Retail Xbox screens may expose a selectable row without mouse
-         * scripts. Pad dispatch still notifies the screen controller in
-         * that case; mouse dispatch silently drops the activation. */
-        if (profile_select || (!touch_has_message(MEM32(target + 0x3C), 0x0C407210u) &&
-            !touch_has_message(MEM32(package + 0x50), 0x406415E3u))) {
-            uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
-            PUSH32(esp, 1);
-            PUSH32(esp, (uint32_t)-2);
-            PUSH32(esp, package);
-            PUSH32(esp, target);
-            PUSH32(esp, 0x406415E3u);
-            PUSH32(esp, 0);
-            ecx = feng;
-            sub_000D6D30();
-            eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp + 8;
-            return;
-        }
-    }
-#endif
+    feng_touch_dispatch();
+#else
     sub_000D8730_gen();
-#ifdef __ANDROID__
-    s_touch_collect_hit = 0;
 #endif
 }
-
 void sub_000D8B10(void)
 {
 #ifdef __ANDROID__
-    uint32_t feng = ecx;
-    uint8_t mouse_enabled = MEM8(feng + 2);
-    MenuTouchSample sample = menu_touch_sample();
-    float menu_size;
-    memcpy(&menu_size, (void *)XBOX_PTR(0x00295B00u), sizeof(menu_size));
-    /* First implementation is limited to the front end. Game flow 6 also
-     * includes HUD/pause/results; those need separate device validation. */
-    int enabled = MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
-        menu_touch_position(&sample, xbox_video_widescreen(), menu_size,
-                            &s_touch_x, &s_touch_y);
-    if (sample.reset || (!enabled && sample.active)) {
-        memset((void *)XBOX_PTR(feng + 0xC), 0, 0x20);
-        MEM32(feng + 0x94) = 0; /* mouse press capture, not controller focus */
-    }
-    if (MEM32(NFSU1_GAMEFLOW_STATE) != 3) menu_touch_cancel();
-    if (enabled && sample.prepare) {
-        /* Ensure hover is resolved even for a tap at (0,0), or a second tap
-         * at the same position after controller navigation changed focus. */
-        MEM32(feng + 0xC) = 0xFFFF8000u;
-        MEM32(feng + 0x10) = 0xFFFF8000u;
-    }
-    s_touch_buttons = enabled && sample.down ? 1 : 0;
-    s_touch_poll = enabled;
-    s_touch_prepare = sample.prepare;
-    if (sample.prepare || sample.reset) s_touch_target_count = 0;
-    MEM8(feng + 2) = enabled;
-    sub_000D8B10_gen();
-    MEM8(feng + 2) = mouse_enabled;
-    s_touch_poll = 0;
-    uint32_t garage = enabled ? touch_garage_screen() : 0;
-    if (sample.reset || !sample.active || garage != s_touch_camera_screen)
-        s_touch_camera_screen = 0;
-    if (enabled && sample.prepare) {
-        int control = 0;
-        for (unsigned i = 0; i < s_touch_target_count; i++)
-            if (s_touch_targets[i].target) control = 1;
-        s_touch_camera_screen = control ? 0 : garage;
-        s_touch_camera_start_x = s_touch_camera_x = sample.x;
-        s_touch_camera_start_y = s_touch_camera_y = sample.y;
-        s_touch_camera_moving = 0;
-    }
-    float camera_dx = 0, camera_dy = 0;
-    if (s_touch_camera_screen && sample.active && !sample.prepare) {
-        if (fabsf(sample.x - s_touch_camera_start_x) +
-            fabsf(sample.y - s_touch_camera_start_y) > 0.006f)
-            s_touch_camera_moving = 1;
-        if (s_touch_camera_moving) {
-            camera_dx = sample.x - s_touch_camera_x;
-            camera_dy = sample.y - s_touch_camera_y;
-        }
-        s_touch_camera_x = sample.x;
-        s_touch_camera_y = sample.y;
-    }
-    if (s_touch_camera_screen && (sample.down || s_touch_camera_moving))
-        touch_camera_orbit(camera_dx, camera_dy);
-    if (enabled && sample.prepare) {
-        unsigned count = 0;
-        for (uint32_t package = MEM32(feng + 0xE4); package && count++ < 8;
-             package = MEM32(package + 4)) {
-            uint32_t focus = MEM32(package + 0x80);
-            fprintf(stderr, "[touch] package=%08X flags=%08X selectable=%u focus=%08X\n",
-                    package, MEM32(package + 0x1C), MEM32(package + 0x88),
-                    focus ? MEM32(focus + 0x10) : 0);
-        }
-    }
+    feng_touch_update();
 #else
     sub_000D8B10_gen();
 #endif
 }
-
 void sub_000DB860(void)
 {
 #ifdef __ANDROID__
-    if (s_touch_poll && MEM32(esp) == 0x000D8B5Eu) {
-        uint32_t output = MEM32(esp + 4);
-        MEM16(output) = (uint16_t)s_touch_x;
-        MEM16(output + 2) = (uint16_t)s_touch_y;
-        MEM16(output + 4) = 0; /* wheel */
-        MEM16(output + 6) = (uint16_t)s_touch_buttons;
-        esp += 8; /* thiscall, ret 4 */
-        return;
-    }
-#endif
+    feng_touch_poll();
+#else
     sub_000DB860_gen();
+#endif
 }
 
 void sub_00018E40(void)
@@ -1265,17 +739,11 @@ extern void sub_000D9D00_gen(void);
 void sub_000D9D00(void)
 {
 #ifdef __ANDROID__
-    uint32_t previous = s_touch_draw_object;
-    s_touch_draw_object = MEM32(esp + 4);
-    if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_back_label(s_touch_draw_object) &&
-        MEM32(s_touch_draw_object + 0x5C) == 0x00169268u) {
-        MEM32(s_touch_draw_object + 0x5C) = 0x001335F0u; /* localized BACK */
-        MEM32(s_touch_draw_object + 0x1C) |= 0x02400000u; /* rebuild text cache */
-    }
+    uint32_t previous = feng_touch_draw_begin(MEM32(esp + 4));
 #endif
     sub_000D9D00_gen();
 #ifdef __ANDROID__
-    s_touch_draw_object = previous;
+    feng_touch_draw_end(previous);
 #endif
 }
 
@@ -1301,7 +769,7 @@ void sub_000DC090(void)
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
 #ifdef __ANDROID__
-    if (!previous) s_touch_bounds_count = 0;
+    if (!previous) feng_touch_frame_begin();
 #endif
     sub_000DC090_gen();
     s_feng_menu_draw = previous;
@@ -1317,22 +785,9 @@ void sub_000F8B80(void)
     unsigned count = 0;
 
 #ifdef __ANDROID__
-    if (s_feng_menu_draw && s_touch_draw_object) {
-        uint32_t entry = node;
-        unsigned visited = 0;
-        while (entry && entry != head && visited++ < 4096) {
-            for (unsigned i = 0; i < 4; i++) {
-                float x, y;
-                memcpy(&x, (void *)XBOX_PTR(entry + 0x20 + i * 16), 4);
-                memcpy(&y, (void *)XBOX_PTR(entry + 0x24 + i * 16), 4);
-                touch_bounds_add(s_touch_draw_object, x, y);
-            }
-            entry = MEM32(entry);
-        }
-        if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_help_icon(s_touch_draw_object)) {
-            esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
-            return;
-        }
+    if (s_feng_menu_draw && feng_touch_draw_cache(ecx)) {
+        esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
+        return;
     }
 #endif
     s_feng_shift = 0.0f;

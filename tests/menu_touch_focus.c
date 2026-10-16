@@ -20,7 +20,7 @@ static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
 static int palette_updates, palette_previews;
 static unsigned draw_mask = 3;
-static int keyboard_layout, stale_mouse_edge;
+static int keyboard_layout, stale_mouse_edge, carousel_layout;
 void sub_000D8B10(void);
 void sub_000D8730(void);
 void sub_000DB860(void);
@@ -65,6 +65,10 @@ static void draw_bounds(void)
                 x = (i ? 400.0f : 430.0f) + (j & 1) * 30.0f;
                 y = (i ? 275.0f : 240.0f) + (j / 2) * 25.0f;
             }
+            if (carousel_layout) {
+                x = 280.0f + i * 80.0f + (j & 1) * 40.0f;
+                y = 25.0f + (j / 2) * 40.0f;
+            }
             memcpy((void *)XBOX_PTR(node + 0x20 + j * 16), &x, 4);
             memcpy((void *)XBOX_PTR(node + 0x24 + j * 16), &y, 4);
         }
@@ -86,6 +90,14 @@ void sub_000C7A80(void)
     palette_previews++;
     g_esp += 8;
 }
+void sub_000DF160(void)
+{
+    assert(g_ecx == 0x2E000 && MEM32(g_esp + 4) == 0x2E200);
+    assert(MEM32(0x28048) == 0x2E200);
+    g_esp += 8;
+}
+void sub_000B8310(void) { assert(g_ecx == 0x28000); g_esp += 4; }
+void sub_000D1AD0(void) { assert(g_ecx == 0x28000); g_esp += 4; }
 void sub_000DE540(void)
 {
     assert(g_ecx == 0x28000);
@@ -429,5 +441,236 @@ int main(void)
     menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
     menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 2); /* Back drag does not swipe */
+    /* A visible native Back caption works without the obsolete Help icon,
+     * including finger tolerance just outside its glyph bounds. */
+    draw_mask = 1; draw_bounds();
+    before_actions = controller_selects;
+    tap(.3f, yes);
+    tap(.18f, yes);
+    assert(controller_selects == before_actions + 2);
+
+    /* Numbered option arrows dispatch to their own row, even when another
+     * row is focused. They need no mouse scripts or selectable arrow. */
+    uint32_t option = 0x23000;
+    MEM32(option + 0x10) = 0x1AEC7D0A; /* OptionName_2 */
+    MEM32(0x22000) = option;
+    MEM32(package + 0x88) = 1;
+    MEM32(package + 0x80) = no;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 1;
+    MEM32(yes + 0x10) = 0x2DD56A46; /* LeftArrow_2 */
+    MEM32(no + 0x10) = 0x1E558BB9; /* RightArrow_2 */
+    draw_mask = 3; draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0x9120409E; tap(.3f, option);
+    expected_message = 0xB5971BF1; tap(.7f, option);
+    assert(controller_selects == before_actions + 2);
+    MEM32(option + 0x1C) = 0x04000000;
+    tap(.7f, option);
+    assert(controller_selects == before_actions + 2);
+    MEM32(option + 0x1C) = 0;
+    draw_mask = 1; draw_bounds(); tap(.7f, option);
+    assert(controller_selects == before_actions + 2);
+
+    /* Underground's event scroller owns a separate cursor and ignores
+     * FEng focus. Select must use the touched event, not the previous one. */
+    MEM32(package + 0x88) = 0;
+    MEM32(screen) = 0x1FC12C;
+    uint32_t list = 0x2E000, event = 0x2E100;
+    MEM32(screen + 0x3C) = list;
+    MEM32(list + 4) = event;
+    MEM32(event) = list + 4;
+    MEM32(event + 8) = 0x2E200;
+    MEM32(event + 0xC) = yes;
+    expected_message = 0x406415E3;
+    before_actions = controller_selects;
+    tap(.3f, yes);
+    tap(.7f, no);
+    assert(MEM32(screen + 0x48) == 0x2E200);
+    assert(controller_selects == before_actions + 1);
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720); update(); update();
+    MEM32(list + 4) = list + 4; /* event removed while finger is held */
+    menu_touch_event(MENU_TOUCH_UP, .3f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 1);
+
+    /* Controller-layout arrows address the layout field, not the arrow. */
+    MEM32(screen) = 0x1FDBC8;
+    MEM32(yes + 0x10) = 0x543398D3; /* Select_arrow_left */
+    MEM32(no + 0x10) = 0xEBFB7CC5; /* native layout data field */
+    draw_mask = 3; draw_bounds();
+    expected_message = 0x9120409E;
+    before_actions = controller_selects;
+    tap(.3f, no);
+    assert(controller_selects == before_actions + 1);
+    MEM32(yes + 0x10) = 0xDB157AC6;
+    draw_bounds();
+    expected_message = 0xB5971BF1;
+    tap(.3f, no);
+    assert(controller_selects == before_actions + 2);
+    /* Quick Race reuses the same camera and rendered-arrow policies as
+     * Customize, with its own native screen controller and selected row. */
+    MEM32(screen) = 0x1FB8F4;
+    MEM32(yes + 0x10) = 0x543398D3;
+    MEM32(no + 0x10) = 0xDB157AC6;
+    draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0x9120409E; tap(.3f, yes);
+    expected_message = 0xB5971BF1; tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2); /* car-arrow drag cancels */
+    memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .07f, .5f, 1280, 720); update();
+    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+    assert(fabsf(after - yaw - 3.6f) < .001f);
+    update();
+    memcpy(&stationary, (void *)XBOX_PTR(0x2C044), 4);
+    assert(stationary == after);
+    menu_touch_cancel(); update();
+    MEM32(screen + 0x58) = 0x2E400;
+    MEM32(0x2E40C) = no;
+    MEM32(no + 0x10) = 0x12345678; /* selected car's rendered name */
+    draw_bounds();
+    expected_message = 0x406415E3;
+    tap(.7f, no);
+    assert(controller_selects == before_actions + 3);
+    /* MainMenuCarCustomize has a controller outside the tuning range,
+     * but constructs the horizontal browser at +48 (selected node +54). */
+    MEM32(screen) = 0x1FC1AC;
+    MEM32(0x1FC1AC + 4) = 0xB9D70;
+    MEM32(screen + 0x48) = 0x1FF870;
+    MEM32(screen + 0x54) = 0x2E400;
+    MEM32(yes + 0x10) = 0x543398D3;
+    MEM32(no + 0x10) = 0xDB157AC6;
+    draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0x9120409E; tap(.3f, yes);
+    expected_message = 0xB5971BF1; tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    MEM32(no + 0x10) = 0x12345678; /* selected carousel object */
+    draw_bounds();
+    expected_message = 0x0C407210; tap(.7f, no);
+    assert(controller_selects == before_actions + 3);
+    expected = no;
+    expected_message = 0xB5971BF1;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .6f, .5f, 1280, 720); update();
+    assert(controller_selects == before_actions + 3);
+    menu_touch_event(MENU_TOUCH_UP, .6f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 4);
+    expected_message = 0x9120409E;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .8f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 5);
+    memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .07f, .5f, 1280, 720); update();
+    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+    assert(fabsf(after - yaw - 3.6f) < .001f);
+    update();
+    memcpy(&stationary, (void *)XBOX_PTR(0x2C044), 4);
+    assert(stationary == after);
+    assert(controller_selects == before_actions + 5);
+    menu_touch_cancel(); update();
+    /* Gaps beside small carousel logos capture immediately, with no hold.
+     * Include the top edge, above the logo and its former 16-pixel margin.
+     * A tap in a gap does nothing; its swipe cannot orbit the camera. */
+    for (unsigned browser = 0; browser < 2; browser++) {
+        MEM32(screen) = browser ? 0x1FC384 : 0x1FC1AC;
+        MEM32(0x1FC384 + 4) = 0xEEB80; /* Underground garage controller */
+        carousel_layout = 1; draw_bounds();
+        before_actions = controller_selects;
+        tap(.1f, no);
+        assert(controller_selects == before_actions);
+        memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+        expected = no; expected_message = 0xB5971BF1;
+        menu_touch_event(MENU_TOUCH_DOWN, .2f, .001f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .1f, .001f, 1280, 720); update();
+        memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+        assert(after == yaw);
+        menu_touch_event(MENU_TOUCH_UP, .1f, .001f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 1);
+        menu_touch_event(MENU_TOUCH_DOWN, .1f, .001f, 1280, 720);
+        menu_touch_event(MENU_TOUCH_UP, .1f, .001f, 1280, 720);
+        update(); update(); update(); update();
+        assert(controller_selects == before_actions + 1);
+        expected_message = 0x9120409E;
+        menu_touch_event(MENU_TOUCH_DOWN, .1f, .001f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_UP, .2f, .001f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 2);
+        memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+        assert(after == yaw);
+        /* The car area below the strip still rotates normally. */
+        menu_touch_event(MENU_TOUCH_DOWN, .1f, .5f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .12f, .5f, 1280, 720); update();
+        memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+        assert(fabsf(after - yaw - 3.6f) < .001f);
+        /* Crossing into the panel freezes orbit, including pitch, and does not
+         * hand the ongoing gesture to the carousel. Re-entry has no delta jump. */
+        float panel_pitch = MEMF(0x2C040), panel_yaw = MEMF(0x2C044);
+        menu_touch_event(MENU_TOUCH_MOVE, .3f, .001f, 1280, 720); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .5f, .001f, 1280, 720); update();
+        assert(MEMF(0x2C040) == panel_pitch && MEMF(0x2C044) == panel_yaw);
+        assert(controller_selects == before_actions + 2);
+        menu_touch_event(MENU_TOUCH_MOVE, .5f, .5f, 1280, 720); update();
+        assert(MEMF(0x2C040) == panel_pitch && MEMF(0x2C044) == panel_yaw);
+        menu_touch_event(MENU_TOUCH_MOVE, .52f, .5f, 1280, 720); update();
+        assert(fabsf(MEMF(0x2C044) - panel_yaw - 3.6f) < .001f);
+        menu_touch_cancel(); update();
+        carousel_layout = 0; draw_bounds();
+    }
+    /* Vertical base arrows: native Up/Down, release only, hidden/disabled
+     * geometry and dragged gestures cannot scroll. */
+    MEM32(screen) = 0x1FC384;
+    MEM32(screen + 0x24) = MEM32(screen + 0x28) = 0;
+    MEM32(0x1FC384 + 4) = 0;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    MEM32(screen + 0x2C) = yes;
+    MEM32(screen + 0x30) = no;
+    MEM32(yes + 0x10) = 0xAA68BFD7;
+    MEM32(no + 0x10) = 0xAA68BFC6;
+    MEM32(package + 0x88) = 0;
+    draw_mask = 3; draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0x72619778; expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .5f, 1280, 720); update(); update(); update();
+    assert(controller_selects == before_actions);
+    menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 1);
+    expected_message = 0x911C0A4B; tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    draw_mask = 1; draw_bounds(); tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    draw_mask = 3; draw_bounds();
+    MEM32(no + 0x1C) |= 0x04000000; tap(.7f, no);
+    MEM32(no + 0x1C) &= ~0x04000000u;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .7f, .7f, 1280, 720); update();
+    menu_touch_event(MENU_TOUCH_UP, .7f, .7f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2);
+    /* Autopress is visible slot 3 on page 8; old Option cursor is 6. */
+    MEM32(screen) = 0x1FEA8C;
+    MEM32(screen + 0x2C) = MEM32(screen + 0x30) = 0;
+    MEM32(screen + 0x40) = 8; MEM32(screen + 0x48) = 23;
+    MEM32(screen + 0x3C) = 6;
+    MEM32(yes + 0x10) = 0xF1E6EA3A; /* cover slot 3 */
+    MEM32(no + 0x10) = 0xF1E6EA3D; /* cover slot 6 */
+    draw_bounds(); before_actions = controller_selects;
+    expected_message = 0x406415E3;
+    tap(.3f, yes);
+    assert(MEM32(screen + 0x3C) == 3);
+    assert(controller_selects == before_actions + 1);
+    tap(.7f, no);
+    assert(MEM32(screen + 0x3C) == 6);
+    assert(controller_selects == before_actions + 2);
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .5f, 1280, 720); update(); update();
+    MEM32(screen + 0x40) = 10; /* scrolled while held: do not open a new item */
+    menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2);
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }
