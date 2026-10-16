@@ -538,6 +538,67 @@ int main(void)
     expected_message = 0x406415E3;
     tap(.7f, no);
     assert(controller_selects == before_actions + 3);
+    /* SELECT LOCATION has a separate controller and no preview camera.
+     * Its native browser lives at +48, selected node at +54. */
+    MEM32(screen) = 0x1FB848;
+    MEM32(0x1FB848 + 4) = 0xB1880;
+    MEM32(screen + 0x48) = 0x1FF870;
+    MEM32(screen + 0x54) = 0x2E400;
+    MEM32(0x2E40C) = no;
+    MEM32(yes + 0x10) = 0x543398D3;
+    MEM32(no + 0x10) = 0xDB157AC6;
+    draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0x9120409E; tap(.3f, yes);
+    expected_message = 0xB5971BF1; tap(.7f, no);
+    assert(controller_selects == before_actions + 2);
+    MEM32(no + 0x10) = 0x12345678; /* selected track thumbnail */
+    draw_bounds();
+    expected_message = 0x406415E3; tap(.7f, no);
+    assert(controller_selects == before_actions + 3);
+    /* The location caption also accepts Select, independently of thumbnail. */
+    MEM32(yes + 0x10) = 0x03C8F634;
+    draw_bounds();
+    expected_message = 0x406415E3; tap(.3f, yes);
+    assert(controller_selects == before_actions + 4);
+    /* Swipe either way is release-only; a stationary gap tap is inert. */
+    carousel_layout = 1; draw_bounds();
+    expected = no;
+    expected_message = 0xB5971BF1;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .6f, .08f, 1280, 720); update();
+    assert(controller_selects == before_actions + 4);
+    menu_touch_event(MENU_TOUCH_UP, .6f, .08f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 5);
+    expected_message = 0x9120409E;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .8f, .08f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 6);
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .7f, .08f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 6);
+    /* An empty map drag must not rotate a hidden garage camera. */
+    memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, .1f, .5f, 1280, 720); update();
+    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+    assert(after == yaw);
+    menu_touch_cancel(); update();
+    carousel_layout = 0; draw_bounds();
+    /* Back also dispatches on this screen, even with no selectable rows. */
+    MEM32(package + 0x88) = 0;
+    MEM32(yes + 0x18) = 2;
+    MEM32(yes + 0x5C) = 0x001335F0;
+    expected_message = 0x911AB364; tap(.3f, yes);
+    assert(controller_selects == before_actions + 7);
+    MEM32(yes + 0x18) = MEM32(yes + 0x5C) = 0;
+    MEM32(package + 0x88) = 2;
+    /* Leaving this typed screen while a thumbnail is held cancels Select. */
+    expected = no;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+    MEM32(screen) = 0x1FC384;
+    menu_touch_event(MENU_TOUCH_UP, .7f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 7);
     /* MainMenuCarCustomize has a controller outside the tuning range,
      * but constructs the horizontal browser at +48 (selected node +54). */
     MEM32(screen) = 0x1FC1AC;

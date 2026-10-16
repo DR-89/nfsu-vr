@@ -16,6 +16,7 @@ import org.libsdl.app.SDLActivity;
 
 /** SDL hosts the game, controller input and audio on Android. */
 public final class GameActivity extends SDLActivity {
+    private RaceControlsView raceControls;
     // Activity is the sole owner of system bars. SDL owns the surface/events.
     private final Runnable fullscreen = new Runnable() {
         @Override
@@ -44,19 +45,31 @@ public final class GameActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        raceControls = new RaceControlsView(this);
+        mLayout.addView(raceControls, new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT));
         restoreFullscreen();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (raceControls != null) raceControls.resumeControls();
         restoreFullscreen();
+    }
+
+    @Override
+    protected void onPause() {
+        if (raceControls != null) raceControls.pauseControls();
+        super.onPause();
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) restoreFullscreen();
+        else if (raceControls != null) raceControls.cancelInput();
     }
 
     private static native void nativeSurfaceChanged(Surface surface, int width, int height);

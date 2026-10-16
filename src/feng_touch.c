@@ -303,6 +303,16 @@ static uint32_t touch_preview_screen(void)
     }
     return 0;
 }
+/* Track selection owns a horizontal browser but no 3D preview camera.
+ * B1630 constructs QRTrackSelectScreen (1FB848), browser +48 and selected
+ * node +54. Keep it out of touch_preview_screen so map drags cannot orbit. */
+static uint32_t touch_carousel_screen(void)
+{
+    uint32_t screen = touch_active_screen();
+    if (screen && MEM32(screen) == 0x001FB848u) return screen;
+    return touch_preview_screen();
+}
+
 /* Only native layout details differ between car and tuning carousels.
  * Capture, arrow lookup, release dispatch and gesture policy are shared. */
 typedef struct {
@@ -313,7 +323,18 @@ typedef struct {
 
 static int touch_carousel_binding(uint32_t screen, TouchCarousel *binding)
 {
-    if (screen != touch_preview_screen() || MEM32(screen) == 0x001FDD74u) return 0;
+    if (screen != touch_carousel_screen() || MEM32(screen) == 0x001FDD74u) return 0;
+    if (MEM32(screen) == 0x001FB848u) {
+        /* B0840 updates the visible location name (03C8F634); B1880
+         * accepts Select, and B0CE0 performs native Left/Right selection. */
+        *binding = (TouchCarousel){
+            .selected_node = MEM32(screen + 0x54),
+            .activate_message = 0x406415E3u,
+            .label_hashes = { 0x03C8F634u, 0 },
+            .allow_swipe = 1
+        };
+        return 1;
+    }
     if (MEM32(screen) == 0x001FB8F4u) {
         *binding = (TouchCarousel){
             .selected_node = MEM32(screen + 0x58),
@@ -539,7 +560,8 @@ void feng_touch_dispatch(void)
                     message = dx > 0 ? 0x9120409Eu : 0xB5971BF1u;
                 else if (target->swipe_only || target->travel >= 12) fire = 0; /* moved, not a tap */
                 uint32_t current_screen = (target->back || target->screen_control) ?
-                    touch_active_screen() : touch_preview_screen();
+                    touch_active_screen() :
+                    target->carousel ? touch_carousel_screen() : touch_preview_screen();
                 if (target->screen != current_screen) fire = 0;
                 target->fired = 1;
             }

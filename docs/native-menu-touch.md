@@ -343,3 +343,28 @@ share full-width swipe capture and the per-sample camera boundary with the
 main-menu browser. The same gap/swipe/camera-crossing regression runs for both
 bindings. Quick Race retains its existing arrow-drag policy. Device comparison
 of both entry paths and APK assembly remain pending.
+
+## Quick Race: Select Location
+
+The location carousel has a separate typed controller, QRTrackSelectScreen
+(vtable `0x1FB848`, constructor `0xB1630`, message handler `0xB1880`). Its
+horizontal browser is constructed by `0xDF700` at screen `+0x48`, with the
+selected node at `+0x54`. `0xB0840` updates the location-name object hash
+`0x03C8F634`; `0xB0CE0` handles Left/Right and refreshes the selected route.
+The previous carousel binding required a car-preview screen and excluded it.
+
+A separate carousel-screen resolver now recognizes this controller without
+enabling garage camera orbit. Visible arrows send native Left/Right; the
+selected thumbnail and location caption send native Select. Horizontal swipes
+in the rendered header strip change location on release. Empty strip taps do
+not select, and map drags cannot rotate a hidden preview camera. Back keeps the
+shared native Cancel path. Gesture release checks that the same typed screen
+is still active.
+
+The synthetic regression fails on the prior feng_touch.c at the location-arrow
+assertion and passes with the fix. It covers both arrows, thumbnail/caption
+activation, both swipe directions, empty strip taps, Back without selectable
+rows, screen changes during a held tap and no hidden-camera rotation. The full
+existing native-menu regression and host queue/mapping tests also pass. Android
+ARM64 syntax validation passes. A rebuilt APK and physical-device verification
+remain pending; the earlier Gradle cache escalation was declined.
