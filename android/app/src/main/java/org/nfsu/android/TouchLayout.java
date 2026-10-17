@@ -16,7 +16,7 @@ final class TouchLayout {
     static final float MIN_SIZE = 0.5f, MAX_SIZE = 2.0f;
     static final String[] IDS = {
         "menu", "gas", "brake", "handbrake", "shift-up", "shift-down",
-        "nitro", "left", "right"
+        "nitro", "left", "right", "camera"
     };
     private final float[] sizes = new float[IDS.length];
     private final float[] x = new float[IDS.length];
@@ -83,7 +83,7 @@ final class TouchLayout {
             TouchLayout layout = new TouchLayout();
             boolean[] seen = new boolean[IDS.length];
             NodeList buttons = root.getElementsByTagName("button");
-            if (buttons.getLength() != IDS.length) throw new IOException("Missing buttons");
+            if (buttons.getLength() < 9 || buttons.getLength() > IDS.length) throw new IOException("Missing buttons");
             for (int n = 0; n < buttons.getLength(); n++) {
                 Element button = (Element) buttons.item(n);
                 int index = -1;
@@ -98,6 +98,11 @@ final class TouchLayout {
                     layout.setPosition(index, Float.parseFloat(button.getAttribute("x")),
                             Float.parseFloat(button.getAttribute("y")));
                 }
+            }
+            // Version 1 predates the camera button. Require the original nine;
+            // older layouts get the new camera button at its default position.
+            for (int i = 0; i < 9; i++) {
+                if (!seen[i]) throw new IOException("Missing button: " + IDS[i]);
             }
             return layout;
         } catch (IOException exception) {

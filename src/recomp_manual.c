@@ -1180,6 +1180,38 @@ void sub_000C2A70(void)
 #ifdef __ANDROID__
 extern void sub_000C2B80_gen(void);
 #include "race_touch.h"
+/* Retail scanners return native JOY_EVENT transitions and handle release/state
+ * themselves. Supply a pressed sample only to the registered lookback/skip
+ * scanner; restore the raw controller data before any other action reads it.
+ * This avoids guessing an Xbox button or coupling the gesture to a layout. */
+extern void sub_00131050_gen(void);
+extern void sub_00130A70_gen(void);
+static void race_hold_scanner(void (*original)(void), int analog)
+{
+    uint32_t binding = MEM32(esp + 16), raw = MEM32(esp + 8);
+    uint32_t event = MEM32(binding + 8);
+    /* AB is JOY_EVENT_START: its race handlers open pause. Never synthesize
+     * it for a hold, including while a pre-race scene is playing. */
+    if (!race_touch_hold_active() ||
+        (analog ? event != 0x76u : event != 0xACu)) {
+        original();
+        return;
+    }
+    unsigned bit = MEM8(binding + 0x12);
+    if (bit > 120) { original(); return; }
+    uint32_t address = raw + bit / 8;
+    unsigned shift = bit % 8;
+    uint16_t saved = MEM16(address);
+    uint16_t mask = (analog ? 255u : 1u) << shift;
+    /* +10 is the scanner's inversion flag. */
+    unsigned value = analog ? (255u ^ MEM8(binding + 0x10)) : !MEM8(binding + 0x10);
+    MEM16(address) = (saved & ~mask) | ((value << shift) & mask);
+    original();
+    MEM16(address) = saved;
+}
+void sub_00131050(void) { race_hold_scanner(sub_00131050_gen, 1); }
+void sub_00130A70(void) { race_hold_scanner(sub_00130A70_gen, 0); }
+
 #define SENSOR_HANDLER_VA (ROW_HANDLER_VA + 7u)
 /* Retail FEng: DC340 finds an object, DC220 toggles its selectable state,
  * and DCD30 changes its color (including native cache invalidation). BF958
@@ -1250,6 +1282,29 @@ static void controller_touch_text(uint32_t screen)
     native_option_row_enabled(&s_controller_touch_rows[0], screen, 5, mode.sensor_editable);
     native_option_row_enabled(&s_controller_touch_rows[1], screen, 6, mode.overlay_editable);
 }
+/* Both Controller menus open the same Android editor through one request. */
+static void bind_touch_layout_row(uint32_t screen, unsigned row, unsigned callback_offset)
+{
+    char name[32];
+    MEM32(screen + callback_offset) = SENSOR_HANDLER_VA + 2;
+    snprintf(name, sizeof(name), "OptionName_%u", row);
+    fe_set_text(screen, name, "TOUCH CONTROL LAYOUT");
+    snprintf(name, sizeof(name), "OptionData_%u", row);
+    fe_set_text(screen, name, "");
+}
+
+extern void sub_000B5B00_gen(void);
+extern void sub_000B5390(void);
+void sub_000B5B00(void)
+{
+    uint32_t screen = ecx;
+    sub_000B5B00_gen(); /* Pause Controller: retain row one, Vibration. */
+    if (!input_mode_sensor_enabled()) return;
+    PUSH32(esp, 0); PUSH32(esp, 2);
+    ecx = screen; PUSH32(esp, 0); sub_000B5390(); /* native row, no arrows */
+    bind_touch_layout_row(screen, 2, 0x48);
+}
+
 void sub_000C2B80(void)
 {
     uint32_t screen = ecx;
@@ -1264,8 +1319,7 @@ void sub_000C2B80(void)
     }
     PUSH32(esp, 1); PUSH32(esp, 0); PUSH32(esp, 7);
     ecx = screen; PUSH32(esp, 0); sub_000C1D30();
-    MEM32(screen + 0x54) = SENSOR_HANDLER_VA + 2;
-    fe_set_text(screen, "OptionName_7", "TOUCH CONTROL LAYOUT");
+    bind_touch_layout_row(screen, 7, 0x54);
     controller_touch_text(screen);
 }
 static void touch_layout_input(void)
@@ -1546,6 +1600,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
 #ifdef __ANDROID__
     if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
+    if (xbox_va == 0x00131050u) return sub_00131050;
+    if (xbox_va == 0x00130A70u) return sub_00130A70;
+    if (xbox_va == 0x000B5B00u) return sub_000B5B00;
     if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
     if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;
     if (xbox_va == SENSOR_HANDLER_VA + 2) return touch_layout_input;

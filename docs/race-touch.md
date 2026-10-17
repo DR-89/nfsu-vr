@@ -194,3 +194,73 @@ Host checks cover XML/size round trips, invalid XML, legacy files, unsafe names,
 library sorting, duplicate backup entries and discovery of recoverable backups.
 Actual Android AtomicFile writes, document-provider import/export, picker
 cancellation and background/recreation behavior still require device validation.
+
+
+### Hold free screen space: skip intro / look back
+
+With SENSOR MODE enabled, hold an area outside the visible racing buttons for
+500 ms. Only the retail SKIP event (`AC`) receives the synthetic press; in the race,
+the camera receives lookback until that pointer is released. Other fingers can
+continue using pedals or steering. Moving beyond Android's touch slop before
+500 ms rejects the hold and keeps ownership until release, so that drag cannot
+accidentally press a pedal. Recognized holds allow finger movement until release.
+
+This gesture works with RACE BUTTON OVERLAY hidden. It is disabled in race menus,
+front-end/loading states, and the layout editor. Pause, focus loss, touch cancel,
+SENSOR MODE changes and editor entry clear it.
+
+`ScreenHoldGesture` owns pointer recognition. `race_touch` publishes a separate
+held state, independent of the nine-button overlay. Android input polling gates
+it by sensor mode, game flow 6 and FEng race-menu state. The retail scanner
+wrappers (`131050` for CAMERA_LOOKBACK event `76`, `130A70` for the skip event `AC`) provide a pressed sample only for that action and
+restore the original raw controller bytes before any other scanner can read
+them. The original scanners retain transition/release processing and original
+callbacks decide whether skipping is allowed. No Start/pause event is synthesized.
+
+Host checks cover gesture ownership, rejected movement, cancellation, held
+movement, editor/mode gating, scanner argument/return ABI, unchanged unrelated
+actions and raw sample restoration. Actual pre-race skipping and camera behavior
+require validation in the game on an Android device.
+
+
+Hold regression: event `AB` is JOY_EVENT_START, whose race callbacks open the
+pause menu even before the start. It must never be synthesized for this gesture.
+The scanner regression verifies both that an untouched Start sample remains
+released and that a real physical Start press passes through. Only `76`
+(CAMERA_LOOKBACK) and `AC` (SKIP) are eligible for synthesized samples.
+
+
+### Camera button
+
+The camera icon at the upper right cycles the driving view through the retail
+White-button input (SDL right shoulder). Like other overlay buttons, it supports
+short taps, moving, resizing and named presets. Older nine-button XML layouts
+load unchanged and receive the camera button at its default position and size.
+
+
+### Overlay icons without backgrounds
+
+Racing controls draw only translucent white glyphs and captions, with no panel,
+outline rectangle or footer decoration. Pressed controls and the selected editor
+control gain a cyan glow around the glyph silhouette. The shared Paint resets
+its shadow between controls and after drawing. Original touch rectangles,
+positions, sizes and presets are unchanged; invisible hit areas remain generous.
+
+
+Shift up/down now use compact mirrored paddle outlines with + / − glyphs in
+place of SHIFT captions. Both share one vector drawing helper and the existing
+pressed glow. Their bindings, hit areas, editor scaling and preset IDs stay the
+same, so existing layouts retain their placement.
+
+
+### Editing from the pause menu
+
+In SENSOR MODE, racing Menu → Controller adds **TOUCH CONTROL LAYOUT** as the
+second row, beneath the existing Vibration setting. The retail pause Controller
+setup (`B5B00`) creates its row with the native pause-options helper (`B5390`)
+and binds it to the same editor request used by front-end Controller settings.
+The game stays paused; saving/cancelling returns to the same Controller page.
+Controller mode without SENSOR MODE retains its original Vibration-only menu.
+Host checks cover the row helper ABI, preserved Vibration callback, shared editor
+callback and absence of the extra row with SENSOR MODE disabled. Actual pause
+menu opening/return still requires device verification.

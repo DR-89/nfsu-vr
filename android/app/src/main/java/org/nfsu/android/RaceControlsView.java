@@ -13,11 +13,14 @@ import android.view.View;
 
 /** Racing HUD and multi-pointer input. Empty screen space belongs to SDL. */
 final class RaceControlsView extends View {
+    private static final float GAS_ICON_WIDTH = 23;
+    private static final float GAS_ICON_HEIGHT = 65;
+    private static final float PEDAL_ICON_TOP = 15;
+    private static final float GAS_TOUCH_PADDING = 14;
     private static final String[] LABELS = {
-        "MENU", "GAS", "BRAKE", "", "SHIFT +", "SHIFT -", "", "", ""
+        "MENU", "GAS", "BRAKE", "", "", "", "", "", "", ""
     };
     private final RectF[] bounds = new RectF[LABELS.length];
-    private final Path[] panels = new Path[LABELS.length];
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path symbol = new Path();
     private final SparseIntArray pointers = new SparseIntArray();
@@ -74,6 +77,16 @@ final class RaceControlsView extends View {
         if (selectionChanged != null) selectionChanged.run();
     }
 
+    private boolean holdEnabled;
+    private final ScreenHoldGesture screenHold = new ScreenHoldGesture();
+    private static native boolean nativeHoldEnabled();
+    private static native void nativeSetHold(boolean down);
+    private final Runnable activateHold = new Runnable() {
+        @Override public void run() {
+            if (resumed && holdEnabled && !editing && screenHold.activate()) nativeSetHold(true);
+        }
+    };
+
     private boolean racing;
     private boolean resumed;
     private int held;
@@ -87,6 +100,9 @@ final class RaceControlsView extends View {
         @Override public void run() {
             if (!resumed) return;
             if (nativeTakeEditorRequest() && !editing && editorRequest != null) editorRequest.run();
+            boolean canHold = nativeHoldEnabled();
+            if (holdEnabled && !canHold) cancelInput();
+            holdEnabled = canHold;
             boolean visible = nativeVisible();
             if (visible != racing) {
                 cancelInput();
@@ -102,7 +118,6 @@ final class RaceControlsView extends View {
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         for (int i = 0; i < bounds.length; i++) {
             bounds[i] = new RectF();
-            panels[i] = new Path();
         }
     }
 
@@ -121,6 +136,9 @@ final class RaceControlsView extends View {
     }
 
     void cancelInput() {
+        removeCallbacks(activateHold);
+        screenHold.cancel();
+        nativeSetHold(false);
         pointers.clear();
         held = 0;
         nativeCancel();
@@ -135,16 +153,7 @@ final class RaceControlsView extends View {
     private void panel(int index, float x, float y, float width, float height) {
         RectF r = bounds[index];
         r.set(x, y, x + width, y + height);
-        float cut = 10 * scale;
-        Path p = panels[index];
-        p.reset();
-        p.moveTo(r.left + cut, r.top);
-        p.lineTo(r.right, r.top);
-        p.lineTo(r.right, r.bottom - cut);
-        p.lineTo(r.right - cut, r.bottom);
-        p.lineTo(r.left, r.bottom);
-        p.lineTo(r.left, r.top + cut);
-        p.close();
+
     }
 
     @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
@@ -160,6 +169,7 @@ final class RaceControlsView extends View {
         float edge = 18 * s;
         float bottom = h - edge;
         panel(0, edge, edge, 108*s, 38*s);
+        panel(9, w - edge - 64*s, edge, 64*s, 50*s);
         panel(7, edge, bottom - 78*s, 86*s, 78*s);
         panel(8, edge + 98*s, bottom - 78*s, 86*s, 78*s);
         panel(5, edge, bottom - 140*s, 86*s, 50*s);
@@ -196,21 +206,18 @@ final class RaceControlsView extends View {
             float s = scale;
             RectF r = bounds[i];
             boolean down = (held & (1 << i)) != 0 || (editing && selectedButton == i);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(down ? 0xC0357188 : 0x88102F40);
-            canvas.drawPath(panels[i], paint);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(down ? 0xEE58E5EB : 0xBB009AA9);
-            canvas.drawRect(r.left + 7*s, r.bottom - 8*s,
-                    r.left + 24*s, r.bottom - 4*s, paint);
-            paint.setColor(down ? Color.WHITE : 0xDDB6DCEE);
+            prepareIconPaint(down);
             paint.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD_ITALIC));
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTextSize(15 * s);
-            if (i == 3) {
+            if (i == 9) {
+                drawCamera(canvas, r);
+            } else if (i == 3) {
                 drawHandbrake(canvas, r);
             } else if (i == 6) {
                 drawNitro(canvas, r);
+            } else if (i == 4 || i == 5) {
+                drawShiftPaddle(canvas, r, i == 4);
             } else if (i == 7 || i == 8) {
                 float x = r.centerX();
                 float y = r.centerY();
@@ -225,9 +232,9 @@ final class RaceControlsView extends View {
                 symbol.close();
                 canvas.drawPath(symbol, paint);
             } else if (i == 1 || i == 2) {
-                float top = r.top + 15*s;
-                float pedalWidth = (i == 1 ? 23 : 38)*s;
-                float pedalHeight = (i == 1 ? 65 : 30)*s;
+                float top = r.top + PEDAL_ICON_TOP*s;
+                float pedalWidth = (i == 1 ? GAS_ICON_WIDTH : 38)*s;
+                float pedalHeight = (i == 1 ? GAS_ICON_HEIGHT : 30)*s;
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(3*s);
                 canvas.drawRoundRect(r.centerX() - pedalWidth/2, top,
@@ -238,13 +245,75 @@ final class RaceControlsView extends View {
                             r.centerX() + pedalWidth/2 - 4*s, y, paint);
                 }
                 paint.setStyle(Paint.Style.FILL);
-                canvas.drawText(LABELS[i], r.centerX(), r.bottom - 17*s, paint);
             } else {
                 canvas.drawText(LABELS[i], r.centerX(),
                         r.centerY() - (paint.ascent() + paint.descent())/2, paint);
             }
         }
+        paint.clearShadowLayer();
         scale = originalScale;
+    }
+
+    /** Highlight the glyph silhouette, never the rectangular touch target. */
+    private void prepareIconPaint(boolean down) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(down ? Color.WHITE : 0xBFFFFFFF);
+        paint.clearShadowLayer();
+        if (down) paint.setShadowLayer(5 * scale, 0, 0, 0xEE50D9F2);
+    }
+
+    /** Compact mirrored paddles share one silhouette; the sign names the action. */
+    private void drawShiftPaddle(Canvas canvas, RectF bounds, boolean shiftUp) {
+        canvas.save();
+        canvas.translate(bounds.centerX(), bounds.centerY());
+        canvas.scale(scale, scale);
+        canvas.translate(shiftUp ? -5 : 5, 0);
+        canvas.scale(shiftUp ? -1 : 1, 1);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2.5f);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        symbol.reset();
+        symbol.moveTo(0, -20);
+        symbol.cubicTo(-9, -20, -21, -7, -21, 3);
+        symbol.quadTo(-21, 9, -15, 13);
+        symbol.lineTo(-8, 18);
+        symbol.quadTo(-6, 20, -3, 20);
+        symbol.lineTo(2, 20);
+        symbol.quadTo(5, 20, 5, 17);
+        symbol.lineTo(5, 12);
+        symbol.quadTo(5, 9, 1, 6);
+        symbol.quadTo(-5, 2, -1, -5);
+        symbol.lineTo(5, -14);
+        symbol.quadTo(8, -20, 0, -20);
+        symbol.close();
+        canvas.drawPath(symbol, paint);
+        // Symbols remain clear at the original 86 x 50 logical touch size.
+        canvas.drawLine(-11, -6, -1, -6, paint);
+        if (shiftUp) canvas.drawLine(-6, -11, -6, -1, paint);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setStrokeJoin(Paint.Join.MITER);
+        paint.setStrokeCap(Paint.Cap.BUTT);
+        canvas.restore();
+    }
+
+    private void drawCamera(Canvas canvas, RectF bounds) {
+        canvas.save();
+        canvas.translate(bounds.centerX(), bounds.centerY());
+        canvas.scale(scale, scale);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2.5f);
+        canvas.drawRoundRect(-20, -11, 20, 13, 3, 3, paint);
+        canvas.drawCircle(0, 1, 7, paint);
+        symbol.reset();
+        symbol.moveTo(-10, -11);
+        symbol.lineTo(-6, -17);
+        symbol.lineTo(6, -17);
+        symbol.lineTo(10, -11);
+        canvas.drawPath(symbol, paint);
+        paint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(14, -5, 2, paint);
+        canvas.restore();
     }
 
     /** Raised lever and console base, following the supplied handbrake symbol. */
@@ -327,7 +396,18 @@ final class RaceControlsView extends View {
 
     private int hit(float x, float y) {
         for (int i = 0; i < bounds.length; i++) {
-            if (bounds[i].contains(x, y)) return i;
+            RectF r = bounds[i];
+            if (!r.contains(x, y)) continue;
+            if (i == 1) {
+                // The old panel included space for a caption. Match the pedal
+                // silhouette now, keeping finger tolerance and custom scaling.
+                float s = scale * layout.getSize(i);
+                float halfWidth = (GAS_ICON_WIDTH/2 + GAS_TOUCH_PADDING)*s;
+                float top = r.top + (PEDAL_ICON_TOP - GAS_TOUCH_PADDING)*s;
+                float bottom = r.top + (PEDAL_ICON_TOP + GAS_ICON_HEIGHT + GAS_TOUCH_PADDING)*s;
+                if (Math.abs(x - r.centerX()) > halfWidth || y < top || y > bottom) continue;
+            }
+            return i;
         }
         return -1;
     }
@@ -363,25 +443,43 @@ final class RaceControlsView extends View {
 
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (editing) return editTouch(event);
-        if (!resumed || !racing) return false;
+        if (!resumed || (!racing && !holdEnabled)) return false;
         int action = event.getActionMasked();
         int index = event.getActionIndex();
         if (action == MotionEvent.ACTION_DOWN) {
-            if (hit(event.getX(), event.getY()) < 0) return false;
-            pointers.clear();
+            if (racing && hit(event.getX(), event.getY()) >= 0) {
+                pointers.clear();
+            } else if (!holdEnabled) return false;
         }
         if (action == MotionEvent.ACTION_CANCEL) {
             cancelInput();
             return true;
         }
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            if (holdEnabled && (!racing || hit(event.getX(index), event.getY(index)) < 0)
+                    && screenHold.begin(event.getPointerId(index), event.getX(index), event.getY(index))) {
+                postDelayed(activateHold, ScreenHoldGesture.DELAY_MS);
+            }
+        }
         for (int i = 0; i < event.getPointerCount(); i++) {
             int id = event.getPointerId(i);
+            if (screenHold.owns(id)) {
+                boolean released = (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) && i == index;
+                if (released || !screenHold.move(event.getX(i), event.getY(i),
+                        android.view.ViewConfiguration.get(getContext()).getScaledTouchSlop())) {
+                    if (released) screenHold.cancel();
+                    else screenHold.reject();
+                    removeCallbacks(activateHold);
+                    nativeSetHold(false);
+                }
+                continue;
+            }
             if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
                     && i == index) {
                 pointers.delete(id);
             } else {
                 // Sliding between buttons changes the held control immediately.
-                pointers.put(id, hit(event.getX(i), event.getY(i)));
+                pointers.put(id, racing ? hit(event.getX(i), event.getY(i)) : -1);
             }
         }
         held = 0;

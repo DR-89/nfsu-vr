@@ -41,6 +41,18 @@ int main(void)
     assert(race_touch_consume(1) == 0);
     race_touch_set(RACE_GAS);
     assert(race_touch_consume(1) == RACE_GAS);
+    race_touch_enable_hold(1);
+    race_touch_set_hold(1);
+    race_touch_enable(0); /* Overlay hidden: the screen gesture stays available. */
+    assert(race_touch_hold_active());
+    race_touch_set_editing(1);
+    assert(!race_touch_hold_active());
+    race_touch_set_editing(0);
+    assert(!race_touch_hold_active());
+    race_touch_set_hold(1);
+    race_touch_enable_hold(0);
+    race_touch_enable_hold(1);
+    assert(!race_touch_hold_active()); /* Menu/mode transitions cannot resume a stale hold. */
     puts("race touch: OK");
     return 0;
 }

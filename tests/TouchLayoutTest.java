@@ -40,6 +40,10 @@ public final class TouchLayoutTest {
         invalid(xml.replace("size=\"1.5\"", "size=\"NaN\""));
         invalid(xml.replace("size=\"1.5\"", "size=\"2.1\""));
         invalid(xml.replace("size=\"1.5\"", "size=\"0\""));
+        TouchLayout oldButtons = read(xml.replaceAll("  <button id=\"camera\"[^>]*>\n", ""));
+        if (oldButtons.hasPosition(9) || oldButtons.getSize(9) != 1f)
+            throw new AssertionError("Old presets must get default camera button");
+        invalid(xml.replace("id=\"gas\"", "id=\"camera\""));
         invalid(xml.replace("0.81", "NaN"));
         invalid(xml.replace("0.81", "Infinity"));
         invalid(xml.replace("0.81", "1.1"));

@@ -24,6 +24,7 @@ static void touch_state_locked(uint32_t mask)
     SDL_Joystick *joystick = SDL_GameControllerGetJoystick(touch);
     for (int i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++) {
         int down = (i == SDL_CONTROLLER_BUTTON_START && (mask & RACE_MENU)) ||
+            (i == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER && (mask & RACE_CAMERA)) ||
             (i == SDL_CONTROLLER_BUTTON_A && (mask & RACE_HANDBRAKE)) ||
             (i == SDL_CONTROLLER_BUTTON_B && (mask & RACE_NITRO)) ||
             (i == SDL_CONTROLLER_BUTTON_X && (mask & RACE_SHIFT_UP)) ||

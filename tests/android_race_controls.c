@@ -110,6 +110,13 @@ int main(int argc, char **argv)
     assert(state[4 + XBOX_BUTTON_X] == 255);
     report(state);
     assert(state[4 + XBOX_BUTTON_X] == 0);
+    race_touch_set(RACE_CAMERA);
+    race_touch_set(0); /* A quick camera tap survives until the next report. */
+    report(state);
+    assert(state[4 + XBOX_BUTTON_WHITE] == 255);
+    assert(!(state[2] & XBOX_GAMEPAD_START));
+    report(state);
+    assert(state[4 + XBOX_BUTTON_WHITE] == 0);
     for (int cycle = 0; cycle < 3; cycle++) {
         race_touch_set(RACE_GAS);
         report(state);

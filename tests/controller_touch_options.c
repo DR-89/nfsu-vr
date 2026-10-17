@@ -11,6 +11,20 @@ static unsigned char ram[0x300000];
 static const uint32_t screen = 0x20000, package = 0x21000;
 static uint32_t hashes[8], objects[8];
 static unsigned colors[8];
+static unsigned pause_rows;
+void sub_000B5B00_gen(void)
+{
+    assert(g_ecx == screen);
+    MEM32(screen + 0x44) = 0xB3CE0; /* Existing Vibration callback. */
+    MEM32(screen + 0x48) = 0;
+    g_esp += 4;
+}
+void sub_000B5390(void)
+{
+    assert(g_ecx == screen && MEM32(g_esp + 4) == 2 && MEM32(g_esp + 8) == 0);
+    pause_rows++;
+    g_esp += 12; /* Native thiscall: return address and two arguments. */
+}
 
 uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
 {
@@ -100,5 +114,15 @@ int main(void)
     g_esp = 0x10000; MEM32(g_esp + 4) = 0x911AB364u; /* Back cannot open editor. */
     touch_layout_input();
     assert(!race_touch_take_editor_request());
+    g_ecx = screen; g_esp = 0x10000;
+    sub_000B5B00();
+    assert(pause_rows == 1 && g_esp == 0x10004);
+    assert(MEM32(screen + 0x44) == 0xB3CE0);
+    assert(MEM32(screen + 0x48) == SENSOR_HANDLER_VA + 2);
+    input_mode_set_controller_present(1);
+    input_mode_configure(INPUT_SENSOR_OFF, 0);
+    g_ecx = screen; g_esp = 0x10000;
+    sub_000B5B00();
+    assert(pause_rows == 1 && g_esp == 0x10004 && MEM32(screen + 0x48) == 0);
     puts("Controller native disabled rows, color restoration and input guards: OK");
 }
