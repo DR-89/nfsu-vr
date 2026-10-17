@@ -53,7 +53,7 @@ measurement hit path is not called for Android touches.
 Host queue/mapping regression test:
 
 ```sh
-cc -std=c11 -Wall -Wextra -Werror -Isrc tests/menu_touch.c src/menu_touch.c \
+cc -std=c11 -Wall -Wextra -Werror -Isrc tests/menu_touch.c src/menu_touch.c src/input_mode.c \
   -pthread -lm -o /tmp/nfsu-menu-touch-test
 /tmp/nfsu-menu-touch-test
 ```
@@ -89,7 +89,9 @@ Physical-device acceptance remains pending.
 ```sh
 cc -O1 -D__ANDROID__ -ffunction-sections -fdata-sections -Isrc \
   -Iandroid/app/build/generated/recomp tests/menu_touch_focus.c \
-  src/recomp_manual.c src/feng_touch.c src/menu_touch.c -Wl,--gc-sections -pthread -lm \
+  src/recomp_manual.c src/feng_touch.c src/menu_touch.c src/input_mode.c \
+  src/touch_gesture.c src/touch_orbit.c src/feng_touch_carousel.c \
+  src/feng_touch_camera.c src/feng_touch_magazines.c -Wl,--gc-sections -pthread -lm \
   -o /tmp/nfsu-menu-focus-test
 /tmp/nfsu-menu-focus-test
 ```
@@ -483,9 +485,11 @@ UndergroundBriefScreen (1FC078, B8F60) handles EASY (14DD31), MEDIUM
 (6BAA2200) and HARD (16821E) as release-only touch targets. Capture the
 package focus before native hover: a different difficulty updates FEng focus
 and flushes its scripts without activation. A tap on the already selected
-difficulty dispatches native MouseClick with numeric difficulty 0/1/2
-(Easy/Medium/Hard), rather than the rendered object pointer: B8F60 passes
-this argument to B88C0, which stores it at 29C460 for race startup. This decision
+difficulty dispatches native MouseClick with the rendered button object.
+B8F60 passes it to B88C0, which calls B8880 to read the object's +10 hash
+and map it to difficulty 0/1/2 before storing it at 29C460. Passing a raw
+number here is incorrect. Retain the last completed touch choice while this
+screen is active so transient native hover focus cannot lose confirmation. This decision
 is fixed for the gesture, so hover cannot turn selection into confirmation.
 Dragging or leaving the screen cancels the action. Controller input retains
 its native behavior. Host regression covers each difficulty and both stages;
@@ -497,3 +501,83 @@ The union has 12 horizontal and 8 vertical logical pixels of finger tolerance.
 Taps on amounts, gaps and beside digits share the same select/confirm policy;
 hidden reward captions do not extend the hit area. Host coverage exercises all
 three difficulties with separate label and reward quads.
+
+## Physical controller disables touch mode
+
+input_mode_get() publishes one consistent policy snapshot. Android SDL controller
+discovery reports physical controller presence, excluding the virtual touch device.
+The policy combines it with the saved Sensor Mode preference.
+Mode changes drop queued gestures. The race HUD and virtual touch buttons use
+the same mode; connecting a pad immediately releases and hides them.
+Disabled guest hooks call the original generated input bodies. Draw hooks skip
+bounds collection, Back/footer replay, glyph suppression and Quick Race Continue
+replacement. Recorded caption/color edits are restored on the guest thread and
+native caption caches are marked dirty. Controller mode retains the rendering
+corrections already present on main. Host coverage checks hotplug and startup
+with a pad attached, discarded touch queues, and restoration of native Help.
+Android device/runtime validation remains pending.
+
+## Controller touch settings
+
+Options -> Controller (category 3, native setup C2B80) retains its four native
+rows and adds SENSOR MODE and RACE BUTTON OVERLAY as rows 5/6. Sensor Mode
+starts with automatic controller detection until manually changed; its visible
+value is the effective On/Off mode. With no physical pad, it is forced On and
+labelled locked, and its handler rejects changes. A saved Off becomes effective
+again when a pad reconnects. Race Button Overlay defaults Off and is editable
+only while Sensor Mode is On; otherwise it displays Unavailable and ignores
+input. Both preferences are stored in nfsu1x_options.txt. The native row handlers
+and rendered arrows serve both controller and touch input.
+
+### Input responsibilities
+
+- `input_mode.c/.h`: preference, controller presence, overlay request, effective
+  values and revision; one atomic publication, no SDL or guest-memory dependency.
+- `menu_touch.c`: position queue and gesture lifecycle; a policy revision change
+  discards stale gestures while holding the queue mutex.
+- `android_input.c`: physical SDL discovery, state reads, rumble and player slots.
+  The physical controller remains player one; active touch buttons can supplement
+  its buttons/triggers and steering without changing device routing.
+- `android_race_controls.c`: racing/overlay visibility and virtual touch reports.
+- `feng_touch.c`: native menu gestures and reversible touch-only rendering edits.
+- `recomp_manual.c`: native Controller menu adapter and preferences file. Reads
+  the policy directly, with no second copy of the saved preferences. Refreshes
+  the registered settings screen after policy revisions on the guest thread.
+
+Host regressions cover physical and sensor input together, hiding overlay while
+retaining physical input, startup with a pad, reconnects, preference persistence,
+queue cancellation and the existing FEng gesture behavior. They do not establish
+Android UI layout or hardware acceptance.
+
+## Shared gesture components
+
+`touch_gesture` recognizes a tap or one directional swipe on release. Bindings
+choose the axis, threshold and whether taps are allowed. Cancellation after a
+drag, one-shot dispatch and finger ownership are independent of native screens.
+Both horizontal browsers and the vertical magazine grid use this implementation.
+
+`feng_touch_carousel` supplies the native bindings and common rendered capture
+for garages, Quick Race cars/tracks, first career car selection and Underground
+race selection. Screen-specific data includes the selected-node location,
+activation event, extra captions and optional separate native data cursor.
+The map no longer has a second selection hit-test in generic screen controls.
+A swipe never synchronizes or activates the tapped map item.
+
+`touch_orbit` owns drag state, control exclusion, blocked-panel crossings and
+screen changes. `feng_touch_camera` only applies the resulting deltas to the
+native camera. A preview-capable screen calls this shared pair; track/map screens
+do not opt into orbit. `feng_touch_magazines` binds rendered slots and cursor
+refresh, using the same swipe lifecycle as horizontal carousels.
+
+`touch_geometry` shares containment and bounds union. `feng_touch_internal.h`
+is a private contract between guest adapters; external hooks stay in
+`feng_touch.h`. New screens should add native binding data, reuse these
+components, and avoid copying gesture/update code.
+
+Focused engine tests without a guest runtime:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Isrc tests/touch_gestures.c \
+  src/touch_gesture.c src/touch_orbit.c -lm -o /tmp/nfsu-touch-gestures-test
+/tmp/nfsu-touch-gestures-test
+```

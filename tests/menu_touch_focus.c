@@ -1,3 +1,4 @@
+#include "input_mode.h"
 /* Exercise actual draw/hit/input hooks with synthetic cached quads and a
  * focus adapter. See docs/native-menu-touch.md. */
 #include <assert.h>
@@ -116,21 +117,27 @@ void sub_000DE540(void)
 {
     assert(g_ecx == 0x28000);
     assert(MEM32(g_esp + 4) == expected_message);
+    assert(MEM32(g_esp + 8) == expected);
     if (MEM32(g_ecx) == 0x1FC078 && expected_message == 0x0C407210) {
-        uint32_t hash = MEM32(expected + 0x10);
-        uint32_t difficulty = hash == 0x16821E ? 2 : hash == 0x6BAA2200 ? 1 : 0;
-        /* B8F60 passes argument 2 directly to B88C0, which stores it in
-         * the race difficulty global. An object pointer cannot start correctly. */
-        assert(MEM32(g_esp + 8) == difficulty);
-        MEM32(0x29C460) = MEM32(g_esp + 8);
-    } else {
-        assert(MEM32(g_esp + 8) == expected);
+        /* B88C0 calls B8880 with the button object. B8880 reads its +10
+         * hash before mapping EASY/MEDIUM/HARD to the race difficulty. */
+        uint32_t object = MEM32(g_esp + 8);
+        uint32_t hash = MEM32(object + 0x10);
+        assert(hash == 0x14DD31 || hash == 0x6BAA2200 || hash == 0x16821E);
+        MEM32(0x29C460) = hash == 0x16821E ? 2 : hash == 0x6BAA2200 ? 1 : 0;
     }
     assert(MEM32(g_esp + 12) == 1 && MEM32(g_esp + 16) == package);
     controller_selects++; presses++;
     g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
     g_esp += 20;
 }
+uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
+{
+    (void)size; (void)alignment;
+    assert(!"unexpected options text allocation");
+    return 0;
+}
+void sub_000DD490(void) { assert(!"unexpected options text refresh"); }
 void sub_000D7A00(void) { focus_flushes++; g_esp += 4; }
 void sub_000D6D30(void)
 {
@@ -570,6 +577,8 @@ int main(void)
     MEM32(screen) = 0x1FC12C;
     uint32_t list = 0x2E000, event = 0x2E100;
     MEM32(screen + 0x3C) = list;
+    MEM32(list) = 0x1FF870;
+    MEM32(list + 0xC) = event;
     MEM32(list + 4) = event;
     MEM32(event) = list + 4;
     MEM32(event + 8) = 0x2E200;
@@ -651,6 +660,7 @@ int main(void)
     tap(.3f, yes);
     assert(controller_selects == before_actions);
     assert(MEM32(package + 0x80) == yes && focus_flushes > before_flushes);
+    MEM32(package + 0x80) = no; /* transient native focus must not lose the touch choice */
     tap(.3f, yes);
     assert(controller_selects == before_actions + 1);
     assert(MEM32(0x29C460) == 0); /* EASY */
@@ -1062,5 +1072,21 @@ int main(void)
     tap_at(90.0f / 640, 210.0f / 480, yes);
     assert(controller_selects == before_actions + 3);
     assert(MEM32(screen + 0x98) == data && MEM32(screen + 0xA0) == row);
+    /* Physical-controller mode restores touch captions and leaves native
+     * drawing unchanged. Switch back only after the previous edits are gone. */
+    MEM32(yes + 0x10) = 0xA87927BE;
+    MEM32(yes + 0x5C) = 0x169268; /* native Help */
+    feng_touch_frame_begin();
+    uint32_t previous = feng_touch_draw_begin(yes);
+    assert(MEM32(yes + 0x5C) == 0x1335F0);
+    feng_touch_draw_end(previous);
+    input_mode_set_controller_present(1);
+    feng_touch_frame_begin();
+    assert(MEM32(yes + 0x5C) == 0x169268);
+    previous = feng_touch_draw_begin(yes);
+    assert(MEM32(yes + 0x5C) == 0x169268);
+    assert(!feng_touch_draw_cache(0x35000));
+    feng_touch_draw_end(previous);
+    input_mode_set_controller_present(0);
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }

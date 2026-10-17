@@ -1,3 +1,4 @@
+#include "input_mode.h"
 /* Real SDL virtual devices + Android backend + actual USB report wrappers.
  * Exercises hotplug without a physical device or an Android runtime. */
 #include <SDL.h>
@@ -8,10 +9,12 @@
 #include <string.h>
 #include "android_input.h"
 #include "race_touch.h"
+#include "menu_touch.h"
 #include "input/xinput_xbox.h"
 #include "usb/usb_gamepad.h"
 
 static uint32_t flow = 6;
+int feng_touch_race_menu_active(void) { return 0; }
 void *xbox_GetMemoryBase(void) { return &flow; }
 ptrdiff_t xbox_GetMemoryOffset(void) { return (ptrdiff_t)(uintptr_t)&flow - 0x00283434u; }
 DWORD GetTickCount(void) { return SDL_GetTicks(); }
@@ -58,6 +61,8 @@ static void report(uint8_t state[20])
 
 int main(int argc, char **argv)
 {
+    assert(!input_mode_get().overlay_enabled);
+    input_mode_configure(-1, 1); /* enable overlay for existing racing-input checks */
     (void)argv;
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
@@ -76,10 +81,12 @@ int main(int argc, char **argv)
     assert(xbox_InputGetCapabilities(1, 0, &caps) == ERROR_DEVICE_NOT_CONNECTED);
     if (pad) {
         assert(android_input_has_controller());
+        assert(!input_mode_sensor_enabled());
         assert(!race_touch_visible());
         detach_pad(pad);
     }
     assert(!android_input_has_controller());
+    assert(input_mode_sensor_enabled());
     assert(race_touch_visible());
     uint8_t state[20];
     race_touch_set(RACE_GAS | RACE_LEFT | RACE_NITRO);
@@ -109,6 +116,7 @@ int main(int argc, char **argv)
         pad = attach_pad();
         android_race_controls_poll();
         assert(android_input_has_controller());
+        assert(!input_mode_sensor_enabled());
         assert(!race_touch_visible());
         assert(xbox_InputIsConnected(0));
         assert(!xbox_InputIsConnected(1)); /* fallback is never player two */
@@ -121,8 +129,22 @@ int main(int argc, char **argv)
         assert(state[4 + XBOX_BUTTON_B] == 0);
         assert(state[4 + XBOX_BUTTON_RTRIGGER] == 0);
         assert(state[12] == (12345 & 255) && state[13] == (12345 >> 8));
+        /* Manually enabling sensor+overlay keeps the physical pad live. */
+        input_mode_configure(INPUT_SENSOR_ON, 1);
+        android_race_controls_poll();
+        race_touch_set(RACE_NITRO);
+        report(state);
+        assert(state[4 + XBOX_BUTTON_A] == 255); /* physical */
+        assert(state[4 + XBOX_BUTTON_B] == 255); /* touch */
+        assert(state[12] == (12345 & 255) && state[13] == (12345 >> 8));
+        input_mode_configure(INPUT_SENSOR_ON, 0);
+        android_race_controls_poll();
+        report(state);
+        assert(state[4 + XBOX_BUTTON_A] == 255 && state[4 + XBOX_BUTTON_B] == 0);
+        input_mode_configure(INPUT_SENSOR_AUTO, 1);
         detach_pad(pad);
         assert(!android_input_has_controller());
+        assert(input_mode_sensor_enabled());
         assert(race_touch_visible());
         assert(xbox_InputIsConnected(0));
         report(state);

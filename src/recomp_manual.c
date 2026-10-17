@@ -1,3 +1,4 @@
+#include "input_mode.h"
 /**
  * Manual function overrides and ICALL diagnostics
  *
@@ -606,6 +607,7 @@ void sub_00018E60(void)
  * original generated bodies. Gesture policy lives in the shared module. */
 #ifdef __ANDROID__
 #include "feng_touch.h"
+#include "menu_touch.h"
 #endif
 extern void sub_000D8B10_gen(void);
 extern void sub_000DB860_gen(void);
@@ -768,12 +770,18 @@ static int s_feng_menu_draw;
  * glyphs, so menus retain their original stretched presentation. */
 extern void sub_000DC090_gen(void);
 
+#ifdef __ANDROID__
+void nfsu_controller_settings_refresh(void);
+#endif
 void sub_000DC090(void)
 {
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
 #ifdef __ANDROID__
-    if (!previous) feng_touch_frame_begin();
+    if (!previous) {
+        nfsu_controller_settings_refresh();
+        feng_touch_frame_begin();
+    }
 #endif
     sub_000DC090_gen();
 #ifdef __ANDROID__
@@ -995,12 +1003,28 @@ static void options_log(void)
 
 void nfsu1_options_load(void)
 {
+#ifdef __ANDROID__
+    InputMode saved_mode = input_mode_get();
+    int sensor_preference = saved_mode.preference;
+    int race_overlay = saved_mode.overlay_requested;
+#endif
     char line[128];
     FILE *f = fopen(NFSU1_OPTIONS_FILE, "r");
     int i;
 
     if (f) {
         while (fgets(line, sizeof line, f)) {
+#ifdef __ANDROID__
+            if (!strncmp(line, "sensor_mode=", 12)) {
+                int mode = atoi(line + 12);
+                sensor_preference = mode >= -1 && mode <= 1 ? mode : -1;
+                continue;
+            }
+            if (!strncmp(line, "race_overlay=", 13)) {
+                race_overlay = atoi(line + 13) == 1;
+                continue;
+            }
+#endif
             if (!strncmp(line, "reflections=", 12))
                 s_refl = line[12] != '0';
             else if (!strncmp(line, "blur=", 5))
@@ -1028,6 +1052,9 @@ void nfsu1_options_load(void)
         }
         fclose(f);
     }
+#ifdef __ANDROID__
+    input_mode_configure(sensor_preference, race_overlay);
+#endif
     refl_changed();
 #ifdef NFSU2_VULKAN
     {
@@ -1062,28 +1089,32 @@ static void options_save(void)
 #ifdef NFSU2_VULKAN
     fprintf(f, "fxaa=%d\naniso=%d\nsquare=%d\n", s_fxaa, s_aniso_lvl[s_aniso_idx], s_square);
 #endif
+#ifdef __ANDROID__
+    InputMode mode = input_mode_get();
+    fprintf(f, "sensor_mode=%d\nrace_overlay=%d\n", mode.preference, mode.overlay_requested);
+#endif
     fclose(f);
 }
 
 /* Our texts in guest memory, each copied once. */
 static uint32_t guest_str(const char *s)
 {
-    static struct { const char *s; uint32_t va; } cache[32];
+    static struct { const char *s; uint32_t va; } cache[64];
     static uint32_t pool, used;
     size_t n = strlen(s) + 1;
     int i;
 
-    for (i = 0; i < 32 && cache[i].s; i++)
+    for (i = 0; i < 64 && cache[i].s; i++)
         if (cache[i].s == s)
             return cache[i].va;
-    if (i == 32)
+    if (i == 64)
         return 0;
     if (!pool) {
-        pool = xbox_ContiguousAlloc(0x400u, 16);
+        pool = xbox_ContiguousAlloc(0x800u, 16);
         if (!pool)
             return 0;
     }
-    if (used + n > 0x400u)
+    if (used + n > 0x800u)
         return 0;
     memcpy((void *)XBOX_PTR(pool + used), s, n);
     cache[i].s = s;
@@ -1145,6 +1176,78 @@ void sub_000C2A70(void)
         opt_row_text(screen, i);
     }
 }
+
+#ifdef __ANDROID__
+extern void sub_000C2B80_gen(void);
+#define SENSOR_HANDLER_VA (ROW_HANDLER_VA + 7u)
+static uint32_t s_controller_settings_screen;
+static unsigned s_controller_settings_revision;
+static void controller_touch_text(uint32_t screen)
+{
+    InputMode mode = input_mode_get();
+    s_controller_settings_screen = screen;
+    s_controller_settings_revision = mode.revision;
+    fe_set_text(screen, "OptionName_5", mode.controller_present ?
+        "SENSOR MODE:" : "SENSOR MODE (locked):");
+    fe_set_text(screen, "OptionData_5", mode.sensor_enabled ? "On" : "Off");
+    fe_set_text(screen, "OptionName_6", "RACE BUTTON OVERLAY:");
+    fe_set_text(screen, "OptionData_6", mode.sensor_enabled ?
+        (mode.overlay_requested ? "On" : "Off") : "Unavailable");
+}
+void sub_000C2B80(void)
+{
+    uint32_t screen = ecx;
+    sub_000C2B80_gen();
+    for (unsigned row = 5; row <= 6; row++) {
+        PUSH32(esp, 0); PUSH32(esp, 1); PUSH32(esp, row);
+        ecx = screen; PUSH32(esp, 0); sub_000C1D30();
+        PUSH32(esp, 0); PUSH32(esp, row);
+        ecx = screen; PUSH32(esp, 0); sub_000C1E10();
+        MEM32(screen + 0x3C + 4 * (row - 1)) = SENSOR_HANDLER_VA + row - 5;
+    }
+    controller_touch_text(screen);
+}
+static void controller_touch_input(unsigned row)
+{
+    uint32_t screen = ecx, msg = MEM32(esp + 4);
+    if (msg == FE_PAD_LEFT || msg == FE_PAD_RIGHT) {
+        InputMode mode = input_mode_get();
+        InputSensorPreference preference = mode.preference;
+        int overlay = mode.overlay_requested;
+        if (row == 0) {
+            if (!mode.controller_present) { esp += 8; return; }
+            preference = mode.sensor_enabled ? INPUT_SENSOR_OFF : INPUT_SENSOR_ON;
+        } else {
+            if (!mode.sensor_enabled) { esp += 8; return; }
+            overlay = !overlay;
+        }
+        input_mode_configure(preference, overlay);
+        options_save();
+        controller_touch_text(screen);
+    }
+    esp += 8;
+}
+/* Called on the guest render thread. Refresh only on a policy change and
+ * only while this exact Controller screen is still registered. */
+void nfsu_controller_settings_refresh(void)
+{
+    InputMode mode = input_mode_get();
+    if (!s_controller_settings_screen || mode.revision == s_controller_settings_revision ||
+        MEM32(0x2BBB54) != 3) return;
+    uint32_t reg = MEM32(0x2BCB9C);
+    for (unsigned n = 0; reg && reg != 0x2BCB9C && n < 64; n++, reg = MEM32(reg)) {
+        if (MEM32(reg - 4 + 0x14) != s_controller_settings_screen) continue;
+        uint32_t package = MEM32(reg - 4 + 0x18);
+        if (!package || !(MEM32(package + 0x1C) & 1)) continue;
+        uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx, saved_esp = esp;
+        controller_touch_text(s_controller_settings_screen);
+        eax = saved_eax; ecx = saved_ecx; edx = saved_edx; esp = saved_esp;
+        return;
+    }
+}
+static void sensor_mode_input(void) { controller_touch_input(0); }
+static void race_overlay_input(void) { controller_touch_input(1); }
+#endif
 
 /* Row input (thiscall, the message, ret 4), as sub_000C0C90: left/right
  * step the value (wrapping), then the texts and the arrow sound. */
@@ -1374,6 +1477,8 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
 #ifdef __ANDROID__
     if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
+    if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
+    if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;
 #endif
     /*
      * TODO: Add your overrides here. Examples:

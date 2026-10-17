@@ -1,5 +1,6 @@
+#include "input_mode.h"
 /* cc -std=c11 -Wall -Wextra -Werror -Isrc tests/menu_touch.c
- * src/menu_touch.c -pthread -lm -o /tmp/nfsu-menu-touch-test */
+ * src/menu_touch.c src/input_mode.c -pthread -lm -o /tmp/nfsu-menu-touch-test */
 #include "menu_touch.h"
 #include <assert.h>
 #include <math.h>
@@ -82,5 +83,30 @@ int main(void)
     menu_touch_cancel();
     menu_touch_event(MENU_TOUCH_DOWN, NAN, .5f, 1280, 720);
     assert(next(0, 0, 0).reset);
+    /* Connecting a physical pad drops a queued tap and ignores new touches.
+     * Disconnecting starts idle rather than replaying the old gesture. */
+    menu_touch_event(MENU_TOUCH_DOWN, .5f, .5f, 1280, 720);
+    input_mode_set_controller_present(1);
+    assert(!input_mode_sensor_enabled());
+    menu_touch_event(MENU_TOUCH_DOWN, .5f, .5f, 1280, 720);
+    menu_touch_event(MENU_TOUCH_UP, .5f, .5f, 1280, 720);
+    assert(next(0, 0, 0).reset);
+    input_mode_set_controller_present(0);
+    assert(input_mode_sensor_enabled());
+    assert(next(0, 0, 0).reset);
+    /* Manual settings never disable the only available input. */
+    input_mode_configure(0, 0);
+    assert(input_mode_sensor_enabled() && !input_mode_get().overlay_enabled);
+    input_mode_set_controller_present(1); /* physical controller arrives */
+    assert(!input_mode_sensor_enabled());
+    input_mode_configure(1, 0);
+    assert(input_mode_sensor_enabled() && !input_mode_get().overlay_enabled);
+    input_mode_configure(1, 1);
+    assert(input_mode_get().overlay_enabled);
+    input_mode_configure(0, 1);
+    assert(!input_mode_sensor_enabled() && !input_mode_get().overlay_enabled);
+    input_mode_set_controller_present(0); /* physical controller removed */
+    assert(input_mode_sensor_enabled() && input_mode_get().overlay_enabled);
+    input_mode_configure(-1, 0);
     puts("menu touch queue and presentation mapping: OK");
 }

@@ -1,6 +1,7 @@
+#include "input_mode.h"
 /* cc -O1 -ffunction-sections -fdata-sections -Isrc
  * -Iandroid/app/build/generated/recomp tests/options_blur.c
- * -Wl,--gc-sections -lm -o /tmp/nfsu-options-blur-test */
+ * src/input_mode.c -Wl,--gc-sections -lm -o /tmp/nfsu-options-blur-test */
 #include <assert.h>
 #include <unistd.h>
 #include "../src/recomp_manual.c"
@@ -52,6 +53,14 @@ int main(void)
         }
     }
     assert(calls == 4);
+#ifdef __ANDROID__
+    input_mode_configure(INPUT_SENSOR_OFF, 1);
+    options_save();
+    input_mode_configure(INPUT_SENSOR_ON, 0);
+    nfsu1_options_load();
+    assert(input_mode_get().preference == INPUT_SENSOR_OFF && input_mode_get().overlay_requested);
+    assert(input_mode_sensor_enabled()); /* no physical pad: Off cannot lock out input */
+#endif
     assert(unlink(NFSU1_OPTIONS_FILE) == 0);
     assert(chdir("/tmp") == 0 && rmdir(directory) == 0);
     puts("blur options persistence and render policy: OK");

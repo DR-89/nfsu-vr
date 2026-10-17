@@ -118,7 +118,7 @@ cc -std=c11 -Wall -Wextra -Werror -pthread -Isrc -Ixboxrecomp/src \
   -I/usr/lib/jvm/jdk-25.0.4-oracle-x64/include \
   -I/usr/lib/jvm/jdk-25.0.4-oracle-x64/include/linux \
   tests/android_race_controls.c src/android_input.c src/android_race_controls.c \
-  src/race_touch.c xboxrecomp/src/usb/usb_gamepad.c /usr/lib64/libSDL2-2.0.so.0 \
+  src/race_touch.c src/menu_touch.c src/input_mode.c xboxrecomp/src/usb/usb_gamepad.c /usr/lib64/libSDL2-2.0.so.0 \
   -Wl,--wrap=usb_gamepad_report -Wl,--wrap=usb_gamepad_control \
   -o /tmp/nfsu-race-hotplug-test
 /tmp/nfsu-race-hotplug-test

@@ -1,12 +1,15 @@
+#include "input_mode.h"
 /* Android's single player-one endpoint switches between physical SDL input
  * and a persistent SDL virtual touch controller. SDL's joystick lock owns all
  * handles, discovery, virtual state and packets, including concurrent polls. */
 #include <SDL.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "android_input.h"
 #include "race_touch.h"
+#include "menu_touch.h"
 #include "../xboxrecomp/src/input/xinput_xbox.h"
 
 static SDL_GameController *touch;
@@ -71,9 +74,10 @@ static void discover_locked(void)
         }
     }
     int connected = pads[0] != NULL;
+    input_mode_set_controller_present(connected);
     if (atomic_exchange(&physical, connected) != connected) {
         touch_state_locked(0);
-        race_touch_cancel();
+        race_touch_enable(0);
         fprintf(stderr, "[INPUT] player 1 source: %s\n", connected ? "physical" : "touch");
     }
 }
@@ -124,13 +128,39 @@ void android_input_set_touch(uint32_t mask)
 {
     if (!atomic_load(&ready)) return;
     SDL_LockJoysticks();
-    touch_state_locked(atomic_load(&physical) ? 0 : mask);
+    touch_state_locked(input_mode_sensor_enabled() ? mask : 0);
     SDL_UnlockJoysticks();
 }
 
 static SDL_GameController *controller_locked(DWORD port)
 {
     return port == 0 && !pads[0] ? touch : pads[port];
+}
+
+static void read_gamepad(SDL_GameController *pad, XBOX_GAMEPAD *gamepad)
+{
+    static const SDL_GameControllerButton digital[] = {
+        SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+        SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+        SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_BACK,
+        SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL_CONTROLLER_BUTTON_RIGHTSTICK
+    };
+    for (int i = 0; i < 8; i++)
+        if (SDL_GameControllerGetButton(pad, digital[i])) gamepad->wButtons |= 1u << i;
+    static const SDL_GameControllerButton analog[] = {
+        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X,
+        SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
+    };
+    for (int i = 0; i < 6; i++)
+        gamepad->bAnalogButtons[i] = SDL_GameControllerGetButton(pad, analog[i]) ? 255 : 0;
+    gamepad->bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
+        SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >> 7;
+    gamepad->bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
+        SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >> 7;
+    gamepad->sThumbLX = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+    gamepad->sThumbLY = -1 - SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+    gamepad->sThumbRX = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
+    gamepad->sThumbRY = -1 - SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
 }
 
 DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
@@ -145,28 +175,21 @@ DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
         return ERROR_DEVICE_NOT_CONNECTED;
     }
     state->dwPacketNumber = ++packets[port];
-    static const SDL_GameControllerButton digital[] = {
-        SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
-        SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
-        SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_BACK,
-        SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL_CONTROLLER_BUTTON_RIGHTSTICK
-    };
-    for (int i = 0; i < 8; i++)
-        if (SDL_GameControllerGetButton(pad, digital[i])) state->Gamepad.wButtons |= 1u << i;
-    static const SDL_GameControllerButton analog[] = {
-        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X,
-        SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
-    };
-    for (int i = 0; i < 6; i++)
-        state->Gamepad.bAnalogButtons[i] = SDL_GameControllerGetButton(pad, analog[i]) ? 255 : 0;
-    state->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
-        SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >> 7;
-    state->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
-        SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >> 7;
-    state->Gamepad.sThumbLX = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
-    state->Gamepad.sThumbLY = -1 - SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
-    state->Gamepad.sThumbRX = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTX);
-    state->Gamepad.sThumbRY = -1 - SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_RIGHTY);
+    read_gamepad(pad, &state->Gamepad);
+    /* Overlay input supplements player one; it never replaces the pad or
+     * changes connection/capability/rumble routing. */
+    if (port == 0 && pad != touch && touch && input_mode_get().overlay_enabled) {
+        XBOX_GAMEPAD sensor = {0};
+        read_gamepad(touch, &sensor);
+        state->Gamepad.wButtons |= sensor.wButtons;
+        for (int i = 0; i < 8; i++)
+            if (sensor.bAnalogButtons[i] > state->Gamepad.bAnalogButtons[i])
+                state->Gamepad.bAnalogButtons[i] = sensor.bAnalogButtons[i];
+        if (abs(sensor.sThumbLX) > abs(state->Gamepad.sThumbLX))
+            state->Gamepad.sThumbLX = sensor.sThumbLX;
+        if (abs(sensor.sThumbLY) > abs(state->Gamepad.sThumbLY))
+            state->Gamepad.sThumbLY = sensor.sThumbLY;
+    }
     SDL_UnlockJoysticks();
     return ERROR_SUCCESS;
 }
