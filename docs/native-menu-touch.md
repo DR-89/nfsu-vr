@@ -402,3 +402,14 @@ directly, with eight logical pixels of touch tolerance. The row under the
 rendered arrow receives Left/Right, independently of stale native focus. The regression uses
 these retail arrow hashes with no base-arrow pointers and checks that label/
 value taps do not dispatch a value change. Physical arrow acceptance is pending.
+
+Live QR diagnostics supersede the earlier arrow-name assumption: both visible
+blinking glyphs use hash 13E9F3A9 and the modal's +24/+28 pointers are zero.
+Capture their distinct rendered objects, resolve direction relative to the
+selected row's rendered value, and retain the geometry across blink frames.
+Changing modal/focus clears this geometry. Row selection now joins label,
+value and gap, adds horizontal/vertical finger tolerance bounded by neighbouring
+rows, and flushes native queued focus scripts without sending Select/Right.
+Tests cover identical glyph hashes, both directions, hidden blink frames,
+focus-change invalidation, gap selection, focus-script flush and no value change
+on row taps. Device acceptance of the revised interaction remains pending.

@@ -6,6 +6,7 @@
 #include <string.h>
 #include "recomp_types.h"
 #include "menu_touch.h"
+#include "feng_touch.h"
 
 ptrdiff_t g_xbox_mem_offset;
 RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
@@ -51,6 +52,19 @@ void sub_000DC090_gen(void)
         sub_000D9D00();
     }
     g_esp = entry + 4;
+}
+static void add_quad(uint32_t object, float left, float top, float right, float bottom)
+{
+    uint32_t cache = 0x35000, node = 0x35100;
+    MEM32(cache + 0x18) = node; MEM32(node) = cache + 0x18;
+    for (unsigned j = 0; j < 4; j++) {
+        float x = j & 1 ? right : left, y = j / 2 ? bottom : top;
+        memcpy((void *)XBOX_PTR(node + 0x20 + j * 16), &x, 4);
+        memcpy((void *)XBOX_PTR(node + 0x24 + j * 16), &y, 4);
+    }
+    uint32_t previous = feng_touch_draw_begin(object);
+    feng_touch_draw_cache(cache);
+    feng_touch_draw_end(previous);
 }
 static void draw_bounds(void)
 {
@@ -502,6 +516,32 @@ int main(void)
     expected_message = 0x9120409E;
     draw_bounds(); tap(.7f, yes);
     assert(controller_selects == before_actions + 2);
+    /* Actual blinking glyphs have identical hashes, unlike mouse_over_l/r.
+     * Their identity and geometry survive a hidden blink frame. */
+    uint32_t qr_label = 0x32000, qr_value = 0x33000;
+    MEM32(qr_label + 0x10) = 0x4C61C6CE;
+    MEM32(qr_value + 0x10) = 0x4C58EF23;
+    MEM32(qr_label + 0x18) = MEM32(qr_value + 0x18) = 2;
+    MEM32(yes + 0x10) = MEM32(no + 0x10) = 0x13E9F3A9;
+    MEM32(package + 0x80) = qr_label;
+    draw_mask = 3; draw_bounds();
+    add_quad(qr_label, 120, 200, 280, 280);
+    add_quad(qr_value, 300, 200, 340, 280);
+    expected_message = 0x9120409E; tap(.3f, qr_label);
+    expected_message = 0xB5971BF1; tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 4);
+    MEM32(package + 0x80) = qr_label;
+    draw_mask = 0; draw_bounds(); /* hidden phase: no current arrow quads */
+    add_quad(qr_label, 120, 200, 280, 280);
+    add_quad(qr_value, 300, 200, 340, 280);
+    expected_message = 0x9120409E; tap(.3f, qr_label);
+    expected_message = 0xB5971BF1; tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 6);
+    MEM32(package + 0x80) = yes; /* changing row invalidates old blink geometry */
+    draw_mask = 0; draw_bounds();
+    tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 6);
+    before_actions += 4;
     MEM32(yes + 0x10) = 0x123456;
     MEM32(yes + 0x5C) = 0xF5599FF0; /* MODE_OPTIONS_TITLE: actual retail heading */
     draw_mask = 1; draw_bounds();

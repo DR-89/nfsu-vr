@@ -41,6 +41,12 @@ static RECOMP_TLS uint32_t s_touch_draw_object;
 typedef struct { uint32_t object; float left, top, right, bottom; } TouchBounds;
 static TouchBounds s_touch_bounds[2048];
 static unsigned s_touch_bounds_count;
+/* QROptions' blinking arrow glyphs share one hash; preserve their last drawn
+ * bounds only while the same modal and focused row own them. */
+static TouchBounds s_qr_arrows[2];
+static unsigned s_qr_arrow_count;
+static uint32_t s_qr_screen, s_qr_focus;
+
 
 static void touch_bounds_add(uint32_t object, float x, float y)
 {
@@ -197,16 +203,6 @@ static uint32_t touch_rendered_object(uint32_t hash)
 static int touch_quick_race_options(uint32_t screen, TouchTarget *target)
 {
     if (MEM32(screen) != 0x001FB64Cu) return 0;
-    fprintf(stderr, "[qr-touch] focus=%08X arrows=%08X/%08X xy=%d,%d bounds=%u\n",
-        MEM32(target->package + 0x80), MEM32(screen + 0x24), MEM32(screen + 0x28),
-        s_touch_x, s_touch_y, s_touch_bounds_count);
-    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
-        TouchBounds *b = &s_touch_bounds[i];
-        fprintf(stderr, "[qr-object] obj=%08X hash=%08X flags=%08X rect=%.1f,%.1f,%.1f,%.1f\n",
-            b->object, MEM32(b->object + 0x10), MEM32(b->object + 0x1C),
-            b->left,b->top,b->right,b->bottom);
-    }
-
     for (unsigned i = 0; i < s_touch_bounds_count; i++) {
         uint32_t object = s_touch_bounds[i].object;
         if (MEM32(object + 0x18) != 2 ||
@@ -218,10 +214,21 @@ static int touch_quick_race_options(uint32_t screen, TouchTarget *target)
             return 1;
         }
     }
-    uint32_t direction = 0, arrow = touch_browser_arrow(&direction);
+    uint32_t direction = 0, arrow = 0;
+    TouchBounds captured_arrow = {0};
+    float touch_x = s_touch_x + 320.0f, touch_y = s_touch_y + 240.0f;
+    for (unsigned i = 0; i < s_qr_arrow_count; i++) {
+        TouchBounds *bounds = &s_qr_arrows[i];
+        if (touch_x >= bounds->left - 12 && touch_x < bounds->right + 12 &&
+            touch_y >= bounds->top - 12 && touch_y < bounds->bottom + 12) {
+            arrow = bounds->object;
+            captured_arrow = *bounds;
+            break;
+        }
+    }
+    if (!arrow) arrow = touch_browser_arrow(&direction);
     if (arrow && (MEM32(arrow + 0x1C) & 0x04000000u)) arrow = 0;
-    /* This controller uses DE420, not DE440: +24/+28 do not hold
-     * base-arrow pointers. Bind the rendered mouse_over_l/r identities. */
+    /* Retain the shared base-arrow binding for layouts which supply it. */
     for (unsigned side = 0; !arrow && side < 2; side++) {
         uint32_t hash = side ? 0xAA68BFD4u : 0xAA68BFCEu;
         uint32_t object = touch_rendered_object(hash);
@@ -262,10 +269,15 @@ static int touch_quick_race_options(uint32_t screen, TouchTarget *target)
         float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
         int row_hit = x >= row_bounds.left - 12 && x < row_bounds.right + 12 &&
             y >= top && y < bottom;
-        int arrow_row = arrow && touch_object_bounds(arrow, &arrow_bounds, 0) &&
+        int arrow_geometry = arrow && touch_object_bounds(arrow, &arrow_bounds, 0);
+        if (captured_arrow.object) { arrow_bounds = captured_arrow; arrow_geometry = 1; }
+        int arrow_row = arrow_geometry &&
             (arrow_bounds.top + arrow_bounds.bottom) * .5f >= top &&
             (arrow_bounds.top + arrow_bounds.bottom) * .5f < bottom;
         if (arrow ? arrow_row : row_hit) {
+            if (captured_arrow.object && data && touch_object_bounds(data, &value_bounds, 0))
+                direction = (captured_arrow.left + captured_arrow.right) <
+                    (value_bounds.left + value_bounds.right) ? 0x9120409Eu : 0xB5971BF1u;
             target->target = label;
             target->message = direction ? direction : 1;
             target->focus_only = !direction;
@@ -944,7 +956,23 @@ void feng_touch_poll(void)
 }
 
 
-void feng_touch_frame_begin(void) { s_touch_bounds_count = 0; }
+void feng_touch_frame_begin(void)
+{
+    uint32_t screen = touch_active_screen();
+    uint32_t focus = 0;
+    uint32_t reg = MEM32(0x002BCB9Cu);
+    for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
+        if (MEM32(reg - 4 + 0x14) == screen) {
+            uint32_t package = MEM32(reg - 4 + 0x18);
+            if (package) focus = MEM32(package + 0x80);
+            break;
+        }
+    }
+    if (screen != s_qr_screen || focus != s_qr_focus || MEM32(screen) != 0x001FB64Cu)
+        s_qr_arrow_count = 0;
+    s_qr_screen = screen; s_qr_focus = focus;
+    s_touch_bounds_count = 0;
+}
 
 uint32_t feng_touch_draw_begin(uint32_t object)
 {
@@ -982,6 +1010,19 @@ int feng_touch_draw_cache(uint32_t cache)
             touch_bounds_add(s_touch_draw_object, x, y);
         }
         entry = MEM32(entry);
+    }
+    if (MEM32(s_qr_screen) == 0x001FB64Cu &&
+        MEM32(s_touch_draw_object + 0x10) == 0x13E9F3A9u) {
+        TouchBounds bounds;
+        if (touch_object_bounds(s_touch_draw_object, &bounds, 0)) {
+            unsigned slot;
+            for (slot = 0; slot < s_qr_arrow_count; slot++)
+                if (s_qr_arrows[slot].object == s_touch_draw_object) break;
+            if (slot < 2) {
+                s_qr_arrows[slot] = bounds;
+                if (slot == s_qr_arrow_count) s_qr_arrow_count++;
+            }
+        }
     }
     return MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_help_icon(s_touch_draw_object);
 }
