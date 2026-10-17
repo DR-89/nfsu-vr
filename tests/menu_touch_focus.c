@@ -817,5 +817,84 @@ int main(void)
     MEM32(screen + 0x40) = 10; /* scrolled while held: do not open a new item */
     menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 2);
+    /* Pause stays in GameFlow 6. C0040 consumes numeric row identities
+     * through MouseClick; using Select silently does nothing. */
+    MEM32(0x283434) = 6;
+    MEM32(screen) = 0x1FD734;
+    MEM32(package + 0x88) = 0;
+    MEM32(yes + 0x10) = 1; MEM32(no + 0x10) = 3;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 120, 200, 280, 225);
+    add_quad(no, 120, 300, 210, 325);
+    expected_message = 0x0C407210;
+    before_actions = controller_selects;
+    tap_at(.3f, .44f, yes);
+    assert(feng_touch_race_menu_active());
+    tap_at(.42f, .64f, no); /* full row extends past shorter Quit glyphs */
+    assert(controller_selects == before_actions + 2);
+    tap_at(.7f, .44f, yes);
+    assert(controller_selects == before_actions + 2);
+    MEM32(no + 0x1C) = 0x04000000;
+    tap_at(.3f, .64f, no);
+    assert(controller_selects == before_actions + 2);
+    /* Accept footer becomes localized Back, with B glyph and a single
+     * broad target spanning the icon, caption and their gap. */
+    MEM32(screen) = 0x1FBBC8; /* pause settings selector */
+    update();
+    MEM32(yes + 0x10) = 0x123456;
+    MEM32(no + 0x10) = 0x123457;
+    MEM32(yes + 0x5C) = 0x4F876B6F;
+    MEM32(no + 0x5C) = 0xE03C840A;
+    MEM32(no + 0x1C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 180, 410, 260, 430);
+    add_quad(no, 130, 405, 160, 435);
+    assert(MEM32(yes + 0x5C) == 0x1335F0);
+    assert(MEM32(no + 0x5C) == 0xE03C840B);
+    expected_message = 0x911AB364;
+    before_actions = controller_selects;
+    tap_at(170.0f / 640, 420.0f / 480, no); /* gap */
+    tap_at(125.0f / 640, 420.0f / 480, no); /* outside glyph edge */
+    assert(controller_selects == before_actions + 2);
+    /* Parent selector remains active behind a child settings panel. Back
+     * must target the child and use its F2D0D887 close event. */
+    uint32_t parent_reg = 0x37000, parent_screen = 0x36000, parent_package = 0x38000;
+    MEM32(0x2BCB9C) = parent_reg; MEM32(parent_reg) = registry;
+    MEM32(parent_reg - 4 + 0x14) = parent_screen;
+    MEM32(parent_reg - 4 + 0x18) = parent_package;
+    MEM32(parent_screen) = 0x1FBBC8; MEM32(parent_package + 0x1C) = 1;
+    MEM32(screen) = 0x1FBC9C;
+    expected_message = 0xF2D0D887;
+    before_actions = controller_selects;
+    tap_at(210.0f / 640, 420.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(0x2BCB9C) = registry;
+    /* Back cache colors are opaque white, and the native icon is omitted. */
+    add_quad(yes, 180, 410, 260, 430);
+    for (unsigned vertex = 0; vertex < 4; vertex++)
+        assert(MEM32(0x35100 + 0x90 + vertex * 4) == 0xFFFFFFFF);
+    /* Controller/Vibration accepts a broad touch across label/value/gap. */
+    MEM32(yes + 0x10) = 0x1AEC7D09; /* OptionName_1 */
+    MEM32(no + 0x10) = 0x7654321;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 80, 150, 200, 170);
+    add_quad(no, 550, 150, 590, 170);
+    expected_message = 0xB5971BF1;
+    before_actions = controller_selects;
+    tap_at(350.0f / 640, 160.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(screen) = 0x1F9404; /* countdown screen must not hide race controls */
+    update();
+    assert(!feng_touch_race_menu_active());
+    MEM32(screen) = 0x1FD734;
+    update();
+    assert(feng_touch_race_menu_active());
+    MEM32(package + 0x1C) = 0; /* unpaused: no active FEng menu */
+    update();
+    assert(!feng_touch_race_menu_active());
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }

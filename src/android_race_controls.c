@@ -2,6 +2,7 @@
  * samples a USB report. Both physical and touch input use guest port zero. */
 #include <jni.h>
 #include "race_touch.h"
+#include "feng_touch.h"
 #include "android_input.h"
 #include "../xboxrecomp/src/usb/usb_gamepad.h"
 #include "../xboxrecomp/src/kernel/xbox_memory_layout.h"
@@ -10,7 +11,8 @@ int __real_usb_gamepad_report(int dev, uint8_t *out, int max);
 
 static int touch_enabled(void)
 {
-    return !android_input_has_controller() && xbox_GetMemoryBase() &&
+    return !android_input_has_controller() && !feng_touch_race_menu_active() &&
+        xbox_GetMemoryBase() &&
         *(volatile uint32_t *)(uintptr_t)(xbox_GetMemoryOffset() + 0x00283434u) == 6;
 }
 

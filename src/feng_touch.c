@@ -5,6 +5,7 @@
 #include "recomp_funcs.h"
 #include "feng_touch.h"
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
@@ -41,6 +42,21 @@ static RECOMP_TLS uint32_t s_touch_draw_object;
 typedef struct { uint32_t object; float left, top, right, bottom; } TouchBounds;
 static TouchBounds s_touch_bounds[2048];
 static unsigned s_touch_bounds_count;
+static uint32_t s_back_caches[16], s_back_icons[8];
+static unsigned s_back_cache_count, s_back_icon_count;
+extern void sub_000F8B80_gen(void);
+
+static atomic_int s_race_menu_active;
+int feng_touch_race_menu_active(void)
+{
+    return atomic_load(&s_race_menu_active);
+}
+static int touch_menu_enabled(void)
+{
+    uint32_t flow = MEM32(NFSU1_GAMEFLOW_STATE);
+    return flow == 3 || (flow == 6 && atomic_load(&s_race_menu_active));
+}
+
 /* QROptions' blinking arrow glyphs share one hash; preserve their last drawn
  * bounds only while the same modal and focused row own them. */
 static TouchBounds s_qr_arrows[2];
@@ -102,6 +118,8 @@ static int touch_back_label(uint32_t object)
     if (!object || MEM32(object + 0x18) != 2) return 0;
     uint32_t language = MEM32(object + 0x5C);
     if (language == 0x001335F0u) return 1; /* native/localized Back */
+    if (MEM32(NFSU1_GAMEFLOW_STATE) == 6 && feng_touch_race_menu_active() &&
+        language == 0x4F876B6Fu) return 1; /* pause footer Accept -> Back */
     if (language != 0x00169268u) return 0;
     switch (MEM32(object + 0x10)) {
     case 0xA87927BEu: case 0x936D3402u: case 0x0C39BA77u:
@@ -116,6 +134,13 @@ static int touch_help_icon(uint32_t object)
     return object && MEM32(object + 0x18) == 2 &&
         MEM32(object + 0x5C) == 0x349EB9C2u;
 }
+static int touch_pause_back_icon(uint32_t object)
+{
+    if (MEM32(NFSU1_GAMEFLOW_STATE) != 6 || !feng_touch_race_menu_active() ||
+        MEM32(object + 0x18) != 2) return 0;
+    uint32_t language = MEM32(object + 0x5C);
+    return language == 0xE03C840Au || language == 0xE03C840Bu;
+}
 static uint32_t touch_back_hit(void)
 {
     float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
@@ -123,7 +148,11 @@ static uint32_t touch_back_hit(void)
     uint32_t target = 0, hit = 0;
     for (unsigned i = 0; i < s_touch_bounds_count; i++) {
         TouchBounds *b = &s_touch_bounds[i];
-        if (!touch_back_label(b->object) && !touch_help_icon(b->object)) continue;
+        int footer_icon = 0;
+        for (unsigned icon = 0; icon < s_back_icon_count; icon++)
+            if (s_back_icons[icon] == b->object) footer_icon = 1;
+        if (!touch_back_label(b->object) && !touch_help_icon(b->object) &&
+            !touch_pause_back_icon(b->object) && !footer_icon) continue;
         if (!target) area = *b;
         else {
             area.left = fminf(area.left, b->left);
@@ -136,8 +165,8 @@ static uint32_t touch_back_hit(void)
             hit = b->object;
     }
     /* Include the whole caption, icon and their gap, with finger tolerance. */
-    if (target && x >= area.left - 8 && x < area.right + 8 &&
-        y >= area.top - 8 && y < area.bottom + 8) return hit ? hit : target;
+    if (target && x >= area.left - 16 && x < area.right + 16 &&
+        y >= area.top - 16 && y < area.bottom + 16) return hit ? hit : target;
     return 0;
 }
 static uint32_t touch_active_screen(void)
@@ -146,7 +175,19 @@ static uint32_t touch_active_screen(void)
     for (unsigned n = 0; reg && reg != 0x002BCB9Cu && n < 64; n++, reg = MEM32(reg)) {
         uint32_t package = MEM32(reg - 4 + 0x18);
         uint32_t screen = MEM32(reg - 4 + 0x14);
-        if (package && screen && (MEM32(package + 0x1C) & 1)) return screen;
+        if (package && screen && (MEM32(package + 0x1C) & 1)) {
+            if (MEM32(screen) != 0x001FBBC8u) return screen;
+            /* Pause options leaves its selector visible behind the child. */
+            uint32_t child_reg = MEM32(0x002BCB9Cu);
+            for (unsigned c = 0; child_reg && child_reg != 0x002BCB9Cu && c < 64;
+                 c++, child_reg = MEM32(child_reg)) {
+                uint32_t child = MEM32(child_reg - 4 + 0x14);
+                uint32_t child_package = MEM32(child_reg - 4 + 0x18);
+                if (child && child_package && MEM32(child) == 0x001FBC9Cu &&
+                    (MEM32(child_package + 0x1C) & 1)) return child;
+            }
+            return screen;
+        }
     }
     return 0;
 }
@@ -294,6 +335,57 @@ static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t coun
 {
     if (screen != touch_active_screen()) return 0;
     if (touch_quick_race_options(screen, target)) return 1;
+    if (MEM32(screen) == 0x001FBC9Cu) { /* nested pause settings, B65E0 */
+        float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+        for (unsigned row = 1; row <= 8; row++) {
+            char name[32]; snprintf(name, sizeof(name), "OptionName_%u", row);
+            uint32_t label = touch_rendered_object(touch_name_hash(name));
+            TouchBounds area;
+            if (!label || (MEM32(label + 0x1C) & 0x04000000u) ||
+                !touch_object_bounds(label, &area, 0)) continue;
+            float centre = (area.top + area.bottom) * .5f;
+            for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+                TouchBounds *b = &s_touch_bounds[i];
+                if (MEM32(b->object + 0x18) == 2 &&
+                    !(MEM32(b->object + 0x1C) & 0x04000000u) &&
+                    b->top <= centre && b->bottom >= centre) {
+                    area.left = fminf(area.left, b->left);
+                    area.right = fmaxf(area.right, b->right);
+                }
+            }
+            if (x >= area.left - 16 && x < area.right + 16 &&
+                y >= area.top - 12 && y < area.bottom + 12) {
+                target->target = label;
+                snprintf(name, sizeof(name), "LeftArrow_%u", row);
+                target->message = touch_rendered_named_hit(touch_name_hash(name)) ?
+                    0x9120409Eu : 0xB5971BF1u;
+                return 1;
+            }
+        }
+    }
+
+    if (MEM32(screen) == 0x001FD734u) { /* PauseMenu, C0040 */
+        float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+        float left = INFINITY, right = -INFINITY;
+        for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+            TouchBounds *b = &s_touch_bounds[i];
+            if (MEM32(b->object + 0x10) > 4 || MEM32(b->object + 0x18) != 2 ||
+                (MEM32(b->object + 0x1C) & 0x04000000u)) continue;
+            left = fminf(left, b->left); right = fmaxf(right, b->right);
+        }
+        for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+            TouchBounds *b = &s_touch_bounds[i];
+            if (MEM32(b->object + 0x10) > 4 || MEM32(b->object + 0x18) != 2 ||
+                (MEM32(b->object + 0x1C) & 0x04000000u)) continue;
+            if (x >= left - 16 && x < right + 16 &&
+                y >= b->top - 12 && y < b->bottom + 12) {
+                target->target = b->object;
+                target->message = 0x0C407210u; /* native row click, not Select */
+                return 1;
+            }
+        }
+    }
+
     /* Common screen constructor DE440 stores mouse_over_u/d at +2C/+30.
      * Use the original Up/Down messages (DE5F0), including native endpoints. */
     for (unsigned down = 0; down < 2; down++) {
@@ -588,7 +680,8 @@ void feng_touch_dispatch(void)
                 if (object) {
                     TouchTarget *target = &s_touch_targets[slot];
                     target->target = object;
-                    target->message = 0x911AB364u; /* native B/Cancel */
+                    target->message = MEM32(screen) == 0x001FBC9Cu ?
+                        0xF2D0D887u : 0x911AB364u; /* child closes via native back event */
                     target->screen = screen;
                     target->back = 1;
                     target->start_x = s_touch_x;
@@ -876,16 +969,20 @@ void feng_touch_update(void)
     MenuTouchSample sample = menu_touch_sample();
     float menu_size;
     memcpy(&menu_size, (void *)XBOX_PTR(0x00295B00u), sizeof(menu_size));
-    /* First implementation is limited to the front end. Game flow 6 also
-     * includes HUD/pause/results; those need separate device validation. */
-    int enabled = MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
+    /* Racing HUD uses separate callbacks; an active FEng screen in flow 6
+     * is a menu, including the pause confirmation and nested options. */
+    uint32_t active_screen = touch_active_screen();
+    /* PreRaceStats owns a FEng screen during countdown, but is not pause. */
+    atomic_store(&s_race_menu_active, MEM32(NFSU1_GAMEFLOW_STATE) == 6 &&
+        active_screen && MEM32(active_screen) != 0x001F9404u);
+    int enabled = touch_menu_enabled() &&
         menu_touch_position(&sample, xbox_video_widescreen(), menu_size,
                             &s_touch_x, &s_touch_y);
     if (sample.reset || (!enabled && sample.active)) {
         memset((void *)XBOX_PTR(feng + 0xC), 0, 0x20);
         MEM32(feng + 0x94) = 0; /* mouse press capture, not controller focus */
     }
-    if (MEM32(NFSU1_GAMEFLOW_STATE) != 3) menu_touch_cancel();
+    if (!touch_menu_enabled()) menu_touch_cancel();
     if (enabled && sample.prepare) {
         /* Ensure hover is resolved even for a tap at (0,0), or a second tap
          * at the same position after controller navigation changed focus. */
@@ -958,6 +1055,24 @@ void feng_touch_poll(void)
 
 void feng_touch_frame_begin(void)
 {
+    s_back_cache_count = 0;
+    s_back_icon_count = 0;
+    /* Retained Xbox footer icons can use script-generated text rather than
+     * a language key. Identify the small glyph immediately left of Back. */
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        TouchBounds *caption = &s_touch_bounds[i];
+        if (!touch_back_label(caption->object)) continue;
+        for (unsigned j = 0; j < s_touch_bounds_count && s_back_icon_count < 8; j++) {
+            TouchBounds *icon = &s_touch_bounds[j];
+            if (icon->object == caption->object || MEM32(icon->object + 0x18) != 2 ||
+                touch_back_label(icon->object) || icon->right - icon->left > 40 ||
+                icon->bottom - icon->top > 48) continue;
+            if (icon->right <= caption->left && icon->right >= caption->left - 48 &&
+                icon->bottom >= caption->top && icon->top <= caption->bottom)
+                s_back_icons[s_back_icon_count++] = icon->object;
+        }
+    }
+
     uint32_t screen = touch_active_screen();
     uint32_t focus = 0;
     uint32_t reg = MEM32(0x002BCB9Cu);
@@ -978,6 +1093,15 @@ uint32_t feng_touch_draw_begin(uint32_t object)
 {
     uint32_t previous = s_touch_draw_object;
     s_touch_draw_object = object;
+    if (MEM32(NFSU1_GAMEFLOW_STATE) == 6 && feng_touch_race_menu_active() &&
+        MEM32(object + 0x18) == 2) {
+        uint32_t language = MEM32(object + 0x5C);
+        if (language == 0x4F876B6Fu || language == 0xE03C840Au) {
+            MEM32(object + 0x5C) = language == 0x4F876B6Fu ? 0x001335F0u : 0xE03C840Bu;
+            MEM32(object + 0x1C) |= 0x02400000u;
+        }
+    }
+
     if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
         MEM32(touch_active_screen()) == 0x001FB64Cu &&
         MEM32(object + 0x18) == 2 &&
@@ -988,7 +1112,7 @@ uint32_t feng_touch_draw_begin(uint32_t object)
         MEM32(object + 0x1C) |= 0x02400000u;
     }
 
-    if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_back_label(object) &&
+    if (touch_menu_enabled() && touch_back_label(object) &&
         MEM32(object + 0x5C) == 0x00169268u) {
         MEM32(object + 0x5C) = 0x001335F0u;
         MEM32(object + 0x1C) |= 0x02400000u;
@@ -1008,6 +1132,9 @@ int feng_touch_draw_cache(uint32_t cache)
             memcpy(&x, (void *)XBOX_PTR(entry + 0x20 + i * 16), 4);
             memcpy(&y, (void *)XBOX_PTR(entry + 0x24 + i * 16), 4);
             touch_bounds_add(s_touch_draw_object, x, y);
+            /* Cached quad RGBA array starts at quad+80 (entry+90), as
+             * consumed by 192C0/192A0. Keep Back fully opaque and white. */
+            if (touch_back_label(s_touch_draw_object)) MEM32(entry + 0x90 + i * 4) = 0xFFFFFFFFu;
         }
         entry = MEM32(entry);
     }
@@ -1024,5 +1151,27 @@ int feng_touch_draw_cache(uint32_t cache)
             }
         }
     }
-    return MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_help_icon(s_touch_draw_object);
+    if (touch_menu_enabled() && touch_back_label(s_touch_draw_object)) {
+        if (s_back_cache_count < 16) s_back_caches[s_back_cache_count++] = cache;
+        return 1; /* draw above modal dimming panels at the end of FEng */
+    }
+    for (unsigned i = 0; i < s_back_icon_count; i++)
+        if (s_back_icons[i] == s_touch_draw_object) return 1;
+    return touch_menu_enabled() && (touch_help_icon(s_touch_draw_object) ||
+        touch_pause_back_icon(s_touch_draw_object));
+}
+
+/* Replay only the native Back text after all menu layers, preserving guest
+ * registers and cached geometry. This also keeps the inherited footer usable
+ * when a nested settings panel dims its parent package. */
+void feng_touch_frame_end(void)
+{
+    uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx, saved_esp = esp;
+    for (unsigned i = 0; i < s_back_cache_count; i++) {
+        ecx = s_back_caches[i];
+        PUSH32(esp, 0);
+        sub_000F8B80_gen();
+        esp = saved_esp;
+    }
+    eax = saved_eax; ecx = saved_ecx; edx = saved_edx; esp = saved_esp;
 }

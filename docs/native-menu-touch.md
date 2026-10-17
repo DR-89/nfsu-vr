@@ -413,3 +413,46 @@ rows, and flushes native queued focus scripts without sending Select/Right.
 Tests cover identical glyph hashes, both directions, hidden blink frames,
 focus-change invalidation, gap selection, focus-script flush and no value change
 on row taps. Device acceptance of the revised interaction remains pending.
+
+## Race pause menu
+
+GameFlow remains 6 during pause. Enable menu touch when this state has an
+active FEng screen; the racing HUD uses separate callbacks. Publish this mode
+atomically to android_race_controls so its buttons release and stop intercepting
+menu taps. With no active FEng screen, race controls return and menu touch cancels.
+This also keeps nested options and restart/quit confirmation screens touchable.
+
+PauseMenu vtable 1FD734 routes C0040 MouseClick (0C407210) using numeric object
+identities 0..4. Select is ignored. Capture rendered text rows, use their shared
+horizontal extent plus finger tolerance, and send MouseClick on release. Disabled
+and missing rows cannot activate; existing screen-change/drag checks still apply.
+Synthetic tests cover flow 6, Restart/Quit identities, short-label row extension,
+misses, disabled rows and leaving pause. Device acceptance remains separate.
+
+PreRaceStatsScreen (1F9404) is an active FEng countdown screen, not pause:
+exclude it from race_menu_active so the driving overlay stays visible before
+control handoff. Regression checks countdown versus pause visibility state.
+In racing menus, localized ACCEPT (4F876B6F) becomes BACK (1335F0), and
+FENG_BUTTON0 (E03C840A) becomes FENG_BUTTON1 (E03C840B). The shared Cancel
+hit target includes the complete caption/icon/gap with 16 logical pixels of
+finger tolerance. Tests cover caption/icon replacement, gap taps and touches
+outside the glyph edge. Physical countdown and settings-return acceptance
+remain pending on this revision.
+
+### Visible Back over nested menus
+
+Back cached quads now use opaque white RGBA (entry+90, four vertices; retail
+192C0/192A0 consumes this array). Defer their native cache draw until the end
+of DC090 so modal dimming cannot obscure the inherited footer. Keep its original
+rendered geometry for input. Suppress the retained controller glyph, including
+script-generated small text immediately left of Back, while retaining hit bounds.
+This applies to front-end Back as well as pause.
+
+If both the pause selector (1FBBC8) and its settings child (1FBC9C) are active,
+Back belongs to the child. B65E0 ignores generic Cancel: F2D0D887 closes this
+child through its original package/selector update path. Other screens retain
+Cancel. The child settings row's label/value/gap uses a broad rendered union
+and sends native Right to OptionName_N, including Controller/Vibration.
+Tests cover simultaneous parent/child activation, the actual close event,
+white cache colors and a gap tap on the controller setting. Device visual and
+nested-return acceptance remain pending for this revision.

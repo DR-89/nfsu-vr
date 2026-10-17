@@ -776,6 +776,9 @@ void sub_000DC090(void)
     if (!previous) feng_touch_frame_begin();
 #endif
     sub_000DC090_gen();
+#ifdef __ANDROID__
+    if (!previous) feng_touch_frame_end();
+#endif
     s_feng_menu_draw = previous;
 }
 
