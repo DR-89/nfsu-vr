@@ -12,6 +12,7 @@
  */
 
 #include "kernel.h"
+#include "recomp_context.h"
 #include <stdio.h>
 #include <stdlib.h>
 #if defined(_WIN32)
@@ -37,7 +38,7 @@
  * allows code that checks IRQL to function correctly.
  * ============================================================================ */
 
-static XBOX_THREAD_LOCAL KIRQL g_current_irql = PASSIVE_LEVEL;
+#define g_current_irql (recomp_context_current()->kernel.irql)
 
 /* How many threads are holding IRQL at or above DISPATCH_LEVEL.
  *
@@ -193,11 +194,7 @@ static BOOL CALLBACK dispatch_lock_init(PINIT_ONCE o, PVOID p, PVOID *c)
  * is one value for the one emulated CPU, so "is IRQL raised?" answers for
  * whoever raised it last; decisions about *this* thread -- may it be
  * pre-empted, is it a DPC waiting for the guest lock -- ask this instead. */
-#ifdef _MSC_VER
-static __declspec(thread) int t_dispatch_held;
-#else
-static _Thread_local int t_dispatch_held;
-#endif
+#define t_dispatch_held (recomp_context_current()->kernel.dispatch_held)
 int xbox_thread_holds_dispatch(void) { return t_dispatch_held; }
 
 int  xbox_gil_suspend(void);
@@ -221,14 +218,32 @@ static void irql_transition(KIRQL from, KIRQL to)
     if (from < DISPATCH_LEVEL && to >= DISPATCH_LEVEL) {
         if (!TryEnterCriticalSection(&g_dispatch_lock)) {
             int gil = xbox_gil_suspend();
+#ifdef __ANDROID__
+            extern int xbox_guest_scheduler_active(void);
+            extern void xgs_wait_begin(uintptr_t);
+            extern void xgs_wait_end(void);
+            int scheduled = xbox_guest_scheduler_active();
+            if (scheduled) xgs_wait_begin((uintptr_t)&g_dispatch_lock);
+#endif
             EnterCriticalSection(&g_dispatch_lock);
+#ifdef __ANDROID__
+            if (scheduled) xgs_wait_end();
+#endif
             xbox_gil_resume(gil);
         }
         t_dispatch_held = 1;
+#ifdef __ANDROID__
+        extern void xbox_guest_scheduler_dispatch(int);
+        xbox_guest_scheduler_dispatch(1);
+#endif
         xbox_kernel_busy(1);
     } else if (from >= DISPATCH_LEVEL && to < DISPATCH_LEVEL) {
         xbox_kernel_busy(-1);
         t_dispatch_held = 0;
+#ifdef __ANDROID__
+        extern void xbox_guest_scheduler_dispatch(int);
+        xbox_guest_scheduler_dispatch(0);
+#endif
         LeaveCriticalSection(&g_dispatch_lock);
     }
 }

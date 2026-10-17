@@ -30,12 +30,14 @@
 #include <pthread.h>
 #include <ucontext.h>
 #include <dlfcn.h>
+#include "../xboxrecomp/src/platform/win32_compat.h"
 static uintptr_t diagnostic_library_base;
 int android_host_boot(int argc, char **argv);
 #include "../xboxrecomp/src/platform/android_host.h"
 #endif
 
 #include <xbox/xboxrecomp.h>
+#include "../xboxrecomp/src/kernel/guest_executor.h"
 
 #ifdef __SWITCH__
 /* libnx lives in switch_nx.c: <switch.h> and the Win32 vocabulary collide. */
@@ -49,6 +51,7 @@ int SDL_ShowSimpleMessageBox(uint32_t flags, const char *title, const char *mess
 
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
 extern RECOMP_TLS uint32_t g_ebx, g_esi, g_edi;
+extern RECOMP_TLS uint32_t g_fs_base;
 extern ptrdiff_t g_xbox_mem_offset;
 extern volatile uint32_t g_icall_trace[16];
 extern volatile uint32_t g_icall_trace_idx;
@@ -325,11 +328,11 @@ int main(int argc, char **argv)
 }
 #else
 #ifdef __ANDROID__
-static void *android_game_thread(void *arg)
+static DWORD WINAPI android_game_thread(void *arg)
 {
     *(int *)arg = game_main();
     android_host_game_finished();
-    return NULL;
+    return 0;
 }
 #endif
 int main(int argc, char **argv)
@@ -339,19 +342,17 @@ int main(int argc, char **argv)
         return 1;
     if (!android_host_video_init()) return 1;
     /* Lifted code has large automatic arrays, unlike a typical SDL app. */
-    pthread_attr_t attr;
-    pthread_t thread;
     int rc = 1;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 16u * 1024u * 1024u);
-    int error = pthread_create(&thread, &attr, android_game_thread, &rc);
-    pthread_attr_destroy(&attr);
-    if (error != 0) {
-        fprintf(stderr, "Cannot start Android game thread: %d\n", error);
+    /* Use the same host thread identity/priority/suspend object as workers. */
+    HANDLE thread = CreateThread(NULL, 16u * 1024u * 1024u,
+                                 android_game_thread, &rc, 0, NULL);
+    if (!thread) {
+        fprintf(stderr, "Cannot start Android game thread: %u\n", GetLastError());
         return 1;
     }
     android_host_run();
-    pthread_join(thread, NULL);
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
     return rc;
 #else
     (void)argc;
@@ -371,6 +372,9 @@ static int game_main(void)
 
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
+    /* Install managed device events before APU/OHCI can create or signal them. */
+    xbox_guest_executor_prepare();
 
     printf("=== Need for Speed: Underground 2 (Xbox) - static recompilation ===\n");
     install_crash_reporter();
@@ -510,10 +514,12 @@ static int game_main(void)
     xbox_WatchdogStart();
 
     printf("Starting guest at 0x%08X (esp=0x%08X)\n", NFSU2_ENTRY_POINT, g_esp);
-    xbox_gil_mark_main();      /* the frame-rate thread (RECOMP_GIL_EAGER) */
-    xbox_gil_enter();          /* guest code from here on (kernel_bridge.c) */
-    xbe_entry_point();
-    xbox_gil_leave();
+    if (!xbox_guest_executor_run(xbe_entry_point, g_esp, g_fs_base)) {
+        xbox_gil_mark_main();
+        xbox_gil_enter();
+        xbe_entry_point();
+        xbox_gil_leave();
+    }
 
     printf("Guest returned. Cleaning up.\n");
     xbox_kernel_shutdown();

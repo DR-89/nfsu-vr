@@ -545,6 +545,7 @@ static void se_frame(MCPXAPUState *d)
 
 static void *mcpx_apu_frame_thread(void *arg)
 {
+    nfsu_perf_role("apu");
     MCPXAPUState *d = MCPX_APU_DEVICE(arg);
     /* Audio misses are audible, a late game frame is not: stay ahead of the
      * game's busy threads for the few microseconds a block takes. */
@@ -600,12 +601,16 @@ static void *mcpx_apu_frame_thread(void *arg)
 
         if (apu_active && !g_test_tone.active) {
             /* Full pipeline: VP voices → DSP → monitor → waveOut */
+            uint64_t perf_work = nfsu_perf_begin();
             se_frame(d);
+            nfsu_perf_end(NFSU_PERF_APU_WORK, perf_work);
         } else {
             /* Lightweight: just monitor frame (test tone + software mixer) */
             mcpx_apu_monitor_frame(d);
             d->ep_frame_div++;
         }
+
+        nfsu_perf_poll();
 
         /* Hand the lock to a waiting guest thread (mcpx_apu_lock_guest). */
         while (d->lock_waiters && !qatomic_read(&d->exiting))

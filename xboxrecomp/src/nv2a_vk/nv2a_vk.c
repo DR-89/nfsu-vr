@@ -44,6 +44,7 @@
  *   RECOMP_VK_HEADLESS=1             (Linux) no window, no present
  */
 #include "nv2a_vk.h"
+#include "../../include/nfsu_perf.h"
 #include "../nv2a_gl/gl_psh.h"
 #include "../nv2a_gl/gl_vsh.h"
 #include "../kernel/nv2a_backend.h"
@@ -268,7 +269,9 @@ static void frame_begin(void)
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     s_f = &s_fr[s_fi];
     if (s_f->submitted) {
+        uint64_t perf_fence = nfsu_perf_begin();
         vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
+        nfsu_perf_end(NFSU_PERF_VK_FENCE, perf_fence);
         vkResetFences(s_dev, 1, &s_f->fence);
         s_f->submitted = 0;
     }
@@ -3371,7 +3374,7 @@ static int pend_append(const Nv2aRawBatch *b, int changed)
     return 1;
 }
 
-static void vk_draw_raw(const Nv2aRawBatch *b)
+static void vk_draw_raw_impl(const Nv2aRawBatch *b)
 {
     VkSurf *s, *sampled[4];
     VkDepthBuf *d;
@@ -3644,6 +3647,13 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     if (s_vtrace > 0)
         s_vtrace--;
+}
+
+static void vk_draw_raw(const Nv2aRawBatch *b)
+{
+    uint64_t start = nfsu_perf_begin();
+    vk_draw_raw_impl(b);
+    nfsu_perf_end(NFSU_PERF_VK_DRAW, start);
 }
 
 static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
@@ -4067,7 +4077,7 @@ static void dump_fxaa(VkSurf *s, const char *path)
     }
 }
 
-static void vk_flip(void)
+static void vk_flip_impl(void)
 {
     static int dump_every = -1;
     static char dump_prefix[256];
@@ -4191,6 +4201,7 @@ static void vk_flip(void)
     if (!s_headless) android_prepare_presentation();
 #endif
     if (!s_headless && s_swapchain) {
+        uint64_t perf_acquire = nfsu_perf_begin();
         VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain,
 #ifdef __ANDROID__
                                             /* Pause can race the event drain above. Bound the
@@ -4200,6 +4211,7 @@ static void vk_flip(void)
                                             UINT64_MAX,
 #endif
                                             s_f->acquired, VK_NULL_HANDLE, &idx);
+        nfsu_perf_end(NFSU_PERF_VK_ACQUIRE, perf_acquire);
         if (rr == VK_ERROR_OUT_OF_DATE_KHR || rr == VK_ERROR_SURFACE_LOST_KHR) {
 #ifdef __ANDROID__
             LOGE("Android acquire requires presentation rebuild: %d\n", rr);
@@ -4289,8 +4301,10 @@ static void vk_flip(void)
         si.pSignalSemaphores = &s_f->rendered;
 #endif
     }
+    uint64_t perf_submit = nfsu_perf_begin();
     if (vkQueueSubmit(s_queue, 1, &si, s_f->fence) != VK_SUCCESS)
         LOGE("vkQueueSubmit failed\n");
+    nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
     s_f->submitted = 1;
     if (have_image) {
         VkPresentInfoKHR pi = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -4305,7 +4319,9 @@ static void vk_flip(void)
         pi.pSwapchains = &s_swapchain;
         pi.pImageIndices = &idx;
         VT("flip %u: vkQueuePresentKHR\n", s_frame);
+        uint64_t perf_present = nfsu_perf_begin();
         pr = vkQueuePresentKHR(s_queue, &pi);
+        nfsu_perf_end(NFSU_PERF_VK_PRESENT, perf_present);
 #ifdef __ANDROID__
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
             LOGE("Android present requires presentation rebuild: %d\n", pr);
@@ -4338,6 +4354,14 @@ static void vk_flip(void)
         while (SDL_PollEvent(&e)) { }
     }
 #endif
+}
+
+static void vk_flip(void)
+{
+    uint64_t start = nfsu_perf_begin();
+    vk_flip_impl();
+    nfsu_perf_end(NFSU_PERF_VK_FLIP, start);
+    nfsu_perf_poll();
 }
 
 static void vk_draw(const Nv2aSurface *s, const Nv2aBatch *b)

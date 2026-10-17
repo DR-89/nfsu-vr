@@ -296,7 +296,7 @@ void recomp_spin_yield(void);       /* runtime: yield, and the guest lock with i
  * waiting for the guest lock (kernel_bridge.c). One load when nobody is. */
 extern volatile int g_gil_contended;
 void recomp_preempt(void);
-#define RECOMP_PREEMPT() do { if (__builtin_expect(g_gil_contended, 0)) recomp_preempt(); } while (0)
+#define RECOMP_PREEMPT() do { if (__builtin_expect(__atomic_load_n(&g_gil_contended, __ATOMIC_RELAXED), 0)) recomp_preempt(); } while (0)
 static inline void recomp_spin_hint(void)
 {
     static RECOMP_TLS unsigned turns;

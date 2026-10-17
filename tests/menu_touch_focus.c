@@ -6,6 +6,7 @@
 #include <string.h>
 #include "recomp_types.h"
 #include "menu_touch.h"
+#include "feng_touch.h"
 
 ptrdiff_t g_xbox_mem_offset;
 RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
@@ -18,7 +19,7 @@ static const uint32_t yes = 0x20000, no = 0x21000;
 static uint32_t expected;
 static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
-static int palette_updates, palette_previews;
+static int palette_updates, palette_previews, focus_flushes;
 static unsigned draw_mask = 3;
 static int keyboard_layout, stale_mouse_edge, carousel_layout;
 void sub_000D8B10(void);
@@ -51,6 +52,19 @@ void sub_000DC090_gen(void)
         sub_000D9D00();
     }
     g_esp = entry + 4;
+}
+static void add_quad(uint32_t object, float left, float top, float right, float bottom)
+{
+    uint32_t cache = 0x35000, node = 0x35100;
+    MEM32(cache + 0x18) = node; MEM32(node) = cache + 0x18;
+    for (unsigned j = 0; j < 4; j++) {
+        float x = j & 1 ? right : left, y = j / 2 ? bottom : top;
+        memcpy((void *)XBOX_PTR(node + 0x20 + j * 16), &x, 4);
+        memcpy((void *)XBOX_PTR(node + 0x24 + j * 16), &y, 4);
+    }
+    uint32_t previous = feng_touch_draw_begin(object);
+    feng_touch_draw_cache(cache);
+    feng_touch_draw_end(previous);
 }
 static void draw_bounds(void)
 {
@@ -108,7 +122,7 @@ void sub_000DE540(void)
     g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
     g_esp += 20;
 }
-void sub_000D7A00(void) { g_esp += 4; }
+void sub_000D7A00(void) { focus_flushes++; g_esp += 4; }
 void sub_000D6D30(void)
 {
     assert(g_ecx == feng);
@@ -471,6 +485,76 @@ int main(void)
     draw_mask = 1; draw_bounds(); tap(.7f, option);
     assert(controller_selects == before_actions + 2);
 
+    /* Quick Race row taps only focus; rendered arrows change the value.
+     * The native modal heading becomes the explicit Continue target. */
+    MEM32(screen) = 0x1FB64C;
+    MEM32(yes + 0x10) = 0x4C61C6CE; /* Option1Text */
+    MEM32(no + 0x10) = 0x4C58EF23; /* Option1Data */
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    MEM32(package + 0x88) = 0;
+    draw_mask = 3; draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0xB5971BF1;
+    int before_focus = focus_changes, before_flush = focus_flushes;
+    tap(.3f, yes); tap(.7f, yes);
+    tap(.5f, yes); /* gap between label and value selects the row */
+    assert(focus_changes == before_focus + 3);
+    assert(focus_flushes == before_flush + 3);
+    assert(MEM32(package + 0x80) == yes);
+    assert(controller_selects == before_actions);
+    MEM32(yes + 0x1C) = 0x04000000;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions);
+    MEM32(yes + 0x1C) = 0;
+    MEM32(no + 0x10) = 0xAA68BFD4; /* retail mouse_over_r, without DE440 pointers */
+    MEM32(package + 0x80) = yes;
+    draw_bounds(); tap(.7f, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(no + 0x10) = 0xAA68BFCE; /* retail mouse_over_l */
+    expected_message = 0x9120409E;
+    draw_bounds(); tap(.7f, yes);
+    assert(controller_selects == before_actions + 2);
+    /* Actual blinking glyphs have identical hashes, unlike mouse_over_l/r.
+     * Their identity and geometry survive a hidden blink frame. */
+    uint32_t qr_label = 0x32000, qr_value = 0x33000;
+    MEM32(qr_label + 0x10) = 0x4C61C6CE;
+    MEM32(qr_value + 0x10) = 0x4C58EF23;
+    MEM32(qr_label + 0x18) = MEM32(qr_value + 0x18) = 2;
+    MEM32(yes + 0x10) = MEM32(no + 0x10) = 0x13E9F3A9;
+    MEM32(package + 0x80) = qr_label;
+    draw_mask = 3; draw_bounds();
+    add_quad(qr_label, 120, 200, 280, 280);
+    add_quad(qr_value, 300, 200, 340, 280);
+    expected_message = 0x9120409E; tap(.3f, qr_label);
+    expected_message = 0xB5971BF1; tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 4);
+    MEM32(package + 0x80) = qr_label;
+    draw_mask = 0; draw_bounds(); /* hidden phase: no current arrow quads */
+    add_quad(qr_label, 120, 200, 280, 280);
+    add_quad(qr_value, 300, 200, 340, 280);
+    expected_message = 0x9120409E; tap(.3f, qr_label);
+    expected_message = 0xB5971BF1; tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 6);
+    MEM32(package + 0x80) = yes; /* changing row invalidates old blink geometry */
+    draw_mask = 0; draw_bounds();
+    tap(.7f, qr_label);
+    assert(controller_selects == before_actions + 6);
+    before_actions += 4;
+    MEM32(yes + 0x10) = 0x123456;
+    MEM32(yes + 0x5C) = 0xF5599FF0; /* MODE_OPTIONS_TITLE: actual retail heading */
+    draw_mask = 1; draw_bounds();
+    assert(MEM32(yes + 0x5C) == 0xDE02CF84); /* localized CONTINUE */
+    expected_message = 0x406415E3;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions + 3);
+    tap(.7f, yes); /* empty modal body cannot start a race */
+    assert(controller_selects == before_actions + 3);
+    MEM32(yes + 0x5C) = 0;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 1;
+    draw_mask = 3; draw_bounds();
+
     /* Underground's event scroller owns a separate cursor and ignores
      * FEng focus. Select must use the touched event, not the previous one. */
     MEM32(package + 0x88) = 0;
@@ -733,5 +817,84 @@ int main(void)
     MEM32(screen + 0x40) = 10; /* scrolled while held: do not open a new item */
     menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 2);
+    /* Pause stays in GameFlow 6. C0040 consumes numeric row identities
+     * through MouseClick; using Select silently does nothing. */
+    MEM32(0x283434) = 6;
+    MEM32(screen) = 0x1FD734;
+    MEM32(package + 0x88) = 0;
+    MEM32(yes + 0x10) = 1; MEM32(no + 0x10) = 3;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 120, 200, 280, 225);
+    add_quad(no, 120, 300, 210, 325);
+    expected_message = 0x0C407210;
+    before_actions = controller_selects;
+    tap_at(.3f, .44f, yes);
+    assert(feng_touch_race_menu_active());
+    tap_at(.42f, .64f, no); /* full row extends past shorter Quit glyphs */
+    assert(controller_selects == before_actions + 2);
+    tap_at(.7f, .44f, yes);
+    assert(controller_selects == before_actions + 2);
+    MEM32(no + 0x1C) = 0x04000000;
+    tap_at(.3f, .64f, no);
+    assert(controller_selects == before_actions + 2);
+    /* Accept footer becomes localized Back, with B glyph and a single
+     * broad target spanning the icon, caption and their gap. */
+    MEM32(screen) = 0x1FBBC8; /* pause settings selector */
+    update();
+    MEM32(yes + 0x10) = 0x123456;
+    MEM32(no + 0x10) = 0x123457;
+    MEM32(yes + 0x5C) = 0x4F876B6F;
+    MEM32(no + 0x5C) = 0xE03C840A;
+    MEM32(no + 0x1C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 180, 410, 260, 430);
+    add_quad(no, 130, 405, 160, 435);
+    assert(MEM32(yes + 0x5C) == 0x1335F0);
+    assert(MEM32(no + 0x5C) == 0xE03C840B);
+    expected_message = 0x911AB364;
+    before_actions = controller_selects;
+    tap_at(170.0f / 640, 420.0f / 480, no); /* gap */
+    tap_at(125.0f / 640, 420.0f / 480, no); /* outside glyph edge */
+    assert(controller_selects == before_actions + 2);
+    /* Parent selector remains active behind a child settings panel. Back
+     * must target the child and use its F2D0D887 close event. */
+    uint32_t parent_reg = 0x37000, parent_screen = 0x36000, parent_package = 0x38000;
+    MEM32(0x2BCB9C) = parent_reg; MEM32(parent_reg) = registry;
+    MEM32(parent_reg - 4 + 0x14) = parent_screen;
+    MEM32(parent_reg - 4 + 0x18) = parent_package;
+    MEM32(parent_screen) = 0x1FBBC8; MEM32(parent_package + 0x1C) = 1;
+    MEM32(screen) = 0x1FBC9C;
+    expected_message = 0xF2D0D887;
+    before_actions = controller_selects;
+    tap_at(210.0f / 640, 420.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(0x2BCB9C) = registry;
+    /* Back cache colors are opaque white, and the native icon is omitted. */
+    add_quad(yes, 180, 410, 260, 430);
+    for (unsigned vertex = 0; vertex < 4; vertex++)
+        assert(MEM32(0x35100 + 0x90 + vertex * 4) == 0xFFFFFFFF);
+    /* Controller/Vibration accepts a broad touch across label/value/gap. */
+    MEM32(yes + 0x10) = 0x1AEC7D09; /* OptionName_1 */
+    MEM32(no + 0x10) = 0x7654321;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 80, 150, 200, 170);
+    add_quad(no, 550, 150, 590, 170);
+    expected_message = 0xB5971BF1;
+    before_actions = controller_selects;
+    tap_at(350.0f / 640, 160.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(screen) = 0x1F9404; /* countdown screen must not hide race controls */
+    update();
+    assert(!feng_touch_race_menu_active());
+    MEM32(screen) = 0x1FD734;
+    update();
+    assert(feng_touch_race_menu_active());
+    MEM32(package + 0x1C) = 0; /* unpaused: no active FEng menu */
+    update();
+    assert(!feng_touch_race_menu_active());
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }
