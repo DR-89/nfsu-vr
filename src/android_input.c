@@ -175,6 +175,10 @@ DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
         return ERROR_DEVICE_NOT_CONNECTED;
     }
     state->dwPacketNumber = ++packets[port];
+    if (race_touch_editing()) {
+        SDL_UnlockJoysticks();
+        return ERROR_SUCCESS;
+    }
     read_gamepad(pad, &state->Gamepad);
     /* Overlay input supplements player one; it never replaces the pad or
      * changes connection/capability/rumble routing. */

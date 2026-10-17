@@ -129,6 +129,15 @@ int main(int argc, char **argv)
         assert(state[4 + XBOX_BUTTON_B] == 0);
         assert(state[4 + XBOX_BUTTON_RTRIGGER] == 0);
         assert(state[12] == (12345 & 255) && state[13] == (12345 >> 8));
+        /* The editor suppresses physical input without unplugging player one. */
+        race_touch_set_editing(1);
+        report(state);
+        assert(xbox_InputIsConnected(0));
+        assert(state[4 + XBOX_BUTTON_A] == 0);
+        assert(state[12] == 0 && state[13] == 0);
+        race_touch_set_editing(0);
+        report(state);
+        assert(state[4 + XBOX_BUTTON_A] == 255);
         /* Manually enabling sensor+overlay keeps the physical pad live. */
         input_mode_configure(INPUT_SENSOR_ON, 1);
         android_race_controls_poll();

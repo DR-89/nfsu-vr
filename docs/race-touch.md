@@ -124,3 +124,73 @@ cc -std=c11 -Wall -Wextra -Werror -pthread -Isrc -Ixboxrecomp/src \
 /tmp/nfsu-race-hotplug-test
 /tmp/nfsu-race-hotplug-test startup-connected
 ```
+
+
+## Layout editor (Android)
+
+Controller → **TOUCH CONTROL LAYOUT** opens an Android editor over the game.
+Drag any racing button, including MENU, to move it. Drag the toolbar by its
+heading if it covers the area you want to use. Save applies and persists the
+layout; Cancel, Android Back, or leaving the activity restores the previous
+layout. Reset restores the original arrangement and requires Save to persist.
+The editor works even when the race overlay is currently hidden.
+
+`touch-controls.xml` is stored in `GameActivity.gameDirectory()`, beside
+`nfsu1.log` (normally the app's external files directory). This is the writable
+runtime directory, not the selected SAF directory containing game assets.
+Version 1 records stable button IDs and normalized center coordinates in [0,1];
+the optional `size` attribute sets each button scale from 0.5 to 2.0 (default 1).
+Select a button in the editor, then use the size slider (50–200%).
+Artwork and the touch hit area resize together; Cancel and Reset cover sizes too. Positions are clamped to the screen
+when rendered. Missing or invalid files fall back to defaults. AtomicFile keeps
+the previous file recoverable if a write is interrupted.
+
+`TouchLayout` owns positions and the XML format; `TouchLayoutStore` owns Android
+file persistence. The same `RaceControlsView` draws and places buttons in both
+the editor and races, so editing does not duplicate button artwork or hit tests.
+The native Controller row publishes a one-shot request; the Android UI thread
+owns the editor. While editing, touch output and guest gamepad state are cleared
+without disconnecting the controller.
+
+Host XML check:
+
+```sh
+javac -d /tmp/nfsu-layout-test android/app/src/main/java/org/nfsu/android/TouchLayout.java tests/TouchLayoutTest.java
+java -cp /tmp/nfsu-layout-test org.nfsu.android.TouchLayoutTest
+```
+
+Device checks still required: open the Controller entry by touch and gamepad,
+move/save/restart, cancel/reset, background/resume, verify multi-touch in a race,
+and check tablet and wide-phone placement.
+
+### Named presets
+
+The editor's **Пресеты** button opens a library with Save under name, Load,
+Import XML, Export XML and Delete. Presets include positions and individual
+button sizes. Names can contain Unicode and spaces (up to 48 characters);
+path separators, control characters and reserved filename characters are rejected.
+Existing names require confirmation before replacement.
+
+The library lives in `touch-presets/<name>.xml` beside `nfsu1.log` and
+`touch-controls.xml`. It reuses the same versioned XML codec and AtomicFile
+persistence as the active layout. Files can also be copied into that directory.
+The list includes recoverable `.xml.bak` files after interrupted writes.
+Invalid presets produce an error and leave the preview untouched.
+
+Load changes the editor preview. **Сохранить** on the main toolbar commits it
+as the active layout; **Отмена** restores the layout from before opening the
+editor. Saving a named preset writes a library snapshot independently of the
+active layout. Import opens Android's document picker, validates the XML, previews
+it and asks for a library name. Cancelling the name dialog leaves the imported
+preview available without adding a library entry. Export writes a snapshot of
+the current preview through Android's Create Document picker. No broad storage
+permission is required. The editor remains open while either picker is active.
+
+`TouchPresetStore` owns names and library files; `TouchPresetController` owns
+preset dialogs and Android document exchange. The activity forwards picker
+results and preserves the editing session across the picker pause/resume.
+
+Host checks cover XML/size round trips, invalid XML, legacy files, unsafe names,
+library sorting, duplicate backup entries and discovery of recoverable backups.
+Actual Android AtomicFile writes, document-provider import/export, picker
+cancellation and background/recreation behavior still require device validation.

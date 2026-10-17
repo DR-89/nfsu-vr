@@ -93,5 +93,12 @@ int main(void)
     check_rows(1, 1); /* pad + sensor On: restore original colors and editing */
     input_mode_set_controller_present(0);
     check_rows(0, 0); /* unplug while settings are open */
+    g_ecx = screen; g_esp = 0x10000; MEM32(g_esp + 4) = 0x0C407210u;
+    touch_layout_input();
+    assert(g_esp == 0x10008 && race_touch_take_editor_request());
+    assert(!race_touch_take_editor_request());
+    g_esp = 0x10000; MEM32(g_esp + 4) = 0x911AB364u; /* Back cannot open editor. */
+    touch_layout_input();
+    assert(!race_touch_take_editor_request());
     puts("Controller native disabled rows, color restoration and input guards: OK");
 }

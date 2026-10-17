@@ -494,6 +494,12 @@ static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t coun
         }
     }
     if (MEM32(screen) == 0x001FDBC8u) { /* OptionsController */
+        if (MEM32(0x002BBB54u) == 3 &&
+                touch_rendered_named_hit(touch_name_hash("OptionName_7"))) {
+            target->target = touch_rendered_object(touch_name_hash("OptionName_7"));
+            target->message = 0x0C407210u;
+            return target->target != 0;
+        }
         for (unsigned side = 0; side < 2; side++) {
             const char *names[2] = { side ? "Select_arrow_right" : "Select_arrow_left",
                 side ? "select_arrow_right_button" : "select_arrow_left_button" };

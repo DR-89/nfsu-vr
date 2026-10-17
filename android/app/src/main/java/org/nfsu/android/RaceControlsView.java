@@ -21,6 +21,59 @@ final class RaceControlsView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path symbol = new Path();
     private final SparseIntArray pointers = new SparseIntArray();
+    private TouchLayout layout = new TouchLayout();
+    private TouchLayout originalLayout;
+    private Runnable editorRequest;
+    private boolean editing;
+    private int dragPointer = -1;
+    private int dragButton = -1;
+    private int selectedButton = -1;
+    private Runnable selectionChanged;
+    void setSelectionChanged(Runnable listener) { selectionChanged = listener; }
+    int getSelectedButton() { return selectedButton; }
+    float getSelectedSize() { return selectedButton < 0 ? 1 : layout.getSize(selectedButton); }
+    void resizeSelected(float size) {
+        if (!editing || selectedButton < 0) return;
+        RectF bounds = this.bounds[selectedButton];
+        layout.setPosition(selectedButton, bounds.centerX()/getWidth(), bounds.centerY()/getHeight());
+        layout.setSize(selectedButton, size);
+        arrangeButtons(getWidth(), getHeight());
+        invalidate();
+    }
+    private float dragOffsetX, dragOffsetY;
+
+    private static native boolean nativeTakeEditorRequest();
+    private static native void nativeSetEditing(boolean editing);
+
+    void setEditorRequest(Runnable request) { editorRequest = request; }
+    void setLayout(TouchLayout value) {
+        layout = value.copy();
+        arrangeButtons(getWidth(), getHeight());
+        invalidate();
+    }
+    TouchLayout getLayout() { return layout.copy(); }
+    void beginEditing() {
+        cancelInput();
+        selectedButton = -1;
+        originalLayout = layout.copy();
+        editing = true;
+        nativeSetEditing(true);
+        invalidate();
+    }
+    void endEditing(boolean save) {
+        if (!editing) return;
+        editing = false;
+        dragPointer = dragButton = -1;
+        if (!save) setLayout(originalLayout);
+        originalLayout = null;
+        nativeSetEditing(false);
+        cancelInput();
+    }
+    void resetLayout() {
+        setLayout(new TouchLayout());
+        if (selectionChanged != null) selectionChanged.run();
+    }
+
     private boolean racing;
     private boolean resumed;
     private int held;
@@ -33,6 +86,7 @@ final class RaceControlsView extends View {
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
+            if (nativeTakeEditorRequest() && !editing && editorRequest != null) editorRequest.run();
             boolean visible = nativeVisible();
             if (visible != racing) {
                 cancelInput();
@@ -95,6 +149,11 @@ final class RaceControlsView extends View {
 
     @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         cancelInput();
+        arrangeButtons(w, h);
+    }
+
+    private void arrangeButtons(int w, int h) {
+        if (w <= 0 || h <= 0) return;
         // Fit both 16:9 and wider screens; keep the central road unobstructed.
         scale = Math.min(w / 960f, h / 540f);
         float s = scale;
@@ -109,14 +168,34 @@ final class RaceControlsView extends View {
         panel(2, w - edge - 184*s, bottom - 90*s, 82*s, 90*s);
         panel(3, w - edge - 184*s, bottom - 154*s, 82*s, 52*s);
         panel(6, w - edge - 90*s, bottom - 198*s, 90*s, 54*s);
+        for (int i = 0; i < bounds.length; i++) {
+            RectF bounds = this.bounds[i];
+            float size = layout.getSize(i);
+            float width = Math.min(w, bounds.width()*size);
+            float height = Math.min(h, bounds.height()*size);
+            panel(i, bounds.centerX()-width/2, bounds.centerY()-height/2, width, height);
+            moveButton(i, bounds.centerX(), bounds.centerY());
+            if (layout.hasPosition(i)) moveButton(i, layout.getX(i)*w, layout.getY(i)*h);
+        }
+    }
+
+    private void moveButton(int index, float centerX, float centerY) {
+        RectF r = bounds[index];
+        float width = r.width(), height = r.height();
+        float x = Math.max(0, Math.min(getWidth() - width, centerX - width/2));
+        float y = Math.max(0, Math.min(getHeight() - height, centerY - height/2));
+        panel(index, x, y, width, height);
     }
 
     @Override protected void onDraw(Canvas canvas) {
-        if (!racing) return;
-        float s = scale;
+        if (!racing && !editing) return;
+        if (editing) canvas.drawColor(0xBB000000);
+        float originalScale = scale;
         for (int i = 0; i < bounds.length; i++) {
+            scale = originalScale * layout.getSize(i);
+            float s = scale;
             RectF r = bounds[i];
-            boolean down = (held & (1 << i)) != 0;
+            boolean down = (held & (1 << i)) != 0 || (editing && selectedButton == i);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(down ? 0xC0357188 : 0x88102F40);
             canvas.drawPath(panels[i], paint);
@@ -165,6 +244,7 @@ final class RaceControlsView extends View {
                         r.centerY() - (paint.ascent() + paint.descent())/2, paint);
             }
         }
+        scale = originalScale;
     }
 
     /** Raised lever and console base, following the supplied handbrake symbol. */
@@ -252,7 +332,37 @@ final class RaceControlsView extends View {
         return -1;
     }
 
+    private boolean editTouch(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            dragPointer = event.getPointerId(0);
+            dragButton = hit(event.getX(), event.getY());
+            selectedButton = dragButton;
+            if (selectionChanged != null) selectionChanged.run();
+            invalidate();
+            if (dragButton >= 0) {
+                dragOffsetX = event.getX() - bounds[dragButton].centerX();
+                dragOffsetY = event.getY() - bounds[dragButton].centerY();
+            }
+        } else if (action == MotionEvent.ACTION_MOVE && dragButton >= 0) {
+            int pointer = event.findPointerIndex(dragPointer);
+            if (pointer >= 0) {
+                moveButton(dragButton, event.getX(pointer) - dragOffsetX,
+                        event.getY(pointer) - dragOffsetY);
+                RectF r = bounds[dragButton];
+                layout.setPosition(dragButton, r.centerX()/getWidth(), r.centerY()/getHeight());
+                invalidate();
+            }
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+                || (action == MotionEvent.ACTION_POINTER_UP
+                    && event.getPointerId(event.getActionIndex()) == dragPointer)) {
+            dragPointer = dragButton = -1;
+        }
+        return true;
+    }
+
     @Override public boolean onTouchEvent(MotionEvent event) {
+        if (editing) return editTouch(event);
         if (!resumed || !racing) return false;
         int action = event.getActionMasked();
         int index = event.getActionIndex();

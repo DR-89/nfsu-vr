@@ -1179,6 +1179,7 @@ void sub_000C2A70(void)
 
 #ifdef __ANDROID__
 extern void sub_000C2B80_gen(void);
+#include "race_touch.h"
 #define SENSOR_HANDLER_VA (ROW_HANDLER_VA + 7u)
 /* Retail FEng: DC340 finds an object, DC220 toggles its selectable state,
  * and DCD30 changes its color (including native cache invalidation). BF958
@@ -1261,7 +1262,19 @@ void sub_000C2B80(void)
         ecx = screen; PUSH32(esp, 0); sub_000C1E10();
         MEM32(screen + 0x3C + 4 * (row - 1)) = SENSOR_HANDLER_VA + row - 5;
     }
+    PUSH32(esp, 1); PUSH32(esp, 0); PUSH32(esp, 7);
+    ecx = screen; PUSH32(esp, 0); sub_000C1D30();
+    MEM32(screen + 0x54) = SENSOR_HANDLER_VA + 2;
+    fe_set_text(screen, "OptionName_7", "TOUCH CONTROL LAYOUT");
     controller_touch_text(screen);
+}
+static void touch_layout_input(void)
+{
+    uint32_t msg = MEM32(esp + 4);
+    /* Native options route Select as MouseClick, alongside arrow events. */
+    if (msg == 0x0C407210u || msg == FE_PAD_LEFT || msg == FE_PAD_RIGHT)
+        race_touch_request_editor();
+    esp += 8;
 }
 static void controller_touch_input(unsigned row)
 {
@@ -1535,6 +1548,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
     if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
     if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;
+    if (xbox_va == SENSOR_HANDLER_VA + 2) return touch_layout_input;
 #endif
     /*
      * TODO: Add your overrides here. Examples:

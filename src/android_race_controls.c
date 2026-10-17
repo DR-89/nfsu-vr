@@ -70,3 +70,19 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeCancel(
     race_touch_cancel();
     android_input_set_touch(0);
 }
+
+JNIEXPORT jboolean JNICALL Java_org_nfsu_android_RaceControlsView_nativeTakeEditorRequest(
+        JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return race_touch_take_editor_request();
+}
+
+JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeSetEditing(
+        JNIEnv *env, jclass cls, jboolean editing)
+{
+    (void)env; (void)cls;
+    race_touch_set_editing(editing);
+    menu_touch_cancel();
+    android_input_set_touch(0);
+}

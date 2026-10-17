@@ -7,6 +7,11 @@ enum RaceTouchButton {
     RACE_HANDBRAKE = 8u, RACE_SHIFT_UP = 16u, RACE_SHIFT_DOWN = 32u,
     RACE_NITRO = 64u, RACE_LEFT = 128u, RACE_RIGHT = 256u
 };
+/* Controller menu requests are consumed on the Android UI thread. */
+void race_touch_request_editor(void);
+int race_touch_take_editor_request(void);
+void race_touch_set_editing(int enabled);
+int race_touch_editing(void);
 void race_touch_set(uint32_t mask);
 void race_touch_cancel(void);
 void race_touch_enable(int enabled);
