@@ -368,3 +368,37 @@ rows, screen changes during a held tap and no hidden-camera rotation. The full
 existing native-menu regression and host queue/mapping tests also pass. Android
 ARM64 syntax validation passes. A rebuilt APK and physical-device verification
 remain pending; the earlier Gradle cache escalation was declined.
+
+## Quick Race: Mode Options
+
+QROptionsScreen (`0x1FB64C`, native handler `0xAF610`) uses `OptionNText`
+with `OptionNData`, rather than the generic `OptionName_N` option rows.
+Its Select handler starts the race; generic mouse activation on a parameter
+therefore confirmed the screen instead of changing the value.
+
+Touching a rendered row label/value now sends Right to that row's native text
+object and synchronizes focus. Visible shared/base arrows send Left/Right to
+the focused row. Release-only dispatch, movement cancellation and disabled-row
+checks apply. Unbound modal body taps are consumed, preventing accidental starts.
+The native localized Mode Options heading is relabeled Continue and supplies
+an explicit Select target through its rendered text bounds; Back retains Cancel.
+No fixed screen zones or Android overlay controls are introduced.
+
+Synthetic rendered-geometry tests cover row/value taps, both arrows, disabled
+rows, explicit confirmation and empty-body misses. Queue/mapping and native
+menu regressions pass. Android APK assembly passes; physical touch usability,
+the heading layout and actual race startup remain pending device acceptance.
+
+The heading binding uses the retail language key MODE_OPTIONS_TITLE
+(F5599FF0), whose English value is "Mode Options". MODE_OPTIONS (3825DB8F)
+is a different entry and did not change the visible header in the first build.
+The synthetic fixture now uses the actual heading key. The controller identity
+1FB64C was confirmed from the running device registry while this modal was open.
+
+Quick Race row taps now select focus only; they do not change a value.
+QROptionsScreen calls DE420 rather than DE440, so its +24/+28 fields cannot
+supply arrow pointers. Bind rendered mouse_over_l/r hashes AA68BFCE/AA68BFD4
+directly, with eight logical pixels of touch tolerance. The row under the
+rendered arrow receives Left/Right, independently of stale native focus. The regression uses
+these retail arrow hashes with no base-arrow pointers and checks that label/
+value taps do not dispatch a value change. Physical arrow acceptance is pending.

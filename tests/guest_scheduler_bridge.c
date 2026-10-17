@@ -8,11 +8,17 @@
 #include <stdatomic.h>
 
 int xbox_thread_holds_dispatch(void) { return 0; }
-ptrdiff_t g_xbox_mem_offset;
-RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp, g_ebx, g_esi, g_edi, g_ebp, g_seh_ebp;
+#include "recomp_context_registers.h"
 static unsigned active, total;
 static HANDLE parked_event;
 static DWORD parked_tid;
+static RecompContext probe_context;
+static void probe_kernel_boundary(void)
+{
+    assert(recomp_context_current()->kernel.native_kernel_frames == 1);
+    assert(t_gil_depth == 0); /* Rejection must come from the kernel frame. */
+    assert(!recomp_context_switch(&probe_context));
+}
 static void *wake_parked(void *unused)
 {
     (void)unused;
@@ -53,6 +59,14 @@ int main(void)
     g_xbox_mem_offset = (ptrdiff_t)ram;
     g_esp = 0x10000;
     BRIDGE_MEM32(g_esp) = 0xDEADC0DE; /* Return address is not argument zero. */
+    assert(recomp_context_init(&probe_context, 0x8000));
+    g_kernel_dispatch_slot = 0;
+    g_slot_ordinals[0] = 125;
+    g_slot_bridges[0] = probe_kernel_boundary;
+    kernel_thunk_dispatch();
+    assert(!recomp_context_current()->kernel.native_kernel_frames);
+    assert(g_esp == 0x10004);
+    g_esp = 0x10000;
     BRIDGE_MEM32(g_esp + 4) = bridge_handle_token(parked_event);
     assert(dispatcher_call_keeps_gil(234));
     assert(dispatcher_call_keeps_gil(225));
@@ -112,6 +126,10 @@ int main(void)
     ke_shadow_remove(0x11200);
     ke_shadow_remove(0x11300);
     xbox_gil_enter(); xbox_gil_enter();
+    RecompContext fresh;
+    assert(recomp_context_init(&fresh, 0x7000));
+    assert(!recomp_context_switch(&fresh)); /* Native scheduler still owns this GIL. */
+    assert(t_gil_depth == 2);
     uint64_t before = nfsu_perf_gil_wait_sum();
     assert(WaitForSingleObject(parked_event, INFINITE) == WAIT_OBJECT_0);
     assert(before == nfsu_perf_gil_wait_sum()); /* Ready object never drops the token. */

@@ -13,6 +13,10 @@
 
 #include <stdio.h>
 #include "kernel.h"
+#include "recomp_context.h"
+#ifndef _WIN32
+#include "platform/virtual_thread.h"
+#endif
 #include "xbox_memory_layout.h"   /* XBOX_WORKER_STACK_* + worker-stack decls */
 
 /* ============================================================================
@@ -373,7 +377,7 @@ typedef struct {
     volatile LONG busy;          /* kernel depth + raised IRQL */
 } KThreadSlot;
 static KThreadSlot g_kbusy[KBUSY_SLOTS];
-static XBOX_THREAD_LOCAL KThreadSlot *t_kslot;
+#define t_kslot ((KThreadSlot *)recomp_context_current()->kernel.busy_slot)
 
 static KThreadSlot *kbusy_slot(DWORD tid, int create)
 {
@@ -396,8 +400,13 @@ static KThreadSlot *kbusy_slot(DWORD tid, int create)
 
 void xbox_kernel_busy(int delta)
 {
+    recomp_context_current()->kernel.busy_depth += delta;
+#ifndef _WIN32
+    /* Cooperative virtual suspension uses the context-owned depth. */
+    if (host_virtual_thread_is(GetCurrentThread())) return;
+#endif
     if (!t_kslot)
-        t_kslot = kbusy_slot(GetCurrentThreadId(), 1);
+        recomp_context_current()->kernel.busy_slot = kbusy_slot(GetCurrentThreadId(), 1);
     if (t_kslot)
         t_kslot->busy += delta;
 }
@@ -407,6 +416,14 @@ NTSTATUS __stdcall xbox_NtSuspendThread(
     PULONG PreviousSuspendCount)
 {
     DWORD prev, tid = GetThreadId(ThreadHandle);
+#ifndef _WIN32
+    if (host_virtual_thread_is(ThreadHandle)) {
+        DWORD previous = SuspendThread(ThreadHandle);
+        if (previous == (DWORD)-1) return STATUS_UNSUCCESSFUL;
+        if (PreviousSuspendCount) *PreviousSuspendCount = previous;
+        return STATUS_SUCCESS;
+    }
+#endif
     KThreadSlot *k = tid != GetCurrentThreadId() ? kbusy_slot(tid, 0) : NULL;
     ULONGLONG give_up = GetTickCount64() + 100;
 

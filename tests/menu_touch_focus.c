@@ -18,7 +18,7 @@ static const uint32_t yes = 0x20000, no = 0x21000;
 static uint32_t expected;
 static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
-static int palette_updates, palette_previews;
+static int palette_updates, palette_previews, focus_flushes;
 static unsigned draw_mask = 3;
 static int keyboard_layout, stale_mouse_edge, carousel_layout;
 void sub_000D8B10(void);
@@ -108,7 +108,7 @@ void sub_000DE540(void)
     g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
     g_esp += 20;
 }
-void sub_000D7A00(void) { g_esp += 4; }
+void sub_000D7A00(void) { focus_flushes++; g_esp += 4; }
 void sub_000D6D30(void)
 {
     assert(g_ecx == feng);
@@ -470,6 +470,50 @@ int main(void)
     MEM32(option + 0x1C) = 0;
     draw_mask = 1; draw_bounds(); tap(.7f, option);
     assert(controller_selects == before_actions + 2);
+
+    /* Quick Race row taps only focus; rendered arrows change the value.
+     * The native modal heading becomes the explicit Continue target. */
+    MEM32(screen) = 0x1FB64C;
+    MEM32(yes + 0x10) = 0x4C61C6CE; /* Option1Text */
+    MEM32(no + 0x10) = 0x4C58EF23; /* Option1Data */
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    MEM32(package + 0x88) = 0;
+    draw_mask = 3; draw_bounds();
+    before_actions = controller_selects;
+    expected_message = 0xB5971BF1;
+    int before_focus = focus_changes, before_flush = focus_flushes;
+    tap(.3f, yes); tap(.7f, yes);
+    tap(.5f, yes); /* gap between label and value selects the row */
+    assert(focus_changes == before_focus + 3);
+    assert(focus_flushes == before_flush + 3);
+    assert(MEM32(package + 0x80) == yes);
+    assert(controller_selects == before_actions);
+    MEM32(yes + 0x1C) = 0x04000000;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions);
+    MEM32(yes + 0x1C) = 0;
+    MEM32(no + 0x10) = 0xAA68BFD4; /* retail mouse_over_r, without DE440 pointers */
+    MEM32(package + 0x80) = yes;
+    draw_bounds(); tap(.7f, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(no + 0x10) = 0xAA68BFCE; /* retail mouse_over_l */
+    expected_message = 0x9120409E;
+    draw_bounds(); tap(.7f, yes);
+    assert(controller_selects == before_actions + 2);
+    MEM32(yes + 0x10) = 0x123456;
+    MEM32(yes + 0x5C) = 0xF5599FF0; /* MODE_OPTIONS_TITLE: actual retail heading */
+    draw_mask = 1; draw_bounds();
+    assert(MEM32(yes + 0x5C) == 0xDE02CF84); /* localized CONTINUE */
+    expected_message = 0x406415E3;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions + 3);
+    tap(.7f, yes); /* empty modal body cannot start a race */
+    assert(controller_selects == before_actions + 3);
+    MEM32(yes + 0x5C) = 0;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 1;
+    draw_mask = 3; draw_bounds();
 
     /* Underground's event scroller owns a separate cursor and ignores
      * FEng focus. Select must use the touched event, not the previous one. */

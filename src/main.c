@@ -37,6 +37,7 @@ int android_host_boot(int argc, char **argv);
 #endif
 
 #include <xbox/xboxrecomp.h>
+#include "../xboxrecomp/src/kernel/guest_executor.h"
 
 #ifdef __SWITCH__
 /* libnx lives in switch_nx.c: <switch.h> and the Win32 vocabulary collide. */
@@ -50,6 +51,7 @@ int SDL_ShowSimpleMessageBox(uint32_t flags, const char *title, const char *mess
 
 extern RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp;
 extern RECOMP_TLS uint32_t g_ebx, g_esi, g_edi;
+extern RECOMP_TLS uint32_t g_fs_base;
 extern ptrdiff_t g_xbox_mem_offset;
 extern volatile uint32_t g_icall_trace[16];
 extern volatile uint32_t g_icall_trace_idx;
@@ -371,6 +373,9 @@ static int game_main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
+    /* Install managed device events before APU/OHCI can create or signal them. */
+    xbox_guest_executor_prepare();
+
     printf("=== Need for Speed: Underground 2 (Xbox) - static recompilation ===\n");
     install_crash_reporter();
     if (getenv("NFSU2_EXIT_TRACE"))
@@ -509,10 +514,12 @@ static int game_main(void)
     xbox_WatchdogStart();
 
     printf("Starting guest at 0x%08X (esp=0x%08X)\n", NFSU2_ENTRY_POINT, g_esp);
-    xbox_gil_mark_main();      /* the frame-rate thread (RECOMP_GIL_EAGER) */
-    xbox_gil_enter();          /* guest code from here on (kernel_bridge.c) */
-    xbe_entry_point();
-    xbox_gil_leave();
+    if (!xbox_guest_executor_run(xbe_entry_point, g_esp, g_fs_base)) {
+        xbox_gil_mark_main();
+        xbox_gil_enter();
+        xbe_entry_point();
+        xbox_gil_leave();
+    }
 
     printf("Guest returned. Cleaning up.\n");
     xbox_kernel_shutdown();

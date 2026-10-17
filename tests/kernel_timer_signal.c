@@ -1,6 +1,7 @@
 /* Deterministically preempt arming at ResetEvent while expiry races it.
  * cc -O1 -ffunction-sections -fdata-sections -Ixboxrecomp/src
  * -Ixboxrecomp/src/kernel tests/kernel_timer_signal.c
+ * xboxrecomp/src/kernel/recomp_context.c
  * xboxrecomp/src/platform/win32_compat.c -Wl,--gc-sections -pthread -lm
  */
 #include "platform/win32_compat.h"

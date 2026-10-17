@@ -8,8 +8,12 @@
  */
 
 #include "kernel.h"
+#include "recomp_context.h"
 /* RECOMP_TLS, and the guest stack pointer the contention report walks. */
 #include "xbox_memory_layout.h"
+#ifndef _WIN32
+#include "platform/dispatcher_backend.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -192,6 +196,7 @@ ULONG __stdcall xbox_RtlCompareMemoryUlong(PVOID Source, ULONG Length, ULONG Pat
 typedef struct {
     uintptr_t        key;        /* guest critical section; 0 means free */
     CRITICAL_SECTION cs;
+    HANDLE continuation_mutex;
     /* Who holds it, and the guest call site that took it.
      *
      * A deadlock report can already say which lock and which thread. What it
@@ -236,6 +241,7 @@ static int          g_cs_table_full;
  * synchronously. That would not hold in general.
  */
 static CRITICAL_SECTION g_cs_single;
+static HANDLE g_cs_single_continuation_mutex;
 static INIT_ONCE g_cs_single_once = INIT_ONCE_STATIC_INIT;
 static int g_cs_single_mode = -1;
 
@@ -304,6 +310,33 @@ static CRITICAL_SECTION* xbox_cs_shadow(PRTL_CRITICAL_SECTION guest)
                  "are unprotected", XBOX_CS_TABLE_SIZE);
     }
     return found;
+}
+
+/* Guest locks must have guest ownership when several stacks share a pthread.
+ * Keep host locks for native execution. Only the short table mutation uses a
+ * native lock; no native lock survives a continuation wait. */
+static HANDLE xbox_cs_continuation_mutex(CRITICAL_SECTION *cs)
+{
+#ifndef _WIN32
+    XBOX_CS_SLOT *slot = xbox_cs_slot_of(cs);
+    HANDLE *handle = slot ? &slot->continuation_mutex : &g_cs_single_continuation_mutex;
+    HANDLE h = __atomic_load_n(handle, __ATOMIC_ACQUIRE);
+    if (h || !host_continuation_active()) return h;
+    AcquireSRWLockExclusive(&g_cs_table_lock);
+    h = *handle;
+    if (!h) {
+        /* Never convert a live native recursive lock into another lock. */
+        if (cs->RecursionCount) abort();
+        h = CreateMutexA(NULL, FALSE, NULL);
+        if (!h) abort();
+        __atomic_store_n(handle, h, __ATOMIC_RELEASE);
+    }
+    ReleaseSRWLockExclusive(&g_cs_table_lock);
+    return h;
+#else
+    (void)cs;
+    return NULL;
+#endif
 }
 
 /* Contention is worth saying out loud.
@@ -447,20 +480,24 @@ static void crt_lock_trace(const char *what, PRTL_CRITICAL_SECTION guest)
     fflush(stderr);
 }
 
-extern RECOMP_TLS uint32_t g_xbox_kernel_caller;
+#define g_xbox_kernel_caller (recomp_context_current()->kernel.kernel_caller)
 
 static void xbox_cs_note_owner(CRITICAL_SECTION* cs)
 {
+    if (!xbox_cs_continuation_mutex(cs)) recomp_context_current()->kernel.guest_cs_depth++;
     XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
     if (!slot)
         return;
     slot->owner_site = g_xbox_kernel_caller;
+    if (slot->owner_tid != GetCurrentThreadId()) slot->depth = 0;
     slot->owner_tid  = GetCurrentThreadId();
     slot->depth++;
 }
 
 static void xbox_cs_clear_owner(CRITICAL_SECTION* cs)
 {
+    if (!xbox_cs_continuation_mutex(cs) && recomp_context_current()->kernel.guest_cs_depth > 0)
+        recomp_context_current()->kernel.guest_cs_depth--;
     XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
     if (!slot)
         return;
@@ -477,6 +514,13 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
         return;
     InterlockedIncrement(&g_cs_enters);
     crt_lock_trace("take", CriticalSection);
+    HANDLE mutex = xbox_cs_continuation_mutex(cs);
+    if (mutex) {
+        DWORD result = WaitForSingleObject(mutex, INFINITE);
+        if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED_0) abort();
+        xbox_cs_note_owner(cs);
+        return;
+    }
     if (TryEnterCriticalSection(cs)) {
         xbox_cs_note_owner(cs);
         return;
@@ -546,9 +590,27 @@ VOID __stdcall xbox_RtlLeaveCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
     if (cs) {
         InterlockedIncrement(&g_cs_leaves);
         crt_lock_trace("drop", CriticalSection);
+        HANDLE mutex = xbox_cs_continuation_mutex(cs);
         xbox_cs_clear_owner(cs);
-        LeaveCriticalSection(cs);
+        if (mutex) {
+            if (!ReleaseMutex(mutex)) abort();
+        } else LeaveCriticalSection(cs);
     }
+}
+
+BOOLEAN __stdcall xbox_RtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
+{
+    CRITICAL_SECTION *cs = xbox_cs_shadow(CriticalSection);
+    if (!cs) return FALSE;
+    HANDLE mutex = xbox_cs_continuation_mutex(cs);
+    if (mutex) {
+        DWORD result = WaitForSingleObject(mutex, 0);
+        if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED_0) return FALSE;
+    } else if (!TryEnterCriticalSection(cs)) return FALSE;
+    xbox_cs_note_owner(cs);
+    InterlockedIncrement(&g_cs_enters);
+    crt_lock_trace("try", CriticalSection);
+    return TRUE;
 }
 
 VOID __stdcall xbox_RtlInitializeCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)

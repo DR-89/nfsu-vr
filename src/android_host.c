@@ -68,6 +68,10 @@ int android_host_boot(int argc, char **argv)
     __system_property_get("debug.nfsu.scheduler", scheduler);
     setenv("RECOMP_GUEST_SCHEDULER", strcmp(scheduler, "0") == 0 ? "0" : "1", 1);
     fprintf(stderr, "[ANDROID] guest scheduler=%s\n", getenv("RECOMP_GUEST_SCHEDULER"));
+    char executor[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.executor", executor);
+    setenv("RECOMP_GUEST_EXECUTOR", strcmp(executor, "1") == 0 ? "1" : "0", 1);
+    fprintf(stderr, "[ANDROID] guest executor=%s (experimental)\n", getenv("RECOMP_GUEST_EXECUTOR"));
     setenv("RECOMP_CULL", "0", 0);
     setenv("RECOMP_VK_INSTANCE", "0", 0);
     if (nfsu_diagnostics_enabled) setenv("RECOMP_INPUT_DIAG", "1", 1);

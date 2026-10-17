@@ -592,6 +592,7 @@ ULONG   __stdcall xbox_RtlCompareMemoryUlong(PVOID Source, ULONG Length, ULONG P
 void xbox_SetCrtLockTable(uint32_t table_va, uint32_t count);
 
 VOID    __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection);
+BOOLEAN __stdcall xbox_RtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection);
 VOID    __stdcall xbox_RtlLeaveCriticalSection(PRTL_CRITICAL_SECTION CriticalSection);
 VOID    __stdcall xbox_RtlInitializeCriticalSection(PRTL_CRITICAL_SECTION CriticalSection);
 

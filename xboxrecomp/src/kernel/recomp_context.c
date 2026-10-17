@@ -12,13 +12,16 @@ extern RECOMP_TLS double g_fp_stack[8];
 extern RECOMP_TLS RecompMmx g_mm0, g_mm1, g_mm2, g_mm3, g_mm4, g_mm5, g_mm6, g_mm7;
 extern RECOMP_TLS RecompXmm g_xmm0, g_xmm1, g_xmm2, g_xmm3, g_xmm4, g_xmm5, g_xmm6, g_xmm7;
 extern ptrdiff_t g_xbox_mem_offset;
-static RECOMP_TLS RecompContext default_context;
-static RECOMP_TLS RecompContext *current;
+RECOMP_TLS RecompContext g_recomp_default_context = {.kernel = {.dispatch_slot = -1}};
+RECOMP_TLS RecompContext *g_recomp_current_context;
+#define default_context g_recomp_default_context
+#define current g_recomp_current_context
 
-RecompContext *recomp_context_current(void)
+static int safe_kernel_boundary(const RecompKernelState *k)
 {
-    if (!current) current = &default_context;
-    return current;
+    return !k->gil_depth && !k->gil_nopreempt && !k->in_vblank_isr &&
+        !k->irql && !k->dispatch_held && !k->guest_cs_depth &&
+        (k->continuation_wait_scope || (!k->busy_depth && !k->native_kernel_frames));
 }
 
 int recomp_context_init(RecompContext *context, uint32_t fs_base)
@@ -37,6 +40,7 @@ int recomp_context_init(RecompContext *context, uint32_t fs_base)
     if (result) {
         memset(context, 0, sizeof(*context));
         context->cpu.fs_base = fs_base;
+        context->kernel.dispatch_slot = -1;
         context->cpu.fp_control_word = 0x037f;
         context->cpu.fp_cc = 0x4000;
         context->host_fenv = initial;
@@ -75,14 +79,24 @@ static void load_cpu(const RecompCpuState *s)
 #undef LOAD_VECTOR
 }
 
-int recomp_context_switch(RecompContext *next)
+int recomp_context_can_switch(const RecompContext *next)
 {
     RecompContext *previous = recomp_context_current();
     uintptr_t native_owner = (uintptr_t)&default_context;
     if (!next || !next->initialized || next->identity != next ||
         (next->native_owner && next->native_owner != native_owner)) return 0;
     if (next == previous) return 1;
+    return safe_kernel_boundary(&previous->kernel) && safe_kernel_boundary(&next->kernel);
+}
+
+int recomp_context_switch(RecompContext *next)
+{
+    RecompContext *previous = recomp_context_current();
+    if (!recomp_context_can_switch(next)) return 0;
+    if (next == previous) return 1;
+    uintptr_t native_owner = (uintptr_t)&default_context;
     int saved_errno = errno;
+    DWORD saved_last_error = GetLastError();
     fenv_t previous_fenv;
     if (fegetenv(&previous_fenv)) {
         errno = saved_errno;
@@ -95,6 +109,7 @@ int recomp_context_switch(RecompContext *next)
     }
     previous->host_fenv = previous_fenv;
     previous->host_errno = saved_errno;
+    previous->host_last_error = saved_last_error;
     save_cpu(&previous->cpu);
     previous->initialized = 1;
     previous->native_owner = native_owner;
@@ -102,6 +117,7 @@ int recomp_context_switch(RecompContext *next)
     next->native_owner = native_owner;
     load_cpu(&next->cpu);
     current = next;
+    SetLastError(next->host_last_error);
     errno = next->host_errno;
     return 1;
 }

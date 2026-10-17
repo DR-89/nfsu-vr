@@ -27,6 +27,17 @@
 
 #include "kernel.h"
 #include "xbox_memory_layout.h"
+#include "recomp_context.h"
+#ifdef NFSU_GUEST_EXECUTOR
+#include "guest_fiber.h"
+#include "guest_dispatcher.h"
+#include "guest_scheduler.h"
+#include "platform/dispatcher_backend.h"
+#define bridge_on_executor() (xgf_current() != NULL)
+#else
+#define bridge_on_executor() 0
+#endif
+#include "guest_executor.h"
 #include "guest_vmem.h"
 #include "recomp_icall_feedback.h"
 #include <stdio.h>
@@ -64,6 +75,7 @@ int xbox_guest_scheduler_active(void)
 
 void xbox_guest_scheduler_dispatch(int raised)
 {
+    if (bridge_on_executor()) return;
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
     if (s_guest_scheduler_on) xgs_dispatch_changed(raised);
 #else
@@ -454,7 +466,7 @@ static long kernel_log_budget(void)
 #define STACK_ARG(n) ((uint32_t)BRIDGE_MEM32(g_esp + (n) * 4))
 
 /* Guest return address of the call currently in a bridge. */
-RECOMP_TLS uint32_t g_xbox_kernel_caller;
+#define g_xbox_kernel_caller (recomp_context_current()->kernel.kernel_caller)
 
 /* ── Per-ordinal bridge functions ─────────────────────────
  *
@@ -619,10 +631,10 @@ static CONDITION_VARIABLE s_gil_cv;
 #endif
 static volatile uint64_t  s_gil_next, s_gil_serving;
 static volatile int       s_gil_on = -1;
-static RECOMP_TLS int     t_gil_depth;
+#define t_gil_depth (recomp_context_current()->kernel.gil_depth)
 #if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
 static uint64_t s_gil_main_quantum_ns;
-static RECOMP_TLS uint64_t t_gil_quantum_start;
+#define t_gil_quantum_start (recomp_context_current()->kernel.quantum_start)
 
 static uint64_t gil_quantum_now(void)
 {
@@ -681,7 +693,7 @@ static int gil_enabled(void)
  * that wait without a kernel call (a stream poll that finds nothing yet)
  * would otherwise hold the lock against the very thread they wait for. */
 volatile int g_gil_contended;
-static RECOMP_TLS int t_gil_nopreempt;      /* inside an ISR or DPC */
+#define t_gil_nopreempt (recomp_context_current()->kernel.gil_nopreempt)      /* inside an ISR or DPC */
 int xbox_thread_holds_dispatch(void);     /* kernel_hal.c */
 
 /* RECOMP_GIL_EAGER=1: hand the lock over by guest priority, the way the
@@ -702,13 +714,13 @@ int xbox_thread_holds_dispatch(void);     /* kernel_hal.c */
  *     of a race in waits (12-18 fps, was 17-22 with main-only), and their
  *     work is not audible.
  * ISRs and DPCs are never pre-empted (t_gil_nopreempt), as before. */
-static RECOMP_TLS int t_gil_main;
+#define t_gil_main (recomp_context_current()->kernel.main_thread)
 void xbox_gil_mark_main(void)
 {
     t_gil_main = 1;
     nfsu_perf_role("main");
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
-    xgs_mark_main();
+    if (!bridge_on_executor()) xgs_mark_main();
 #endif
 }
 
@@ -745,7 +757,7 @@ static int gil_higher_waiting(int p)
     return 0;
 }
 
-static RECOMP_TLS uint64_t t_gil_perf_held;
+#define t_gil_perf_held (recomp_context_current()->kernel.perf_held)
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
 static void gil_wait_park_account(void)
 {
@@ -885,6 +897,7 @@ static void gil_unlock(void)
 
 void xbox_gil_enter(void)
 {
+    if (bridge_on_executor()) { t_gil_depth++; return; }
     if (!gil_enabled())
         return;
     if (t_gil_depth++ == 0)
@@ -893,6 +906,7 @@ void xbox_gil_enter(void)
 
 void xbox_gil_leave(void)
 {
+    if (bridge_on_executor()) { if (t_gil_depth > 0) t_gil_depth--; return; }
     if (!gil_enabled() || t_gil_depth <= 0)
         return;
     if (--t_gil_depth == 0)
@@ -903,6 +917,7 @@ void xbox_gil_leave(void)
 int xbox_gil_suspend(void)
 {
     int d = t_gil_depth;
+    if (bridge_on_executor()) { t_gil_depth = 0; return d; }
     if (d > 0 && gil_enabled()) {
         t_gil_depth = 0;
         gil_unlock();
@@ -912,6 +927,7 @@ int xbox_gil_suspend(void)
 
 void xbox_gil_resume(int depth)
 {
+    if (bridge_on_executor()) { t_gil_depth = depth; return; }
     if (depth > 0 && gil_enabled()) {
         gil_lock();
         t_gil_depth = depth;
@@ -921,6 +937,14 @@ void xbox_gil_resume(int depth)
 /* Separate the two callers without counting preemption again as spin. */
 static void gil_yield_measured(int wait_metric, int total_metric)
 {
+#ifdef NFSU_GUEST_EXECUTOR
+    if (bridge_on_executor()) {
+        int depth = xbox_gil_suspend();
+        (void)xgf_yield(); /* Native ownership guards may defer this safe point. */
+        xbox_gil_resume(depth);
+        return;
+    }
+#endif
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
     if (s_guest_scheduler_on && t_gil_depth > 0) {
         uint64_t start = nfsu_perf_begin();
@@ -980,6 +1004,13 @@ void recomp_preempt(void)
 {
     if (t_gil_depth <= 0 || t_gil_nopreempt || xbox_thread_holds_dispatch())
         return;
+#ifdef NFSU_GUEST_EXECUTOR
+    if (bridge_on_executor()) {
+        if (xgf_should_preempt())
+            gil_yield_measured(NFSU_PERF_PREEMPT_WAIT, NFSU_PERF_PREEMPT_TOTAL);
+        return;
+    }
+#endif
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
     if (s_guest_scheduler_on) {
         if (xgs_should_preempt())
@@ -1002,13 +1033,13 @@ void recomp_preempt(void)
 void xbox_gil_isr_begin(void) { xbox_gil_enter(); t_gil_nopreempt++; }
 void xbox_gil_isr_end(void)   { t_gil_nopreempt--; xbox_gil_leave(); }
 
-static RECOMP_TLS int g_is_spawned_thread = 0;
+#define g_is_spawned_thread (recomp_context_current()->kernel.spawned_thread)
 
 /* This thread's simulated stack, so both exits can give it back. Thread-local
  * for the obvious reason, and needed at all because the common exit is
  * ExitThread from PsTerminateSystemThread -- bridge_thread_main's own return
  * path is the rare one. */
-static RECOMP_TLS uint32_t g_thread_stack_top = 0;
+#define g_thread_stack_top (recomp_context_current()->kernel.stack_top)
 
 struct bridge_thread_start {
     recomp_func_t fn;
@@ -1027,6 +1058,23 @@ static void bridge_run_thread_inline(recomp_func_t fn, uint32_t ctx1,
     g_seh_ebp = g_esp;
     GUEST_CALL(fn);
     g_esp += 12;
+}
+
+/* The initial PsCreate* thunk owns no host locks while it runs the title's
+ * main loop. Its bookkeeping frame must not block every guest safe point. */
+static void bridge_run_initial_guest(recomp_func_t fn)
+{
+    if (!bridge_on_executor()) { GUEST_CALL(fn); return; }
+    RecompKernelState *k = &recomp_context_current()->kernel;
+    int frames = k->native_kernel_frames, busy = k->busy_depth;
+    int scope = k->continuation_wait_scope;
+    if (frames != 1 || busy != 1 || k->gil_nopreempt || k->dispatch_held || k->guest_cs_depth) abort();
+    xbox_kernel_busy(-busy);
+    k->native_kernel_frames = k->continuation_wait_scope = 0;
+    GUEST_CALL(fn);
+    k->native_kernel_frames = frames;
+    k->continuation_wait_scope = scope;
+    xbox_kernel_busy(busy);
 }
 
 void xbox_nx_retag_thread(void *entry);   /* win32_compat.c; Switch CPU report */
@@ -1058,7 +1106,7 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
     free(s);
     guest_thread_self();
     xbox_nx_retag_thread((void *)fn);
-    xbox_guest_pin(0);
+    if (!bridge_on_executor()) xbox_guest_pin(0);
 
     bridge_run_thread_inline(fn, ctx1, ctx2);
 
@@ -1128,7 +1176,15 @@ static HANDLE bridge_spawn_thread(recomp_func_t fn, uint32_t ctx1,
     s->fn = fn; s->ctx1 = ctx1; s->ctx2 = ctx2; s->stack_top = stack_top;
     s->tib = xbox_AllocThreadTib();
 
-    th = CreateThread(NULL, 0, bridge_thread_main, s, CREATE_SUSPENDED, NULL);
+#ifdef NFSU_GUEST_EXECUTOR
+    if (bridge_on_executor()) {
+        XgfFiber *fiber;
+        th = xgf_create_thread(xgf_current_executor(), bridge_thread_main, s,
+            0, s->tib, CREATE_SUSPENDED, NULL, &fiber);
+        if (th && !xgf_detach(fiber)) abort();
+    } else
+#endif
+        th = CreateThread(NULL, 0, bridge_thread_main, s, CREATE_SUSPENDED, NULL);
     /* Registered now, not when it first runs: the creator sets its priority
      * (ObReferenceObjectByHandle -> KTHREAD) before starting it, and used to
      * wait up to 200 ms per call for a thread that could not start until the
@@ -1228,7 +1284,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = start_context2;
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = start_context1;
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
-                GUEST_CALL(fn);
+                bridge_run_initial_guest(fn);
                 g_esp += 12;
                 fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: main thread returned (g_eax=0x%08X)\n", g_eax);
                 fflush(stderr);
@@ -2195,8 +2251,12 @@ static int kdisp_is_guest(uint32_t va)
     int valid = (type == KDISP_EVENT_NOTIFICATION || type == KDISP_EVENT_SYNCHRONIZE)
         ? size == 4 : type == KDISP_SEMAPHORE && size == 5;
     if (!valid) return 0;
+#if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST) || defined(NFSU_GUEST_EXECUTOR)
+    if (bridge_on_executor()
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
-    if (s_guest_scheduler_on) {
+        || s_guest_scheduler_on
+#endif
+    ) {
         /* XDK inline initialization bypasses KeInitialize*. Attach a shadow
          * whose state is the guest SignalState itself, not a mirrored latch.
          * Inline KeClearEvent stores therefore stay visible to every wait. */
@@ -2215,6 +2275,7 @@ static int kdisp_is_guest(uint32_t va)
         }
         LeaveCriticalSection(&g_kdisp_cs);
         if (h) return 0; /* Resolve and wait through the dispatcher-backed shadow. */
+        if (bridge_on_executor()) abort(); /* Never block the executor in legacy kdisp. */
     }
 #endif
     return 1;
@@ -2801,6 +2862,17 @@ static void bridge_PsTerminateSystemThread(void)
         guest_thread_forget();
         xbox_FreeThreadStack(g_thread_stack_top);
         g_thread_stack_top = 0;
+#ifdef NFSU_GUEST_EXECUTOR
+        if (bridge_on_executor()) {
+            RecompKernelState *k = &recomp_context_current()->kernel;
+            if (k->irql || k->dispatch_held || k->gil_nopreempt || k->guest_cs_depth ||
+                k->native_kernel_frames != 1 || k->busy_depth != 1) abort();
+            /* This terminal bridge has finished cleanup; its C callers will
+             * never resume, so unwind their bookkeeping before stack exit. */
+            xbox_kernel_busy(-k->busy_depth);
+            k->native_kernel_frames = k->continuation_wait_scope = k->gil_depth = 0;
+        }
+#endif
         ExitThread(exit_status);
     }
 }
@@ -2852,7 +2924,7 @@ static void bridge_HalReadSMCTrayState(void)
 /* The DPC D3D's ISR queued for the GPU interrupt, as seen during a vblank
  * raise (see kernel_vblank_tick). */
 static uint32_t g_vblank_dpc;
-static RECOMP_TLS int t_in_vblank_isr;
+#define t_in_vblank_isr (recomp_context_current()->kernel.in_vblank_isr)
 
 static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
 {
@@ -3517,7 +3589,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
     int slot = xbox_worker_stack_alloc();
 
     (void)unused;
-    xbox_guest_pin(1);             /* DPCs and vblank: interrupt-like, guest core */
+    if (!bridge_on_executor()) xbox_guest_pin(1);
     if (slot < 0) {
         fprintf(stderr, "  [KERNEL] timer thread has no worker stack; "
                         "timer DPCs will not run\n");
@@ -3584,7 +3656,18 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
         InitializeCriticalSection(&g_timer_lock);
         g_timer_started = 1;
         fprintf(stderr, "  [KERNEL] timer arm/expiry signals serialized (timer fix v1)\n");
-        CloseHandle(CreateThread(NULL, 0, kernel_timer_thread, NULL, 0, NULL));
+#ifdef NFSU_GUEST_EXECUTOR
+        if (bridge_on_executor()) {
+            XgfFiber *fiber;
+            HANDLE h = xgf_create_thread(xgf_current_executor(), kernel_timer_thread,
+                NULL, 0, 0, 0, NULL, &fiber);
+            if (!h) abort();
+            SetThreadPriority(h, THREAD_PRIORITY_TIME_CRITICAL + 1);
+            xgf_detach(fiber);
+            CloseHandle(h);
+        } else
+#endif
+            CloseHandle(CreateThread(NULL, 0, kernel_timer_thread, NULL, 0, NULL));
     }
 
     EnterCriticalSection(&g_timer_lock);
@@ -3739,7 +3822,7 @@ static const char* bridge_get_xbox_path(uint32_t obj_attrs_va)
     if (!buf_va) return NULL;
     /* XDK directory searches pass a counted prefix of "directory\\*".
      * The byte after Length need not be NUL or part of the object name. */
-    static RECOMP_TLS char path[65536];
+    char *path = recomp_context_current()->kernel.path;
     uint16_t length=BRIDGE_MEM16(ansi_str_va);
     if(length>BRIDGE_MEM16(ansi_str_va+2)) return NULL;
     /* Length <= MaximumLength says the string is self-consistent; it does not
@@ -7010,63 +7093,7 @@ static void bridge_RtlUshortByteSwap(void)
     g_eax = (uint32_t)(uint16_t)(((v & 0xFFu) << 8) | ((v >> 8) & 0xFFu));
 }
 
-/* ── Rtl Critical sections (ordinals 278, 295, 306) ─────────
- * 277/294 (plain Enter/Leave) are routed via the xbox_Rtl* wrappers already.
- *
- * TryEnter cannot reuse xbox_cs_shadow (it is private to kernel_rtl.c), so it
- * keeps its own keyed host-lock table: guest critical-section address -> host
- * CRITICAL_SECTION, created and probed under a guard.  Only the try path uses
- * it, so entering with Try and leaving with LeaveCriticalSection are both
- * routed at the shadow level and stay consistent on the host side. */
-
-#define BRIDGE_TRY_CS_SLOTS 512
-
-typedef struct {
-    uint32_t key;             /* guest critical section; 0 means free */
-    int      ready;
-    CRITICAL_SECTION cs;
-} BRIDGE_TRY_CS_SLOT;
-
-static BRIDGE_TRY_CS_SLOT g_try_cs[BRIDGE_TRY_CS_SLOTS];
-static CRITICAL_SECTION g_try_cs_guard;
-static int g_try_cs_guard_ready;
-
-static void bridge_try_cs_init_guard(void)
-{
-    /* First call in practice comes from the title's main thread during setup;
-     * a second InitializeCriticalSection on the same object is benign. */
-    if (!g_try_cs_guard_ready) {
-        InitializeCriticalSection(&g_try_cs_guard);
-        g_try_cs_guard_ready = 1;
-    }
-}
-
-static CRITICAL_SECTION *bridge_try_cs_shadow(uint32_t guest)
-{
-    size_t home, i;
-
-    bridge_try_cs_init_guard();
-    EnterCriticalSection(&g_try_cs_guard);
-    home = (size_t)((guest >> 4) % BRIDGE_TRY_CS_SLOTS);
-    for (i = 0; i < BRIDGE_TRY_CS_SLOTS; i++) {
-        BRIDGE_TRY_CS_SLOT *slot = &g_try_cs[(home + i) % BRIDGE_TRY_CS_SLOTS];
-        if (slot->key == guest) {
-            LeaveCriticalSection(&g_try_cs_guard);
-            return &slot->cs;
-        }
-        if (slot->key == 0) {
-            if (!slot->ready) {
-                InitializeCriticalSection(&slot->cs);
-                slot->ready = 1;
-            }
-            slot->key = guest;
-            LeaveCriticalSection(&g_try_cs_guard);
-            return &slot->cs;
-        }
-    }
-    LeaveCriticalSection(&g_try_cs_guard);
-    return NULL;
-}
+/* All RTL entry variants share the kernel RTL shadow and ownership. */
 
 /* 278: VOID RtlEnterCriticalSectionAndRegion(PRTL_CRITICAL_SECTION) */
 static void bridge_RtlEnterCriticalSectionAndRegion(void)
@@ -7085,9 +7112,8 @@ static void bridge_RtlLeaveCriticalSectionAndRegion(void)
 /* 306: BOOLEAN RtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION) */
 static void bridge_RtlTryEnterCriticalSection(void)
 {
-    CRITICAL_SECTION *cs = bridge_try_cs_shadow(STACK_ARG(0));
-    if (!cs) { g_eax = 0; return; }
-    g_eax = TryEnterCriticalSection(cs) ? 1 : 0;
+    g_eax = xbox_RtlTryEnterCriticalSection(
+        (PRTL_CRITICAL_SECTION)XBOX_TO_NATIVE(STACK_ARG(0))) ? 1 : 0;
 }
 
 /* ── Rtl Misc stubs (ordinals 288, 297, 319, 321) ─────────── */
@@ -8827,7 +8853,7 @@ static void bridge_PsCreateSystemThread(void)
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = start_context2;
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = start_context1;
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
-                GUEST_CALL(fn);
+                bridge_run_initial_guest(fn);
                 g_esp += 12;
             } else {
                 const char *inline_workers = getenv("RECOMP_WORKERS");
@@ -10355,7 +10381,7 @@ static void kernel_watch_arm_once(void)
 }
 
 /* Current dispatching slot */
-static RECOMP_TLS int g_kernel_dispatch_slot = -1;
+#define g_kernel_dispatch_slot (recomp_context_current()->kernel.dispatch_slot)
 
 static void kernel_thunk_dispatch_body(void);
 
@@ -10410,7 +10436,7 @@ static int kernel_call_keeps_gil(int slot)
         return 0;
     ord = g_slot_ordinals[slot];
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
-    if (s_guest_scheduler_on && (ord == 277 || ord == 278 || ord == 294 || ord == 295))
+    if (!bridge_on_executor() && s_guest_scheduler_on && (ord == 277 || ord == 278 || ord == 294 || ord == 295))
         return 1; /* Rtl CS fast paths; a contended Enter parks explicitly. */
 #endif
     return ord == 125 || ord == 126 || ord == 127 || ord == 128    /* KeQuery* time */
@@ -10418,14 +10444,14 @@ static int kernel_call_keeps_gil(int slot)
         || ord == 160 || ord == 161;          /* KeRaiseIrqlTo*, KfRaise/LowerIrql */
 }
 
-static void kernel_thunk_dispatch(void)
+static void kernel_thunk_dispatch_impl(void)
 {
     if (kernel_call_keeps_gil(g_kernel_dispatch_slot)) {
         kernel_thunk_dispatch_body();
         return;
     }
 #if defined(__ANDROID__) || defined(NFSU_GUEST_SCHEDULER_TEST)
-    if (s_guest_scheduler_on && g_kernel_dispatch_slot >= 0 &&
+    if (!bridge_on_executor() && s_guest_scheduler_on && g_kernel_dispatch_slot >= 0 &&
         g_kernel_dispatch_slot < XBOX_KERNEL_THUNK_TABLE_SIZE &&
         dispatcher_call_keeps_gil(g_slot_ordinals[g_kernel_dispatch_slot])) {
         uint32_t ord = g_slot_ordinals[g_kernel_dispatch_slot];
@@ -10462,6 +10488,33 @@ static void kernel_thunk_dispatch(void)
     if (perf_kernel_start && perf_kernel_end >= perf_kernel_start)
         nfsu_perf_kernel_resume(perf_ordinal, perf_caller,
             perf_kernel_end - perf_kernel_start, perf_wait_before);
+}
+
+static void kernel_thunk_dispatch(void)
+{
+    RecompKernelState *state = &recomp_context_current()->kernel;
+    int scope = state->continuation_wait_scope;
+    if (bridge_on_executor() && g_kernel_dispatch_slot >= 0 &&
+        g_kernel_dispatch_slot < XBOX_KERNEL_THUNK_TABLE_SIZE) {
+        /* These paths reach managed waits only after releasing their host
+         * table/object locks. Do not extend this to arbitrary I/O/callbacks. */
+        switch (g_slot_ordinals[g_kernel_dispatch_slot]) {
+        case 99: case 158: case 159: case 233: case 234: case 235:
+        case 277: case 278:
+            /* A nested guest callback may still have an unaudited outer I/O
+             * frame holding host resources. It cannot inherit this permit. */
+            state->continuation_wait_scope = state->native_kernel_frames == 0;
+            break;
+        default:
+            /* A guest callback nested inside a wait must earn its own scope. */
+            state->continuation_wait_scope = 0;
+            break;
+        }
+    }
+    state->native_kernel_frames++;
+    kernel_thunk_dispatch_impl();
+    state->native_kernel_frames--;
+    state->continuation_wait_scope = scope;
 }
 
 static void kernel_thunk_dispatch_body(void)
@@ -10879,4 +10932,123 @@ void xbox_kernel_bridge_init(void)
     fprintf(stderr, "  Synthetic VA range: 0x%08X-0x%08X\n",
             KERNEL_VA_BASE, KERNEL_VA_BASE + (resolved - 1) * 4);
 
+}
+
+/* Experimental single-native-thread title executor. The native fallback above
+ * remains the default until device validation covers this path. */
+#ifdef NFSU_GUEST_EXECUTOR
+static XgfExecutor *s_title_executor;
+static int s_title_finished;
+typedef struct {
+    recomp_func_t entry;
+    uint32_t stack;
+} ExecutorBoot;
+static DWORD WINAPI executor_title_entry(void *argument)
+{
+    ExecutorBoot *boot = argument;
+    g_esp = boot->stack;
+    xbox_gil_mark_main();
+    xbox_gil_enter();
+    boot->entry();
+    xbox_gil_leave();
+    guest_thread_forget();
+    return 0;
+}
+typedef struct {
+    int (*callback)(void *);
+    void *argument;
+    uint32_t fs_base;
+} ExecutorCallback;
+static DWORD WINAPI executor_device_callback(void *argument)
+{
+    ExecutorCallback *call = argument;
+    /* The submitting device owns this TIB and waits synchronously; it cannot
+     * use it concurrently. Preserve device TLS across successive IRQs. */
+    g_fs_base = call->fs_base;
+    DWORD result = (DWORD)call->callback(call->argument);
+    guest_thread_forget();
+    return result;
+}
+#endif
+
+int xbox_guest_executor_prepare(void)
+{
+#ifdef NFSU_GUEST_EXECUTOR
+    const char *mode = getenv("RECOMP_GUEST_EXECUTOR");
+    if (!mode || strcmp(mode, "1")) return 0;
+    if (s_title_executor) return 1;
+    xgs_init((volatile LONG *)&g_gil_contended);
+    if (!xgf_use_dispatcher_waits()) abort();
+    XgfExecutor *executor = xgf_executor_create();
+    if (!executor) abort();
+    __atomic_store_n(&s_title_executor, executor, __ATOMIC_RELEASE);
+    fprintf(stderr, "[EXECUTOR] enabled: one native executor, virtual title threads (experimental)\n");
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int xbox_guest_executor_run(void (*entry)(void), uint32_t stack, uint32_t fs_base)
+{
+#ifdef NFSU_GUEST_EXECUTOR
+    XgfExecutor *executor = __atomic_load_n(&s_title_executor, __ATOMIC_ACQUIRE);
+    if (!executor) return 0;
+    ExecutorBoot boot = {entry, stack};
+    XgfFiber *main_fiber;
+    HANDLE main_handle = xgf_create_thread(executor, executor_title_entry, &boot,
+        0, fs_base, 0, NULL, &main_fiber);
+    if (!main_handle) abort();
+    __atomic_store_n(&g_gil_contended, 1, __ATOMIC_RELEASE);
+    XgfRunResult result;
+    do {
+        result = xgf_executor_run(executor, 100, xgd_poll_timeouts);
+        if (result == XGF_RUN_ERROR) abort();
+        /* These native TLS counters aggregate all guest continuations. */
+        nfsu_perf_role("executor");
+        nfsu_perf_poll();
+    } while (result != XGF_RUN_DONE);
+    __atomic_store_n(&s_title_finished, 1, __ATOMIC_RELEASE);
+    if (!xgf_executor_close(executor)) abort();
+    if (!xgf_destroy(main_fiber)) abort();
+    CloseHandle(main_handle);
+    /* Device threads have process lifetime in the current host. Retain the
+     * executor object so a late submission never dereferences freed memory. */
+    return 1;
+#else
+    (void)entry; (void)stack; (void)fs_base;
+    return 0;
+#endif
+}
+
+int xbox_guest_executor_invoke(int (*callback)(void *), void *argument, int *result)
+{
+#ifdef NFSU_GUEST_EXECUTOR
+    XgfExecutor *executor = __atomic_load_n(&s_title_executor, __ATOMIC_ACQUIRE);
+    if (!executor || xgf_current_executor() == executor) return 0;
+    if (__atomic_load_n(&s_title_finished, __ATOMIC_ACQUIRE)) { *result = -1; return 1; }
+    ExecutorCallback call = {callback, argument, g_fs_base};
+    DWORD value;
+    if (!xgf_invoke(executor, executor_device_callback, &call,
+                    THREAD_PRIORITY_TIME_CRITICAL + 1, &value)) {
+        if (!__atomic_load_n(&s_title_finished, __ATOMIC_ACQUIRE)) abort();
+        *result = -1;
+        return 1;
+    }
+    *result = (int32_t)value;
+    return 1;
+#else
+    (void)callback; (void)argument; (void)result;
+    return 0;
+#endif
+}
+
+int xbox_guest_executor_native_call(void (*callback)(void *), void *argument)
+{
+#ifdef NFSU_GUEST_EXECUTOR
+    return xgf_native_call(callback, argument);
+#else
+    (void)callback; (void)argument;
+    return 0;
+#endif
 }

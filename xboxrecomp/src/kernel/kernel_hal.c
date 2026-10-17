@@ -12,6 +12,7 @@
  */
 
 #include "kernel.h"
+#include "recomp_context.h"
 #include <stdio.h>
 #include <stdlib.h>
 #if defined(_WIN32)
@@ -37,7 +38,7 @@
  * allows code that checks IRQL to function correctly.
  * ============================================================================ */
 
-static XBOX_THREAD_LOCAL KIRQL g_current_irql = PASSIVE_LEVEL;
+#define g_current_irql (recomp_context_current()->kernel.irql)
 
 /* How many threads are holding IRQL at or above DISPATCH_LEVEL.
  *
@@ -193,11 +194,7 @@ static BOOL CALLBACK dispatch_lock_init(PINIT_ONCE o, PVOID p, PVOID *c)
  * is one value for the one emulated CPU, so "is IRQL raised?" answers for
  * whoever raised it last; decisions about *this* thread -- may it be
  * pre-empted, is it a DPC waiting for the guest lock -- ask this instead. */
-#ifdef _MSC_VER
-static __declspec(thread) int t_dispatch_held;
-#else
-static _Thread_local int t_dispatch_held;
-#endif
+#define t_dispatch_held (recomp_context_current()->kernel.dispatch_held)
 int xbox_thread_holds_dispatch(void) { return t_dispatch_held; }
 
 int  xbox_gil_suspend(void);

@@ -1,6 +1,7 @@
 /* Tests the actual bridge GIL with the Android handoff path on a POSIX host.
  * cc -O1 -ffunction-sections -fdata-sections -Ixboxrecomp/src
  * -Ixboxrecomp/src/kernel tests/gil_handoff.c
+ * xboxrecomp/src/kernel/recomp_context.c
  * xboxrecomp/src/platform/win32_compat.c -Wl,--gc-sections -pthread -lm
  */
 #include "platform/win32_compat.h"

@@ -33,6 +33,12 @@ if(NOT WIN32 AND NOT NINTENDO_SWITCH)
     target_sources(xbox_kernel PRIVATE guest_scheduler.c)
     if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_sources(xbox_kernel PRIVATE guest_dispatcher.c)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|x86_64|AMD64)$")
+            enable_language(ASM)
+            target_compile_definitions(xbox_kernel PRIVATE NFSU_GUEST_EXECUTOR=1)
+            target_sources(xbox_kernel PRIVATE guest_fiber.c guest_fiber_switch.S
+                guest_fiber_dispatcher.c)
+        endif()
     endif()
 endif()
 

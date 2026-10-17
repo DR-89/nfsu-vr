@@ -18,6 +18,7 @@
 #include "win32_compat.h"
 #include "thread_observer.h"
 #include "dispatcher_backend.h"
+#include "virtual_thread.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -334,6 +335,9 @@ typedef struct w32_object {
     int             host_rt;         /* host priority raised (host_priority_apply) */
     int             host_base;       /* Linux: RT priority it started at */
     volatile int    started;         /* Linux: o->thread is valid */
+    int             virtual_thread;
+    const HostVirtualThreadOps *virtual_ops;
+    void           *virtual_data;
 #if defined(__SWITCH__)
     Handle          nx_handle;       /* Horizon thread, once it runs */
 #endif
@@ -369,6 +373,9 @@ typedef struct w32_object {
 
 static __thread w32_object *t_self_obj = NULL;
 static __thread DWORD       t_tid      = 0;
+static __thread w32_object *t_native_self;
+static __thread DWORD t_native_tid;
+static __thread int t_virtual_bound;
 static volatile LONG        s_next_tid = 1000;
 
 DWORD GetCurrentThreadId(void)
@@ -470,6 +477,12 @@ int host_dispatcher_manages(HANDLE handle)
     return o && o->dispatcher != NULL;
 }
 
+int host_continuation_active(void)
+{
+    const HostDispatcherBackend *backend = dispatcher_get();
+    return backend && backend->native_wait_allowed && !backend->native_wait_allowed();
+}
+
 BOOL host_dispatcher_bind_header(HANDLE handle, volatile void *header)
 {
     w32_object *o = obj_from(handle);
@@ -515,6 +528,78 @@ static void obj_release(w32_object *o)
     pthread_cond_destroy(&o->cond);
     pthread_cond_destroy(&o->gate);
     free(o);
+}
+
+HANDLE host_virtual_thread_create(const HostVirtualThreadOps *ops, void *thread,
+                                  DWORD flags, LPDWORD tid)
+{
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (!ops || !ops->exit || !backend) return NULL;
+    w32_object *o = obj_alloc(K_THREAD);
+    o->dispatcher = backend->create(0, 1, 0, 1);
+    if (!o->dispatcher) { obj_release(o); return NULL; }
+    o->virtual_thread = 1;
+    o->virtual_ops = ops;
+    o->virtual_data = thread;
+    o->tid = (DWORD)InterlockedIncrement(&s_next_tid);
+    o->suspend_count = (flags & CREATE_SUSPENDED) ? 1 : 0;
+    o->refcount = 2; /* caller plus executor, released by complete */
+    if (tid) *tid = o->tid;
+    return (HANDLE)o;
+}
+
+int host_virtual_thread_bind(HANDLE h)
+{
+    if (!h) {
+        if (t_virtual_bound) {
+            t_self_obj = t_native_self;
+            t_tid = t_native_tid;
+            t_virtual_bound = 0;
+        }
+        return 1;
+    }
+    w32_object *o = obj_from(h);
+    if (!o || !o->virtual_thread) return 0;
+    if (!t_virtual_bound) {
+        t_native_tid = GetCurrentThreadId();
+        t_native_self = t_self_obj;
+        t_virtual_bound = 1;
+    }
+    t_self_obj = o;
+    t_tid = o->tid;
+    return 1;
+}
+
+int host_virtual_thread_is(HANDLE h)
+{
+    w32_object *o = h == PSEUDO_CURRENT_THREAD ? t_self_obj : obj_from(h);
+    return o && o->virtual_thread;
+}
+
+int host_virtual_thread_complete(HANDLE h, DWORD code)
+{
+    w32_object *o = obj_from(h);
+    if (!o || !o->virtual_thread || t_self_obj == o) return 0;
+    pthread_mutex_lock(&thread_update_lock);
+    pthread_mutex_lock(&o->lock);
+    if (o->exited) {
+        pthread_mutex_unlock(&o->lock);
+        pthread_mutex_unlock(&thread_update_lock);
+        return 0;
+    }
+    o->exit_code = code;
+    o->exited = o->signaled = 1;
+    o->virtual_ops = NULL;
+    o->virtual_data = NULL;
+    pthread_mutex_unlock(&o->lock);
+    /* Completion is a manual-reset dispatcher event. Existing duplicates
+     * remain signalled for every waiter, without joining a native thread. */
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend->thread_exit) backend->thread_exit(o->tid);
+    backend->signal(o->dispatcher, 1, NULL, 0);
+    pthread_mutex_unlock(&thread_update_lock);
+    obj_release(o);
+    return 1;
 }
 
 /* ---- fd-backed file handle (for the file-I/O HLE) -------------------- */
@@ -699,6 +784,15 @@ static DWORD wait_single(w32_object *o, DWORD ms)
     return result;
 }
 
+static DWORD unsupported_continuation_wait(const char *kind)
+{
+    static volatile LONG reports;
+    if (InterlockedIncrement(&reports) <= 8)
+        fprintf(stderr, "[EXECUTOR] unsupported wait: %s (virtual tid %u)\n", kind, GetCurrentThreadId());
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return WAIT_FAILED;
+}
+
 DWORD WaitForSingleObject(HANDLE h, DWORD ms)
 {
     if (!h || h == PSEUDO_CURRENT_THREAD || h == PSEUDO_CURRENT_PROCESS)
@@ -711,6 +805,9 @@ DWORD WaitForSingleObject(HANDLE h, DWORD ms)
             void *object = o->dispatcher;
             return dispatcher_get()->wait(1, &object, 0, ms);
         }
+        const HostDispatcherBackend *backend = dispatcher_get();
+        if (backend && backend->native_wait_allowed && !backend->native_wait_allowed())
+            return unsupported_continuation_wait("native object");
         if (ms) observe_wait_begin((uintptr_t)h);
         DWORD result = wait_single(o, ms);
         if (ms) observe_wait_end();
@@ -720,6 +817,9 @@ DWORD WaitForSingleObject(HANDLE h, DWORD ms)
 
 DWORD WaitForSingleObjectEx(HANDLE h, DWORD ms, BOOL alertable)
 {
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (alertable && backend && backend->native_wait_allowed && !backend->native_wait_allowed())
+        return unsupported_continuation_wait("alertable single object");
     if (alertable && drain_apcs() > 0)
         return WAIT_IO_COMPLETION;
     return WaitForSingleObject(h, ms);
@@ -812,6 +912,9 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
             return dispatcher_get()->wait(count, objects, waitAll, ms);
         }
     }
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend && backend->native_wait_allowed && !backend->native_wait_allowed())
+        return unsupported_continuation_wait(alertable ? "alertable wait set" : "mixed/native wait set");
     if (ms) observe_wait_begin(0);
     DWORD result = wait_multiple_impl(count, handles, waitAll, ms, alertable);
     if (ms) observe_wait_end();
@@ -908,6 +1011,11 @@ HANDLE CreateMutexA(LPSECURITY_ATTRIBUTES sa, BOOL initialOwner, LPCSTR name)
 {
     (void)sa; (void)name;
     w32_object *o = obj_alloc(K_MUTEX);
+    if (host_continuation_active()) {
+        o->dispatcher = dispatcher_get()->create(2, 0, !!initialOwner, 1);
+        if (!o->dispatcher) { obj_release(o); return NULL; }
+        return (HANDLE)o;
+    }
     if (initialOwner) { o->mtx_owner = GetCurrentThreadId(); o->mtx_recursion = 1; }
     return (HANDLE)o;
 }
@@ -924,6 +1032,7 @@ BOOL ReleaseMutex(HANDLE h)
         SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
+    if (o->dispatcher) return dispatcher_get()->signal(o->dispatcher, 1, NULL, 0);
     pthread_mutex_lock(&o->lock);
     if (o->mtx_owner != GetCurrentThreadId()) {
         pthread_mutex_unlock(&o->lock);
@@ -1192,6 +1301,9 @@ static void *thread_trampoline(void *arg)
     const HostThreadObserver *observer = observer_get();
     if (observer && observer->exit) observer->exit(GetCurrentThreadId());
 
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend && backend->thread_exit) backend->thread_exit(GetCurrentThreadId());
+
     pthread_mutex_lock(&o->lock);
     o->exit_code = rc;
     o->exited    = 1;
@@ -1250,8 +1362,14 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
 
 VOID ExitThread(DWORD exitCode)
 {
+    if (t_self_obj && t_self_obj->virtual_thread) {
+        t_self_obj->virtual_ops->exit(t_self_obj->virtual_data, exitCode);
+        abort(); /* A virtual exit must not terminate the executor pthread. */
+    }
     const HostThreadObserver *observer = observer_get();
     if (observer && observer->exit) observer->exit(GetCurrentThreadId());
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend && backend->thread_exit) backend->thread_exit(GetCurrentThreadId());
     w32_object *o = t_self_obj;
     if (o) {
         pthread_mutex_lock(&o->lock);
@@ -1287,7 +1405,10 @@ DWORD ResumeThread(HANDLE h)
     unsigned count = (unsigned)o->suspend_count;
     pthread_mutex_unlock(&o->lock);
     const HostThreadObserver *observer = observer_get();
-    if (observer && observer->suspend) observer->suspend(o->tid, count);
+    if (o->virtual_thread) {
+        if (o->virtual_ops && o->virtual_ops->suspend)
+            o->virtual_ops->suspend(o->virtual_data, count);
+    } else if (observer && observer->suspend) observer->suspend(o->tid, count);
     pthread_mutex_unlock(&thread_update_lock);
     return prev;
 }
@@ -1305,7 +1426,10 @@ DWORD SuspendThread(HANDLE h)
     unsigned count = (unsigned)o->suspend_count;
     pthread_mutex_unlock(&o->lock);
     const HostThreadObserver *observer = observer_get();
-    if (observer && observer->suspend) observer->suspend(o->tid, count);
+    if (o->virtual_thread) {
+        if (o->virtual_ops && o->virtual_ops->suspend)
+            o->virtual_ops->suspend(o->virtual_data, count);
+    } else if (observer && observer->suspend) observer->suspend(o->tid, count);
     pthread_mutex_unlock(&thread_update_lock);
     return prev;
 }
@@ -1314,6 +1438,7 @@ BOOL TerminateThread(HANDLE h, DWORD exitCode)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return FALSE;
+    if (o->virtual_thread) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
 #ifdef __ANDROID__
     /* Bionic has no thread cancellation. Do not signal a still-running
      * thread as exited; callers must use normal guest thread termination. */
@@ -1380,9 +1505,14 @@ BOOL SetThreadPriority(HANDLE h, int priority)
     if (o && o->kind == K_THREAD) {
         pthread_mutex_lock(&thread_update_lock);
         __atomic_store_n(&o->priority, priority, __ATOMIC_RELAXED);
-        host_priority_apply(o);
         const HostThreadObserver *observer = observer_get();
-        if (observer && observer->priority) observer->priority(o->tid, priority);
+        if (o->virtual_thread) {
+            if (o->virtual_ops && o->virtual_ops->priority)
+                o->virtual_ops->priority(o->virtual_data, priority);
+        } else {
+            host_priority_apply(o);
+            if (observer && observer->priority) observer->priority(o->tid, priority);
+        }
         pthread_mutex_unlock(&thread_update_lock);
     }
     return TRUE;
@@ -1406,7 +1536,12 @@ int host_current_thread_state(int *priority, unsigned *suspended)
     return 1;
 }
 
-VOID SwitchToThread(void) { sched_yield(); }
+VOID SwitchToThread(void)
+{
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend && backend->sleep && backend->sleep(0)) return;
+    sched_yield();
+}
 
 DWORD QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data)
 {
@@ -1430,6 +1565,8 @@ DWORD QueueUserAPC(PAPCFUNC func, HANDLE thread, ULONG_PTR data)
 
 VOID Sleep(DWORD ms)
 {
+    const HostDispatcherBackend *backend = dispatcher_get();
+    if (backend && backend->sleep && backend->sleep(ms)) return;
     if (ms == 0) { sched_yield(); return; }
     observe_wait_begin(0);
     struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L };

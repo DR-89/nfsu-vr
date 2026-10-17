@@ -15,6 +15,23 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "../xboxrecomp/src/kernel/guest_executor.h"
+
+typedef struct {
+    const char *path;
+    int flags, result;
+    struct stat *stat;
+    DIR *directory;
+} SafNativeCall;
+static int saf_open(const char *path, int flags);
+int __wrap_stat(const char *path, struct stat *st);
+DIR *__wrap_opendir(const char *path);
+static void native_open(void *argument)
+{ SafNativeCall *call = argument; call->result = saf_open(call->path, call->flags); }
+static void native_stat(void *argument)
+{ SafNativeCall *call = argument; call->result = __wrap_stat(call->path, call->stat); }
+static void native_opendir(void *argument)
+{ SafNativeCall *call = argument; call->directory = __wrap_opendir(call->path); }
 
 static jclass s_access;
 static jmethodID s_open, s_stat, s_list;
@@ -42,6 +59,7 @@ static JNIEnv *environment(void)
 static int java_failed(JNIEnv *env)
 {
     if (!(*env)->ExceptionCheck(env)) return 0;
+    (*env)->ExceptionDescribe(env);
     (*env)->ExceptionClear(env);
     errno = ENOENT;
     return 1;
@@ -49,6 +67,8 @@ static int java_failed(JNIEnv *env)
 
 static int saf_open(const char *path, int flags)
 {
+    SafNativeCall call = {.path = path, .flags = flags};
+    if (xbox_guest_executor_native_call(native_open, &call)) return call.result;
     if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) {
         errno = EROFS; return -1;
     }
@@ -104,6 +124,8 @@ int __wrap_stat(const char *path, struct stat *st)
 {
     const char *relative = relative_path(path);
     if (!relative) return __real_stat(path, st);
+    SafNativeCall call = {.path = path, .stat = st};
+    if (xbox_guest_executor_native_call(native_stat, &call)) return call.result;
     JNIEnv *env = environment();
     if (!env) return -1;
     jstring name = (*env)->NewStringUTF(env, relative);
@@ -137,6 +159,8 @@ DIR *__wrap_opendir(const char *path)
 {
     const char *relative = relative_path(path);
     if (!relative) return __real_opendir(path);
+    SafNativeCall call = {.path = path};
+    if (xbox_guest_executor_native_call(native_opendir, &call)) return call.directory;
     JNIEnv *env = environment();
     if (!env) return NULL;
     jstring name = (*env)->NewStringUTF(env, relative);

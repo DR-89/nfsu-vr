@@ -30,7 +30,7 @@ extern void sub_000C7A80(void);
 static RECOMP_TLS short s_touch_x, s_touch_y;
 static RECOMP_TLS unsigned s_touch_buttons, s_touch_poll, s_touch_prepare;
 typedef struct {
-    uint32_t package, target, message, fired, screen, armed, palette_entry, back, screen_control, list_entry, carousel, allow_swipe, swipe_only, magazine_slot, magazine_page;
+    uint32_t package, target, message, fired, screen, armed, palette_entry, back, screen_control, list_entry, carousel, allow_swipe, swipe_only, magazine_slot, magazine_page, focus_only;
     short start_x, start_y;
     float travel;
 } TouchTarget;
@@ -191,12 +191,97 @@ static uint32_t touch_rendered_object(uint32_t hash)
     return 0;
 }
 
+/* QROptionsScreen's AF610 handler accepts OptionNText, not the generic
+ * OptionName_N convention. Select starts the race, so row taps must never
+ * fall through to generic mouse activation. */
+static int touch_quick_race_options(uint32_t screen, TouchTarget *target)
+{
+    if (MEM32(screen) != 0x001FB64Cu) return 0;
+    fprintf(stderr, "[qr-touch] focus=%08X arrows=%08X/%08X xy=%d,%d bounds=%u\n",
+        MEM32(target->package + 0x80), MEM32(screen + 0x24), MEM32(screen + 0x28),
+        s_touch_x, s_touch_y, s_touch_bounds_count);
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        TouchBounds *b = &s_touch_bounds[i];
+        fprintf(stderr, "[qr-object] obj=%08X hash=%08X flags=%08X rect=%.1f,%.1f,%.1f,%.1f\n",
+            b->object, MEM32(b->object + 0x10), MEM32(b->object + 0x1C),
+            b->left,b->top,b->right,b->bottom);
+    }
+
+    for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+        uint32_t object = s_touch_bounds[i].object;
+        if (MEM32(object + 0x18) != 2 ||
+            (MEM32(object + 0x1C) & 0x04000000u) ||
+            MEM32(object + 0x5C) != touch_name_hash("CONTINUE")) continue;
+        if (touch_rendered_named_hit(MEM32(object + 0x10))) {
+            target->target = object;
+            target->message = 0x406415E3u;
+            return 1;
+        }
+    }
+    uint32_t direction = 0, arrow = touch_browser_arrow(&direction);
+    if (arrow && (MEM32(arrow + 0x1C) & 0x04000000u)) arrow = 0;
+    /* This controller uses DE420, not DE440: +24/+28 do not hold
+     * base-arrow pointers. Bind the rendered mouse_over_l/r identities. */
+    for (unsigned side = 0; !arrow && side < 2; side++) {
+        uint32_t hash = side ? 0xAA68BFD4u : 0xAA68BFCEu;
+        uint32_t object = touch_rendered_object(hash);
+        TouchBounds bounds;
+        float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+        if (object && touch_object_bounds(object, &bounds, 0) &&
+            x >= bounds.left - 8 && x < bounds.right + 8 &&
+            y >= bounds.top - 8 && y < bounds.bottom + 8) {
+            arrow = object;
+            direction = side ? 0xB5971BF1u : 0x9120409Eu;
+        }
+    }
+    for (unsigned row = 1; row <= 9; row++) {
+        char name[32];
+        snprintf(name, sizeof(name), "Option%uText", row);
+        uint32_t label = touch_rendered_object(touch_name_hash(name));
+        if (!label || (MEM32(label + 0x1C) & 0x04000000u)) continue;
+        snprintf(name, sizeof(name), "Option%uData", row);
+        uint32_t data = touch_rendered_object(touch_name_hash(name));
+        TouchBounds row_bounds, arrow_bounds, value_bounds;
+        if (!touch_object_bounds(label, &row_bounds, 0)) continue;
+        float centre = (row_bounds.top + row_bounds.bottom) * .5f;
+        float top = row_bounds.top - 16, bottom = row_bounds.bottom + 16;
+        for (unsigned other = 1; other <= 9; other++) {
+            if (other == row) continue;
+            snprintf(name, sizeof(name), "Option%uText", other);
+            uint32_t neighbour = touch_rendered_object(touch_name_hash(name));
+            TouchBounds bounds;
+            if (!neighbour || !touch_object_bounds(neighbour, &bounds, 0)) continue;
+            float y = (bounds.top + bounds.bottom) * .5f;
+            if (y < centre) top = fmaxf(top, (y + centre) * .5f);
+            if (y > centre) bottom = fminf(bottom, (y + centre) * .5f);
+        }
+        if (data && touch_object_bounds(data, &value_bounds, 0)) {
+            row_bounds.left = fminf(row_bounds.left, value_bounds.left);
+            row_bounds.right = fmaxf(row_bounds.right, value_bounds.right);
+        }
+        float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+        int row_hit = x >= row_bounds.left - 12 && x < row_bounds.right + 12 &&
+            y >= top && y < bottom;
+        int arrow_row = arrow && touch_object_bounds(arrow, &arrow_bounds, 0) &&
+            (arrow_bounds.top + arrow_bounds.bottom) * .5f >= top &&
+            (arrow_bounds.top + arrow_bounds.bottom) * .5f < bottom;
+        if (arrow ? arrow_row : row_hit) {
+            target->target = label;
+            target->message = direction ? direction : 1;
+            target->focus_only = !direction;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Option arrows name the row whose native handler must receive Left/Right.
  * The controller-layout screen uses one unnumbered data field instead. */
 static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t count,
                                 TouchTarget *target)
 {
     if (screen != touch_active_screen()) return 0;
+    if (touch_quick_race_options(screen, target)) return 1;
     /* Common screen constructor DE440 stores mouse_over_u/d at +2C/+30.
      * Use the original Up/Down messages (DE5F0), including native endpoints. */
     for (unsigned down = 0; down < 2; down++) {
@@ -546,6 +631,11 @@ void feng_touch_dispatch(void)
             }
         }
     }
+    if (active && MEM32(touch_active_screen()) == 0x001FB64Cu &&
+        (slot >= s_touch_target_count || !s_touch_targets[slot].message)) {
+        esp += 8;
+        return; /* Only explicit row controls and Continue can act in this modal. */
+    }
     if (active && slot < s_touch_target_count && s_touch_targets[slot].message) {
         TouchTarget *target = &s_touch_targets[slot];
         int fire = s_touch_buttons && !s_touch_prepare && !target->fired;
@@ -623,6 +713,22 @@ void feng_touch_dispatch(void)
                     PUSH32(esp, 0);
                     ecx = target->screen;
                     sub_000B8310(); /* refresh route and event details */
+                }
+                if (MEM32(target->screen) == 0x001FB64Cu &&
+                    message != 0x406415E3u && message != 0x911AB364u) {
+                    PUSH32(esp, 1);
+                    PUSH32(esp, target->target);
+                    PUSH32(esp, feng);
+                    PUSH32(esp, 0);
+                    ecx = package;
+                    sub_000E53C0(); /* arrows subsequently belong to this row */
+                }
+                if (target->focus_only) {
+                    PUSH32(esp, 0);
+                    ecx = feng;
+                    sub_000D7A00(); /* apply queued focus scripts before returning */
+                    eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp + 8;
+                    return;
                 }
                 /* Dispatch to the same active screen entry used by native
                  * package notifications, independent of mouse script focus. */
@@ -844,6 +950,16 @@ uint32_t feng_touch_draw_begin(uint32_t object)
 {
     uint32_t previous = s_touch_draw_object;
     s_touch_draw_object = object;
+    if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 &&
+        MEM32(touch_active_screen()) == 0x001FB64Cu &&
+        MEM32(object + 0x18) == 2 &&
+        MEM32(object + 0x5C) == touch_name_hash("MODE_OPTIONS_TITLE")) {
+        /* Reuse the native modal heading as a visible localized confirmation.
+         * Its cached glyph bounds supply the touch target. */
+        MEM32(object + 0x5C) = touch_name_hash("CONTINUE");
+        MEM32(object + 0x1C) |= 0x02400000u;
+    }
+
     if (MEM32(NFSU1_GAMEFLOW_STATE) == 3 && touch_back_label(object) &&
         MEM32(object + 0x5C) == 0x00169268u) {
         MEM32(object + 0x5C) = 0x001335F0u;
