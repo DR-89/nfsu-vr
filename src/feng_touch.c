@@ -334,6 +334,42 @@ static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t coun
                                 TouchTarget *target)
 {
     if (screen != touch_active_screen()) return 0;
+    if (MEM32(screen) == 0x001FC078u) { /* UndergroundBriefScreen, B8F60 */
+        uint32_t package = MEM32(screen + 0xC);
+        for (unsigned i = 0; i < count; i++) {
+            uint32_t object = MEM32(objects + i * 4);
+            uint32_t hash = object ? MEM32(object + 0x10) : 0;
+            if (hash != 0x0014DD31u && hash != 0x6BAA2200u &&
+                hash != 0x0016821Eu) continue; /* EASY, MEDIUM, HARD */
+            TouchBounds area;
+            if ((MEM32(object + 0x1C) & 0x04000000u) ||
+                !touch_object_bounds(object, &area, 0)) continue;
+            /* B8B10 shows these three reward captions beneath the choices.
+             * Join the rendered caption in this column to its label, including
+             * the gap, then add finger tolerance around the whole button. */
+            for (unsigned j = 0; j < s_touch_bounds_count; j++) {
+                TouchBounds *reward = &s_touch_bounds[j];
+                uint32_t reward_hash = MEM32(reward->object + 0x10);
+                if (reward_hash != 0x64DDFDFFu && reward_hash != 0x22AD620Eu &&
+                    reward_hash != 0x3434E0ACu) continue;
+                if (MEM32(reward->object + 0x1C) & 0x04000000u) continue;
+                float centre = (reward->left + reward->right) * .5f;
+                if (centre < area.left || centre >= area.right) continue;
+                area.left = fminf(area.left, reward->left);
+                area.right = fmaxf(area.right, reward->right);
+                area.bottom = fmaxf(area.bottom, reward->bottom);
+            }
+            float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+            if (x < area.left - 12 || x >= area.right + 12 ||
+                y < area.top - 8 || y >= area.bottom + 8) continue;
+            target->target = object;
+            target->message = 0x0C407210u;
+            /* Capture selection before the native mouse hover changes it.
+             * The decision lasts for this entire gesture, until release. */
+            target->focus_only = object != MEM32(package + 0x80);
+            return 1;
+        }
+    }
     if (touch_quick_race_options(screen, target)) return 1;
     if (MEM32(screen) == 0x001FBC9Cu) { /* nested pause settings, B65E0 */
         float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
@@ -485,8 +521,9 @@ static uint32_t touch_preview_screen(void)
         uint32_t vtable = MEM32(screen);
         uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
         if (vtable == 0x001FDD74u || vtable == 0x001FB8F4u ||
-            vtable == 0x001FC1ACu)
-            return screen; /* ColorPicker, QuickRaceCarSelect, MainMenuCarCustomize */
+            vtable == 0x001FC1ACu || vtable == 0x001FBFCCu)
+            return screen; /* ColorPicker, QuickRaceCarSelect, MainMenuCarCustomize,
+                            * ChooseCareerCarScreen */
         return handler >= 0x000EB000u && handler < 0x000F7000u &&
             MEM32(screen + 0x48) == 0x001FF870u ? screen : 0;
     }
@@ -498,7 +535,8 @@ static uint32_t touch_preview_screen(void)
 static uint32_t touch_carousel_screen(void)
 {
     uint32_t screen = touch_active_screen();
-    if (screen && MEM32(screen) == 0x001FB848u) return screen;
+    if (screen && (MEM32(screen) == 0x001FB848u ||
+                   MEM32(screen) == 0x001FC12Cu)) return screen;
     return touch_preview_screen();
 }
 
@@ -513,6 +551,21 @@ typedef struct {
 static int touch_carousel_binding(uint32_t screen, TouchCarousel *binding)
 {
     if (screen != touch_carousel_screen() || MEM32(screen) == 0x001FDD74u) return 0;
+    if (MEM32(screen) == 0x001FC12Cu) {
+        /* UndergroundMapScreen: B9460 allocates the shared browser at +3C.
+         * Its selected rendered node is browser +0C, not screen +48 (the
+         * separate career event cursor). B95D0 handles Left/Right/Select. */
+        uint32_t browser = MEM32(screen + 0x3C);
+        if (!browser || MEM32(browser) != 0x001FF870u) return 0;
+        *binding = (TouchCarousel){
+            .selected_node = MEM32(browser + 0xC),
+            .activate_message = 0x406415E3u,
+            .label_hashes = { touch_name_hash("INCOMING_TEXT"),
+                              touch_name_hash("ACCEPT_MESSAGE_TEXT") },
+            .allow_swipe = 1
+        };
+        return 1;
+    }
     if (MEM32(screen) == 0x001FB848u) {
         /* B0840 updates the visible location name (03C8F634); B1880
          * accepts Select, and B0CE0 performs native Left/Right selection. */
@@ -527,12 +580,14 @@ static int touch_carousel_binding(uint32_t screen, TouchCarousel *binding)
     if (MEM32(screen) == 0x001FB8F4u) {
         *binding = (TouchCarousel){
             .selected_node = MEM32(screen + 0x58),
-            .activate_message = 0x406415E3u
+            .activate_message = 0x406415E3u,
+            .allow_swipe = 1
         };
         return 1;
     }
-    /* MainMenuCarCustomize B9E80 constructs the same browser at +48;
-     * B9D70 accepts MouseClick/Select and B9CC0 handles Left/Right. */
+    /* MainMenuCarCustomize B9E80 and ChooseCareerCarScreen B7F60 construct
+     * the same browser at +48, selected node +54. B9D70/B7DD0 accept
+     * MouseClick/Select; B9CC0/B7D40 handle native Left/Right. */
     if (MEM32(screen + 0x48) == 0x001FF870u) {
         *binding = (TouchCarousel){
             .selected_node = MEM32(screen + 0x54),
@@ -819,8 +874,9 @@ void feng_touch_dispatch(void)
                     ecx = target->screen;
                     sub_000B8310(); /* refresh route and event details */
                 }
-                if (MEM32(target->screen) == 0x001FB64Cu &&
-                    message != 0x406415E3u && message != 0x911AB364u) {
+                if ((MEM32(target->screen) == 0x001FC078u && !target->back) ||
+                    (MEM32(target->screen) == 0x001FB64Cu &&
+                    message != 0x406415E3u && message != 0x911AB364u)) {
                     PUSH32(esp, 1);
                     PUSH32(esp, target->target);
                     PUSH32(esp, feng);
@@ -839,7 +895,17 @@ void feng_touch_dispatch(void)
                  * package notifications, independent of mouse script focus. */
                 PUSH32(esp, package);
                 PUSH32(esp, 1);
-                PUSH32(esp, target->target);
+                uint32_t parameter = target->target;
+                if (MEM32(target->screen) == 0x001FC078u &&
+                    target->screen_control && message == 0x0C407210u) {
+                    /* B8F60 forwards this argument to B88C0 as the numeric
+                     * race difficulty, not an FEng object pointer. Native
+                     * button scripts perform this translation for mouse input. */
+                    uint32_t hash = MEM32(target->target + 0x10);
+                    parameter = hash == 0x0016821Eu ? 2u :
+                        hash == 0x6BAA2200u ? 1u : 0u;
+                }
+                PUSH32(esp, parameter);
                 PUSH32(esp, message);
                 PUSH32(esp, 0);
                 ecx = target->screen;

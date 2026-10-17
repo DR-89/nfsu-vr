@@ -78,6 +78,14 @@ menu rows and dialogs through the same object path, without button-name rules.
 
 Regression test (synthetic cached quads, actual draw/hit/input wrappers):
 
+ChooseCareerCarScreen (vtable 1FBFCC), shown after the first Underground win,
+uses the garage carousel and preview gesture path. B7F60 constructs the browser
+at +48 (selected node +54); B7DD0 accepts MouseClick/Select and B7D40 handles
+Left/Right. The shared binding supplies rendered arrows, selection, strip swipes,
+inert gap taps and exclusive camera orbit below the strip. The host fixture
+checks this screen alongside both garage entry paths and Quick Race.
+Physical-device acceptance remains pending.
+
 ```sh
 cc -O1 -D__ANDROID__ -ffunction-sections -fdata-sections -Isrc \
   -Iandroid/app/build/generated/recomp tests/menu_touch_focus.c \
@@ -456,3 +464,36 @@ and sends native Right to OptionName_N, including Controller/Vibration.
 Tests cover simultaneous parent/child activation, the actual close event,
 white cache colors and a gap tap on the controller setting. Device visual and
 nested-return acceptance remain pending for this revision.
+
+## Underground Race Map touch
+
+UndergroundMapScreen (1FC12C, handler B95D0) uses the shared track carousel
+capture and release path. B9460 allocates its browser at screen+3C; the selected
+rendered node is browser+0C. Screen+48 is a separate career event cursor.
+Rendered arrows dispatch native Left/Right, the thumbnail and INCOMING_TEXT /
+ACCEPT_MESSAGE_TEXT dispatch Select, and Back uses the existing Cancel footer.
+Gaps in the rendered upper carousel strip accept swipes only. Map drags cannot
+orbit a retained garage camera. Synthetic coverage runs both this screen and
+Quick Race track selection through arrows, Select, swipes, gap taps, Back and
+screen-change cancellation. Device acceptance remains pending.
+
+## Underground difficulty selection
+
+UndergroundBriefScreen (1FC078, B8F60) handles EASY (14DD31), MEDIUM
+(6BAA2200) and HARD (16821E) as release-only touch targets. Capture the
+package focus before native hover: a different difficulty updates FEng focus
+and flushes its scripts without activation. A tap on the already selected
+difficulty dispatches native MouseClick with numeric difficulty 0/1/2
+(Easy/Medium/Hard), rather than the rendered object pointer: B8F60 passes
+this argument to B88C0, which stores it at 29C460 for race startup. This decision
+is fixed for the gesture, so hover cannot turn selection into confirmation.
+Dragging or leaving the screen cancels the action. Controller input retains
+its native behavior. Host regression covers each difficulty and both stages;
+physical-device acceptance remains pending.
+
+Difficulty hit areas join each rendered label to its visible reward caption
+(64DDFDFF / 22AD620E / 3434E0AC) in the same column, including the empty gap.
+The union has 12 horizontal and 8 vertical logical pixels of finger tolerance.
+Taps on amounts, gaps and beside digits share the same select/confirm policy;
+hidden reward captions do not extend the hit area. Host coverage exercises all
+three difficulties with separate label and reward quads.

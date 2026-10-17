@@ -866,7 +866,7 @@ void sub_000192C0(void)
  * this+0x3C+4*(N-1) (thiscall, the message, ret 4; dispatch at
  * 0x000C281C), Favorite Drive Camera's being sub_000C0C90: step a value,
  * rewrite the texts with sub_000DD490(package, object name, text) and
- * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..8 are added
+ * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..9 are added
  * the same way after the original setup; their handlers are our own, at
  * unused int3 bytes after sub_000C0C20 (ROW_HANDLER_VA, recomp_lookup_manual).
  * Texts are our own strings in guest memory -- the language files are
@@ -913,6 +913,7 @@ extern void sub_00016050_gen(void);
 static const int s_scale_pct[] = { 100, 150, 200, 250 };
 static const int s_aniso_lvl[] = { 1, 2, 4, 8, 16 };
 
+static int s_blur = 1;                  /* native blur enabled by default */
 static int s_fps60;                     /* experimental; default 30 FPS */
 static int s_refl = 1;                  /* 0 off, 1 on */
 static int s_scale_idx = 1;             /* into s_scale_pct: 1.5x */
@@ -972,11 +973,13 @@ static const OptRow s_rows[] = {
     { "Square Pixels:", s_onoff, 2, &s_square, picture_changed },
 #endif
     { "Frame Rate:", s_fps_texts, 2, &s_fps60, frame_rate_changed },
+    { "Blur/Bloom:", s_onoff, 2, &s_blur, frame_rate_changed },
 };
 #define N_ROWS ((int)(sizeof s_rows / sizeof s_rows[0]))
 
 static void options_log(void)
 {
+    fprintf(stderr, "[options] blur %s\n", s_blur ? "on" : "off");
     fprintf(stderr, "[options] race frame rate %d FPS (experimental 60 FPS)\n",
             s_fps60 ? 60 : 30);
 #ifdef NFSU2_VULKAN
@@ -1000,6 +1003,8 @@ void nfsu1_options_load(void)
         while (fgets(line, sizeof line, f)) {
             if (!strncmp(line, "reflections=", 12))
                 s_refl = line[12] != '0';
+            else if (!strncmp(line, "blur=", 5))
+                s_blur = line[5] != '0';
             else if (!strncmp(line, "fps=", 4))
                 s_fps60 = atoi(line + 4) == 60;
             else if (!strncmp(line, "fxaa=", 5))
@@ -1051,7 +1056,7 @@ static void options_save(void)
         fprintf(stderr, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
         return;
     }
-    fprintf(f, "reflections=%d\nfps=%d\n", s_refl, s_fps60 ? 60 : 30);
+    fprintf(f, "reflections=%d\nfps=%d\nblur=%d\n", s_refl, s_fps60 ? 60 : 30, s_blur);
     if (s_scale_saved)
         fprintf(f, "scale=%d\n", s_scale_pct[s_scale_idx]);
 #ifdef NFSU2_VULKAN
@@ -1103,10 +1108,10 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
 }
 
 static const char *const s_name_obj[] = {
-    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8",
+    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8", "OptionName_9",
 };
 static const char *const s_data_obj[] = {
-    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8",
+    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8", "OptionData_9",
 };
 
 static void opt_row_text(uint32_t screen, int i)
@@ -1176,15 +1181,29 @@ static void opt_row_input_2(void) { opt_row_input(2); }
 static void opt_row_input_3(void) { opt_row_input(3); }
 static void opt_row_input_4(void) { opt_row_input(4); }
 static void opt_row_input_5(void) { opt_row_input(5); }
+static void opt_row_input_6(void) { opt_row_input(6); }
 #else
 static void opt_row_input_1(void) { opt_row_input(1); }
+static void opt_row_input_2(void) { opt_row_input(2); }
 #endif
 
 /* Race render (cdecl, no arguments): cube-face views off for the call. */
 void sub_00016050(void)
 {
     uint8_t keep[6];
+    uint32_t native_blur = MEM32(0x00260CC0u);
+    uint32_t blur_limit = MEM32(0x0021C0B4u);
     int n;
+
+    /* 11100/11140/11150 set the native blur request. 286E0 smooths it
+     * through 264FA4. 286E0 adds speed blur and clamps its intensity to
+     * 21C0B4 before drawing. Zero the cap as well to disable both sources while
+     * disabled, preserving the scripted request for re-enabling. */
+    if (!s_blur) {
+        MEM32(0x00260CC0u) = 0;
+        MEM32(0x00264FA4u) = 0;
+        MEM32(0x0021C0B4u) = 0;
+    }
 
     /* NFSU1 XDK presentation interval (0x1DE94C): initialization in
      * sub_000156F0 requests 0x80000002, and D3D uses the low bits as
@@ -1201,6 +1220,10 @@ void sub_00016050(void)
 
     if (s_refl) {
         sub_00016050_gen();
+        if (!s_blur) {
+            MEM32(0x00260CC0u) = native_blur;
+            MEM32(0x0021C0B4u) = blur_limit;
+        }
         return;
     }
     for (n = 0; n < 6; n++) {
@@ -1210,6 +1233,10 @@ void sub_00016050(void)
     sub_00016050_gen();
     for (n = 0; n < 6; n++)
         MEM8(ENVMAP_VIEW(10 + n) + 8u) = keep[n];
+    if (!s_blur) {
+        MEM32(0x00260CC0u) = native_blur;
+        MEM32(0x0021C0B4u) = blur_limit;
+    }
 }
 
 /* ── Menu Size: full screen by default ───────────────────────
@@ -1361,9 +1388,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
             opt_row_input_0,
 #ifdef NFSU2_VULKAN
             opt_row_input_1, opt_row_input_2, opt_row_input_3, opt_row_input_4,
-            opt_row_input_5,
+            opt_row_input_5, opt_row_input_6,
 #else
-            opt_row_input_1,
+            opt_row_input_1, opt_row_input_2,
 #endif
         };
         return row_input[xbox_va - ROW_HANDLER_VA];
