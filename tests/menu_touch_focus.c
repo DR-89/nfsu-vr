@@ -918,6 +918,30 @@ int main(void)
     MEM32(screen + 0x40) = 10; /* scrolled while held: do not open a new item */
     menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 2);
+    /* Magazine swipes own the gesture: scroll once on release, never open
+     * the cover or change its cursor; the grid gap is swipe-only as well. */
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 300, 100, 400, 180);
+    add_quad(no, 420, 100, 520, 180);
+    MEM32(screen + 0x3C) = 6;
+    before_actions = controller_selects;
+    expected = yes; expected_message = 0x911C0A4B;
+    menu_touch_event(MENU_TOUCH_DOWN, 350.0f/640, 160.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, 350.0f/640, 110.0f/480, 1280, 720); update();
+    assert(controller_selects == before_actions);
+    menu_touch_event(MENU_TOUCH_UP, 350.0f/640, 110.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 1 && MEM32(screen + 0x3C) == 6);
+    tap_at(410.0f/640, 130.0f/480, no); /* empty space between columns */
+    assert(controller_selects == before_actions + 1);
+    expected = no; expected_message = 0x72619778;
+    menu_touch_event(MENU_TOUCH_DOWN, 410.0f/640, 110.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, 410.0f/640, 165.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2 && MEM32(screen + 0x3C) == 6);
+    /* A horizontal drag cannot open a cover either. */
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, 350.0f/640, 130.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, 390.0f/640, 130.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2);
     /* Pause stays in GameFlow 6. C0040 consumes numeric row identities
      * through MouseClick; using Select silently does nothing. */
     MEM32(0x283434) = 6;
@@ -997,5 +1021,46 @@ int main(void)
     MEM32(package + 0x1C) = 0; /* unpaused: no active FEng menu */
     update();
     assert(!feng_touch_race_menu_active());
+    /* Dialog answers and profile rows accept taps beside their text. */
+    stale_mouse_edge = 0;
+    MEM32(screen + 0x48) = 0;
+    MEM32(0x1FC384 + 4) = 0;
+    MEM32(package + 0x84) = 0x22000;
+    MEM32(registry - 4 + 0x14) = screen;
+    MEM32(registry - 4 + 0x18) = package;
+    MEM32(screen + 0x24) = MEM32(screen + 0x28) = 0;
+    MEM32(screen + 0x2C) = MEM32(screen + 0x30) = 0;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(0x283434) = 3;
+    MEM32(package + 0x1C) = 1;
+    MEM32(package + 0x88) = 2;
+    MEM32(0x22000) = yes; MEM32(0x22004) = no;
+    MEM32(0x2BCB9C) = registry;
+    MEM32(registry) = 0x2BCB9C;
+    MEM32(screen) = 0x1FC384;
+    MEM32(screen + 0x3C) = 0;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    MEM32(yes + 0x3C) = MEM32(no + 0x3C) = MEM32(package + 0x50) = 0;
+    MEM32(yes + 0x10) = 0xB8A7C6CC;
+    MEM32(no + 0x10) = 0xB8A7C6CD;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 100, 200, 200, 220);
+    add_quad(no, 400, 200, 500, 220);
+    expected_message = 0x406415E3;
+    before_actions = controller_selects;
+    tap_at(90.0f / 640, 210.0f / 480, yes);
+    tap_at(510.0f / 640, 210.0f / 480, no);
+    assert(controller_selects == before_actions + 2);
+    /* Same expansion is used when a profile list starts with no focus. */
+    MEM32(screen + 0x3C) = 0xBD7E0;
+    MEM32(screen + 0x88) = row; MEM32(screen + 0x9C) = data;
+    MEM32(row) = screen + 0x88; MEM32(row + 8) = cell;
+    MEM32(cell) = row + 8; MEM32(cell + 8) = yes;
+    MEM32(data) = screen + 0x90;
+    MEM32(package + 0x80) = 0;
+    tap_at(90.0f / 640, 210.0f / 480, yes);
+    assert(controller_selects == before_actions + 3);
+    assert(MEM32(screen + 0x98) == data && MEM32(screen + 0xA0) == row);
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }
