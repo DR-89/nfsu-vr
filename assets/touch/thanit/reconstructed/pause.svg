@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><defs>
+ <radialGradient id="shell-fill"><stop stop-color="#448b8e" stop-opacity=".70"/><stop offset=".72" stop-color="#23575b" stop-opacity=".76"/><stop offset="1" stop-color="#123c42" stop-opacity=".82"/></radialGradient>
+ <linearGradient id="shell-light" x2=".8" y2="1"><stop stop-color="#e0eeee"/><stop offset="1" stop-color="#72aeac"/></linearGradient>
+ <filter id="shell-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14"/></filter>
+ </defs><circle cx="256" cy="256" r="194" fill="none" stroke="#27ffe3" stroke-width="17" opacity=".48" filter="url(#shell-glow)"/>
+ <circle cx="256" cy="256" r="194" fill="url(#shell-fill)" stroke="#30ffe6" stroke-width="7"/>
+ <circle cx="256" cy="256" r="178" fill="none" stroke="#b6fff1" stroke-opacity=".16" stroke-width="18"/>
+ <rect x="190" y="174" width="53" height="164" rx="24" fill="url(#shell-light)"/><rect x="269" y="174" width="53" height="164" rx="24" fill="url(#shell-light)"/></svg>

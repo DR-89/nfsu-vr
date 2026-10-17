@@ -73,6 +73,21 @@ public final class GameActivity extends SDLActivity {
         addEditorButton(actions, "Отмена", new View.OnClickListener() {
             @Override public void onClick(View view) { closeTouchEditor(false); }
         });
+        android.content.SharedPreferences editorPreferences =
+                getSharedPreferences("touch-editor", MODE_PRIVATE);
+        android.widget.CheckBox snap = new android.widget.CheckBox(this);
+        snap.setText("Привязка к сетке");
+        snap.setTextColor(android.graphics.Color.WHITE);
+        snap.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF55BCD8));
+        snap.setChecked(editorPreferences.getBoolean("snap_to_grid", false));
+        raceControls.setSnapToGrid(snap.isChecked());
+        snap.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton button, boolean checked) {
+                raceControls.setSnapToGrid(checked);
+                editorPreferences.edit().putBoolean("snap_to_grid", checked).apply();
+            }
+        });
+        toolbar.addView(snap);
         android.widget.TextView sizeLabel = new android.widget.TextView(this);
         sizeLabel.setTextColor(android.graphics.Color.WHITE);
         toolbar.addView(sizeLabel);

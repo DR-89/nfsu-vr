@@ -1,0 +1,26 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><defs>
+ <radialGradient id="shell-fill"><stop stop-color="#448b8e" stop-opacity=".70"/><stop offset=".72" stop-color="#23575b" stop-opacity=".76"/><stop offset="1" stop-color="#123c42" stop-opacity=".82"/></radialGradient>
+ <linearGradient id="shell-light" x2=".8" y2="1"><stop stop-color="#e0eeee"/><stop offset="1" stop-color="#72aeac"/></linearGradient>
+ <filter id="shell-glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14"/></filter>
+ </defs><circle cx="256" cy="256" r="194" fill="none" stroke="#27ffe3" stroke-width="17" opacity=".48" filter="url(#shell-glow)"/>
+ <circle cx="256" cy="256" r="194" fill="url(#shell-fill)" stroke="#30ffe6" stroke-width="7"/>
+ <circle cx="256" cy="256" r="178" fill="none" stroke="#b6fff1" stroke-opacity=".16" stroke-width="18"/>
+ <g stroke-linecap="round" stroke-linejoin="round">
+  <!-- Low console mounting and pivot cover. -->
+  <path d="M 146 337 Q 151 319 172 314 L 254 314 Q 279 317 293 336 L 306 356 L 140 356 Z" fill="#70aaa7"/>
+  <path d="M 158 338 H 283" stroke="#c4e4dd" stroke-width="6" opacity=".7"/>
+  <!-- Raised mechanical arm, widening towards its pivot. -->
+  <path d="M 181 326 Q 186 303 210 287 L 273 242 L 287 259 L 231 310 Q 221 320 219 331 Z" fill="url(#shell-light)"/>
+  <path d="M 204 302 L 269 254" stroke="#e4f6f0" stroke-width="5" opacity=".65"/>
+  <!-- Long moulded handle, with the release button on the free end. -->
+  <g transform="rotate(-32 279 247)">
+    <path d="M 240 230 Q 246 224 258 224 H 357 Q 372 224 375 236 V 251 Q 372 263 357 263 H 258 Q 247 263 240 257 Z" fill="url(#shell-light)"/>
+    <path d="M 256 230 H 356" stroke="#eef9f4" stroke-width="5" opacity=".8"/>
+    <path d="M 267 248 H 345" stroke="#519693" stroke-width="6" opacity=".65"/>
+    <rect x="373" y="234" width="17" height="18" rx="5" fill="#e5f6ef"/>
+    <path d="M 366 233 V 253" stroke="#599e98" stroke-width="4"/>
+  </g>
+  <path d="M 169 323 Q 179 306 195 308 Q 215 309 224 333 L 227 342 H 163 Z" fill="#88bfb7"/>
+  <path d="M 178 322 Q 188 314 198 321" stroke="#d6eee6" stroke-width="5" fill="none"/>
+</g></svg>

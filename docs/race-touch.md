@@ -1,10 +1,10 @@
 # Android racing touch controls
 
-`RaceControlsView` draws nine vector HUD panels over the SDL surface. MENU is
+`RaceControlsView` draws ten textured HUD buttons over the SDL surface. Pause is
 at the upper left; steering and shifting are at the lower left, pedals,
 handbrake and nitro at the lower right. The layout scales with the surface,
 uses separate pointer IDs, highlights held buttons and permits sliding between
-controls. It does not use the generated concept sheet as a texture.
+controls. Each button uses its own transparent PNG resource.
 
 `android_input.c` supplies the Android implementation of the Xbox input API.
 It creates a persistent SDL virtual game controller named `NFS Underground Touch`.
@@ -238,21 +238,27 @@ short taps, moving, resizing and named presets. Older nine-button XML layouts
 load unchanged and receive the camera button at its default position and size.
 
 
-### Overlay icons without backgrounds
+### Thanit-style touch artwork
 
-Racing controls draw only translucent white glyphs and captions, with no panel,
-outline rectangle or footer decoration. Pressed controls and the selected editor
-control gain a cyan glow around the glyph silhouette. The shared Paint resets
-its shadow between controls and after drawing. Original touch rectangles,
-positions, sizes and presets are unchanged; invisible hit areas remain generous.
+`TouchControlArtwork` loads ten transparent PNGs once per view from
+`drawable-nodpi/touch_*.png`. Pause, gas, brake, handbrake, nitro, steering and
+camera use full circular buttons with translucent backgrounds, cyan rims and
+glow. Shift up/down use the extracted turquoise + / − paddles from the left
+player in ThanitMay_27. The other artwork and editable SVG sources live under
+`assets/touch/thanit/reconstructed`.
 
+Bitmaps fit within each existing button rectangle with their aspect ratio
+preserved. Pressed buttons and the selected editor button become brighter.
+Drawing allocates no bitmaps, paints or rectangles per frame. Bindings,
+availability, normalized centers, size settings and preset IDs are unchanged.
+The gas button now uses its complete existing rectangular touch target instead
+of the old narrow pedal-only strip, so the full circular button responds.
 
-Shift up/down now use tall mirrored paddle outlines with + / − glyphs in
-place of SHIFT captions. Both share one vector drawing helper and the existing
-pressed glow. Their default hit areas are taller (86 × 88 logical pixels), matching the
-elongated silhouettes. The default position keeps them above the steering
-arrows. Bindings, editor scaling and preset IDs stay the same; saved centers
-retain their placement.
+The former MENU caption is now a pause icon; it still sends Start. The circular
+artwork is reconstructed from the supplied reference, and the handbrake was drawn
+in the same style. The source scene is not used as a background texture.
+
+APK build and visual/device acceptance of the new artwork have not been run.
 
 
 ### Editing from the pause menu
@@ -305,3 +311,20 @@ controller fallback), NOS presence, player ownership, native call ABI and remova
 of held/pending inputs. The existing SDL/USB test explicitly enables manual+NOS
 capabilities for its input checks. Native host tests and Java compilation do not
 replace device checks across actual race entries and installed NOS upgrades.
+
+### Editor grid
+
+The editor's **Привязка к сетке** checkbox defaults off and remembers its state
+in the `touch-editor` preferences. Enabling it snaps the preview's button centers
+to one shared grid with a 20-logical-pixel step and displays faint grid lines.
+Moving/resizing/loading a layout while enabled keeps centers on that grid;
+turning it off resumes free positioning. Grid centers are constrained so the full
+control remains within the screen, including buttons of different sizes. A
+control filling the viewport falls back to the only valid center when no grid
+node fits. Grid math lives in the pure Java `TouchGrid` helper.
+
+Saved positions remain normalized coordinates in layout/preset XML; the grid
+preference is an editor preference, not a gameplay control binding. Cancel
+restores the original layout, including moves caused by enabling the grid.
+`tests/TouchGridTest.java` covers shared alignment, viewport scale, screen edges
+and the no-fitting-node fallback. Device visual/drag acceptance remains pending.
