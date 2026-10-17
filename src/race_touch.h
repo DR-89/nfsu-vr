@@ -18,6 +18,9 @@ void race_touch_enable_hold(int enabled);
 void race_touch_set_hold(int down);
 int race_touch_hold_enabled(void);
 int race_touch_hold_active(void);
+/* Guest publishes capabilities; Android only reads the resulting button mask. */
+void race_touch_configure_features(int shifting, int nitro);
+uint32_t race_touch_button_mask(void);
 void race_touch_set(uint32_t mask);
 void race_touch_cancel(void);
 void race_touch_enable(int enabled);

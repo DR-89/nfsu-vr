@@ -106,3 +106,10 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeSetHold(
     (void)env; (void)cls;
     race_touch_set_hold(down);
 }
+
+JNIEXPORT jint JNICALL Java_org_nfsu_android_RaceControlsView_nativeButtonMask(
+        JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return (jint)race_touch_button_mask();
+}

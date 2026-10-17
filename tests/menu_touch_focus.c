@@ -1025,6 +1025,20 @@ int main(void)
     before_actions = controller_selects;
     tap_at(350.0f / 640, 160.0f / 480, yes);
     assert(controller_selects == before_actions + 1);
+    /* Actual pause layout: row container has no rendered quad; only its
+     * OptionText child is drawn. Dispatch must still target OptionName_2. */
+    MEM32(package + 0x84) = 0x22000;
+    MEM32(package + 0x88) = 2;
+    MEM32(0x22000) = yes; MEM32(0x22004) = no;
+    MEM32(yes + 0x10) = 0x1AEC7D0A; /* OptionName_2 */
+    MEM32(no + 0x10) = 0x293A1ACEu /* OptionText_2 */;
+    draw_mask = 0; draw_bounds();
+    add_quad(no, 80, 200, 350, 220);
+    expected_message = 0xB5971BF1;
+    before_actions = controller_selects;
+    tap_at(220.0f / 640, 210.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(package + 0x88) = 0;
     MEM32(screen) = 0x1F9404; /* countdown screen must not hide race controls */
     update();
     assert(!feng_touch_race_menu_active());

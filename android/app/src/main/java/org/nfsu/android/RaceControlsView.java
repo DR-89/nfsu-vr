@@ -87,6 +87,11 @@ final class RaceControlsView extends View {
         }
     };
 
+    private int buttonMask;
+    private static native int nativeButtonMask();
+    private boolean buttonAvailable(int index) {
+        return editing || (buttonMask & (1 << index)) != 0;
+    }
     private boolean racing;
     private boolean resumed;
     private int held;
@@ -103,6 +108,12 @@ final class RaceControlsView extends View {
             boolean canHold = nativeHoldEnabled();
             if (holdEnabled && !canHold) cancelInput();
             holdEnabled = canHold;
+            int available = nativeButtonMask();
+            if (buttonMask != available) {
+                cancelInput();
+                buttonMask = available;
+                invalidate();
+            }
             boolean visible = nativeVisible();
             if (visible != racing) {
                 cancelInput();
@@ -172,8 +183,8 @@ final class RaceControlsView extends View {
         panel(9, w - edge - 64*s, edge, 64*s, 50*s);
         panel(7, edge, bottom - 78*s, 86*s, 78*s);
         panel(8, edge + 98*s, bottom - 78*s, 86*s, 78*s);
-        panel(5, edge, bottom - 140*s, 86*s, 50*s);
-        panel(4, edge + 98*s, bottom - 140*s, 86*s, 50*s);
+        panel(5, edge, bottom - 174*s, 86*s, 88*s);
+        panel(4, edge + 98*s, bottom - 174*s, 86*s, 88*s);
         panel(1, w - edge - 90*s, bottom - 132*s, 90*s, 132*s);
         panel(2, w - edge - 184*s, bottom - 90*s, 82*s, 90*s);
         panel(3, w - edge - 184*s, bottom - 154*s, 82*s, 52*s);
@@ -202,6 +213,7 @@ final class RaceControlsView extends View {
         if (editing) canvas.drawColor(0xBB000000);
         float originalScale = scale;
         for (int i = 0; i < bounds.length; i++) {
+            if (!buttonAvailable(i)) continue;
             scale = originalScale * layout.getSize(i);
             float s = scale;
             RectF r = bounds[i];
@@ -262,35 +274,35 @@ final class RaceControlsView extends View {
         if (down) paint.setShadowLayer(5 * scale, 0, 0, 0xEE50D9F2);
     }
 
-    /** Compact mirrored paddles share one silhouette; the sign names the action. */
+    /** Tall mirrored paddles with a narrow stem and the sign near the upper tip. */
     private void drawShiftPaddle(Canvas canvas, RectF bounds, boolean shiftUp) {
         canvas.save();
         canvas.translate(bounds.centerX(), bounds.centerY());
         canvas.scale(scale, scale);
-        canvas.translate(shiftUp ? -5 : 5, 0);
+        canvas.translate(shiftUp ? -3 : 3, 0);
         canvas.scale(shiftUp ? -1 : 1, 1);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(2.5f);
         paint.setStrokeJoin(Paint.Join.ROUND);
         paint.setStrokeCap(Paint.Cap.ROUND);
         symbol.reset();
-        symbol.moveTo(0, -20);
-        symbol.cubicTo(-9, -20, -21, -7, -21, 3);
-        symbol.quadTo(-21, 9, -15, 13);
-        symbol.lineTo(-8, 18);
-        symbol.quadTo(-6, 20, -3, 20);
-        symbol.lineTo(2, 20);
-        symbol.quadTo(5, 20, 5, 17);
-        symbol.lineTo(5, 12);
-        symbol.quadTo(5, 9, 1, 6);
-        symbol.quadTo(-5, 2, -1, -5);
-        symbol.lineTo(5, -14);
-        symbol.quadTo(8, -20, 0, -20);
+        symbol.moveTo(4, -40);
+        symbol.cubicTo(-4, -40, -15, -22, -17, -3);
+        symbol.cubicTo(-19, 12, -16, 19, -10, 25);
+        symbol.quadTo(-6, 29, -6, 35);
+        symbol.lineTo(-6, 38);
+        symbol.quadTo(-6, 41, -2, 41);
+        symbol.lineTo(3, 41);
+        symbol.quadTo(7, 41, 7, 37);
+        symbol.lineTo(7, 33);
+        symbol.cubicTo(7, 23, -3, 19, -3, 8);
+        symbol.cubicTo(-3, -7, 8, -16, 9, -29);
+        symbol.lineTo(10, -34);
+        symbol.quadTo(11, -40, 4, -40);
         symbol.close();
         canvas.drawPath(symbol, paint);
-        // Symbols remain clear at the original 86 x 50 logical touch size.
-        canvas.drawLine(-11, -6, -1, -6, paint);
-        if (shiftUp) canvas.drawLine(-6, -11, -6, -1, paint);
+        canvas.drawLine(-5, -24, 3, -24, paint);
+        if (shiftUp) canvas.drawLine(-1, -28, -1, -20, paint);
         paint.setStyle(Paint.Style.FILL);
         paint.setStrokeJoin(Paint.Join.MITER);
         paint.setStrokeCap(Paint.Cap.BUTT);
@@ -396,6 +408,7 @@ final class RaceControlsView extends View {
 
     private int hit(float x, float y) {
         for (int i = 0; i < bounds.length; i++) {
+            if (!buttonAvailable(i)) continue;
             RectF r = bounds[i];
             if (!r.contains(x, y)) continue;
             if (i == 1) {

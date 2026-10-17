@@ -4,6 +4,21 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t held, pending;
+#define CONDITIONAL_BUTTONS (RACE_SHIFT_UP | RACE_SHIFT_DOWN | RACE_NITRO)
+static atomic_uint button_mask = 1023u & ~CONDITIONAL_BUTTONS;
+
+void race_touch_configure_features(int shifting, int nitro)
+{
+    uint32_t mask = 1023u & ~CONDITIONAL_BUTTONS;
+    if (shifting) mask |= RACE_SHIFT_UP | RACE_SHIFT_DOWN;
+    if (nitro) mask |= RACE_NITRO;
+    pthread_mutex_lock(&lock);
+    atomic_store(&button_mask, mask);
+    held &= mask;
+    pending &= mask;
+    pthread_mutex_unlock(&lock);
+}
+uint32_t race_touch_button_mask(void) { return atomic_load(&button_mask); }
 static int visible;
 static atomic_int editor_requested;
 static atomic_int editing;
@@ -34,7 +49,7 @@ void race_touch_set_editing(int enabled)
 void race_touch_set(uint32_t mask)
 {
     pthread_mutex_lock(&lock);
-    mask &= 1023u;
+    mask &= race_touch_button_mask();
     if (visible && !race_touch_editing()) {
         pending |= mask & ~held;
         held = mask;

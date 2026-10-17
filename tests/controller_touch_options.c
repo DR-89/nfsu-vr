@@ -12,6 +12,7 @@ static const uint32_t screen = 0x20000, package = 0x21000;
 static uint32_t hashes[8], objects[8];
 static unsigned colors[8];
 static unsigned pause_rows;
+static int pause_caption_written;
 void sub_000B5B00_gen(void)
 {
     assert(g_ecx == screen);
@@ -35,6 +36,11 @@ void sub_000DD490(void)
 {
     assert(MEM32(g_esp + 4) == package);
     const char *text = (const char *)XBOX_PTR(MEM32(g_esp + 12));
+    const char *name = (const char *)XBOX_PTR(MEM32(g_esp + 8));
+    if (!strcmp(text, "TOUCH CONTROL LAYOUT")) {
+        assert(!strcmp(name, "OptionName_2"));
+        pause_caption_written++;
+    }
     assert(!strstr(text, "locked") && !strstr(text, "Unavailable"));
     g_esp += 4;
 }
@@ -96,6 +102,14 @@ int main(void)
         for (unsigned c = 0; c < 4; c++)
             MEM32(0x40000 + i * 16 + c * 4) = (colors[i] >> (c * 8)) & 255;
     }
+    char temporary_name[32] = "OptionName_7";
+    uint32_t original_name = guest_str(temporary_name);
+    strcpy(temporary_name, "OptionText_2");
+    uint32_t changed_name = guest_str(temporary_name);
+    assert(original_name != changed_name);
+    assert(!strcmp((const char *)XBOX_PTR(original_name), "OptionName_7"));
+    assert(!strcmp((const char *)XBOX_PTR(changed_name), "OptionText_2"));
+    assert(guest_str("OptionText_2") == changed_name);
     input_mode_configure(INPUT_SENSOR_AUTO, 0);
     check_rows(0, 0); /* no pad: both rows unavailable */
     g_ecx = screen; g_esp = 0x10000; MEM32(g_esp + 4) = FE_PAD_RIGHT;
@@ -116,7 +130,7 @@ int main(void)
     assert(!race_touch_take_editor_request());
     g_ecx = screen; g_esp = 0x10000;
     sub_000B5B00();
-    assert(pause_rows == 1 && g_esp == 0x10004);
+    assert(pause_rows == 1 && g_esp == 0x10004 && pause_caption_written == 1);
     assert(MEM32(screen + 0x44) == 0xB3CE0);
     assert(MEM32(screen + 0x48) == SENSOR_HANDLER_VA + 2);
     input_mode_set_controller_present(1);

@@ -61,6 +61,7 @@ static void report(uint8_t state[20])
 
 int main(int argc, char **argv)
 {
+    race_touch_configure_features(1, 1); /* Existing input tests use manual + equipped NOS. */
     assert(!input_mode_get().overlay_enabled);
     input_mode_configure(-1, 1); /* enable overlay for existing racing-input checks */
     (void)argv;

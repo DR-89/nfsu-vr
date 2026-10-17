@@ -1099,13 +1099,15 @@ static void options_save(void)
 /* Our texts in guest memory, each copied once. */
 static uint32_t guest_str(const char *s)
 {
-    static struct { const char *s; uint32_t va; } cache[64];
+    static struct { uint32_t va; } cache[64];
     static uint32_t pool, used;
     size_t n = strlen(s) + 1;
     int i;
 
-    for (i = 0; i < 64 && cache[i].s; i++)
-        if (cache[i].s == s)
+    /* Callers may format several names into the same stack buffer. Intern
+     * by the owned guest copy, never by a borrowed host pointer/address. */
+    for (i = 0; i < 64 && cache[i].va; i++)
+        if (!strcmp((const char *)XBOX_PTR(cache[i].va), s))
             return cache[i].va;
     if (i == 64)
         return 0;
@@ -1117,7 +1119,6 @@ static uint32_t guest_str(const char *s)
     if (used + n > 0x800u)
         return 0;
     memcpy((void *)XBOX_PTR(pool + used), s, n);
-    cache[i].s = s;
     cache[i].va = pool + used;
     used += (uint32_t)n;
     return cache[i].va;
@@ -1180,6 +1181,24 @@ void sub_000C2A70(void)
 #ifdef __ANDROID__
 extern void sub_000C2B80_gen(void);
 #include "race_touch.h"
+/* Native HUD availability update: (player, primary flags, secondary flags).
+ * Secondary 0x40000 enables the NitrousGauge. Sample only player one on the
+ * guest thread, then publish a scalar snapshot; Java never follows guest pointers.
+ * Drag/drift checks mirror HUD selection at 3B11F/3B155. Transmission 295B74
+ * is written by CBE90: automatic=0, manual=1. No guest HUD state is modified. */
+extern void sub_000A0140_gen(void);
+void sub_000A0140(void)
+{
+    if (MEM32(esp + 4) == MEM32(0x00265B84u) && MEM32(esp + 4)) {
+        int drag = MEM8(0x00273784u) || MEM32(0x00265BC8u);
+        int drift = MEM8(0x00273785u) || MEM32(0x00265BC4u);
+        int manual = MEM32(0x00295B74u) == 1;
+        int nitro = (MEM32(esp + 12) & 0x00040000u) != 0;
+        race_touch_configure_features(drag || manual, !drift && nitro);
+    }
+    sub_000A0140_gen();
+}
+
 /* Retail scanners return native JOY_EVENT transitions and handle release/state
  * themselves. Supply a pressed sample only to the registered lookback/skip
  * scanner; restore the raw controller data before any other action reads it.
@@ -1302,6 +1321,8 @@ void sub_000B5B00(void)
     if (!input_mode_sensor_enabled()) return;
     PUSH32(esp, 0); PUSH32(esp, 2);
     ecx = screen; PUSH32(esp, 0); sub_000B5390(); /* native row, no arrows */
+    /* The retail pause layout draws its row title on OptionName_N too.
+     * OptionText_N is not the caption displaying the placeholder name. */
     bind_touch_layout_row(screen, 2, 0x48);
 }
 
@@ -1602,6 +1623,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
     if (xbox_va == 0x00131050u) return sub_00131050;
     if (xbox_va == 0x00130A70u) return sub_00130A70;
+    if (xbox_va == 0x000A0140u) return sub_000A0140;
     if (xbox_va == 0x000B5B00u) return sub_000B5B00;
     if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
     if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;

@@ -247,10 +247,12 @@ its shadow between controls and after drawing. Original touch rectangles,
 positions, sizes and presets are unchanged; invisible hit areas remain generous.
 
 
-Shift up/down now use compact mirrored paddle outlines with + / − glyphs in
+Shift up/down now use tall mirrored paddle outlines with + / − glyphs in
 place of SHIFT captions. Both share one vector drawing helper and the existing
-pressed glow. Their bindings, hit areas, editor scaling and preset IDs stay the
-same, so existing layouts retain their placement.
+pressed glow. Their default hit areas are taller (86 × 88 logical pixels), matching the
+elongated silhouettes. The default position keeps them above the steering
+arrows. Bindings, editor scaling and preset IDs stay the same; saved centers
+retain their placement.
 
 
 ### Editing from the pause menu
@@ -264,3 +266,42 @@ Controller mode without SENSOR MODE retains its original Vibration-only menu.
 Host checks cover the row helper ABI, preserved Vibration callback, shared editor
 callback and absence of the extra row with SENSOR MODE disabled. Actual pause
 menu opening/return still requires device verification.
+
+
+Pause entry visibility regression: the visible title in the retail pause layout
+is `OptionName_2`, matching the placeholder observed on the device. Write
+**TOUCH CONTROL LAYOUT** there, just as front-end Controller writes its
+`OptionName_7`. Prefer rendered `OptionName_N` bounds for touch; retain the
+`OptionText_N` child fallback for packages without a drawn row-title quad.
+Guest string interning compares owned guest text rather than borrowed host
+addresses: reusing a temporary format buffer must not alias the title and data
+object names and clear the title. Host regressions verify the actual caption
+object name, temporary-buffer reuse and both rendered-title/child-only hit paths.
+
+### Context-sensitive shift paddles and nitro
+
+The overlay reads a single native button mask for both drawing and hit testing.
+Shift paddles are available in drag, regardless of the selected gearbox, and in
+other modes when player one selected manual transmission. NOS is available only
+when the retail HUD capability mask allows it, and is always hidden in drift.
+The editor deliberately displays all controls, preserving saved positions/sizes.
+
+The guest adapter wraps `A0140`, the native HUD availability update
+`(player, primary flags, secondary flags)`, and samples only player one from
+`265B84`. The original function receives its arguments unchanged. Secondary flag
+`40000` enables the native NitrousGauge (`A2510`/`9ECD0`). Drag/drift detection
+mirrors HUD package selection in `3B11F`/`3B155`: flags `273784`/`273785` and the
+respective active controller pointers `265BC8`/`265BC4`. Selected transmission
+`295B74` is written by `CBE90` (0 auto, 1 manual). This snapshot is published by
+`race_touch_configure_features`; Java does not follow live guest pointers.
+
+`race_touch` filters held and pending input immediately when availability changes,
+so hidden paddles/NOS cannot generate controller presses or leave a stuck button.
+Until the first native snapshot, conditional controls stay hidden. No game HUD,
+physics, transmission setting or preset XML is modified by the adapter.
+
+`tests/race_control_features.c` covers auto/manual, drag/drift (including native
+controller fallback), NOS presence, player ownership, native call ABI and removal
+of held/pending inputs. The existing SDL/USB test explicitly enables manual+NOS
+capabilities for its input checks. Native host tests and Java compilation do not
+replace device checks across actual race entries and installed NOS upgrades.

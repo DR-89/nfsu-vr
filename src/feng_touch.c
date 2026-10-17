@@ -413,10 +413,20 @@ static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t coun
         float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
         for (unsigned row = 1; row <= 8; row++) {
             char name[32]; snprintf(name, sizeof(name), "OptionName_%u", row);
-            uint32_t label = touch_rendered_object(touch_name_hash(name));
+            uint32_t hash = touch_name_hash(name);
+            uint32_t label = touch_rendered_object(hash);
+            // Prefer the rendered row title. Some package variants instead
+            // expose only a child quad; keep that fallback for their hit area.
+            for (unsigned i = 0; !label && objects && count <= 4096 && i < count; i++) {
+                uint32_t object = MEM32(objects + i * 4);
+                if (object && MEM32(object + 0x10) == hash) label = object;
+            }
+            snprintf(name, sizeof(name), "OptionText_%u", row);
+            uint32_t caption = touch_rendered_object(touch_name_hash(name));
             TouchBounds area;
-            if (!label || (MEM32(label + 0x1C) & 0x04000000u) ||
-                !touch_object_bounds(label, &area, 0)) continue;
+            if (!label || (MEM32(label + 0x1C) & 0x04000000u)) continue;
+            if (!touch_object_bounds(label, &area, 0) &&
+                (!caption || !touch_object_bounds(caption, &area, 0))) continue;
             float centre = (area.top + area.bottom) * .5f;
             for (unsigned i = 0; i < s_touch_bounds_count; i++) {
                 TouchBounds *b = &s_touch_bounds[i];

@@ -4,6 +4,7 @@
 
 int main(void)
 {
+    race_touch_configure_features(1, 1); /* Existing input tests use manual + equipped NOS. */
     assert(!race_touch_visible());
     race_touch_set(RACE_GAS);
     assert(race_touch_consume(0) == 0);
