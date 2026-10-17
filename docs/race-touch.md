@@ -289,7 +289,8 @@ object name, temporary-buffer reuse and both rendered-title/child-only hit paths
 The overlay reads a single native button mask for both drawing and hit testing.
 Shift paddles are available in drag, regardless of the selected gearbox, and in
 other modes when player one selected manual transmission. NOS is available only
-when the retail HUD capability mask allows it, and is always hidden in drift.
+when the retail HUD capability mask allows it and the car has a valid total NOS
+capacity, and is always hidden in drift.
 The editor deliberately displays all controls, preserving saved positions/sizes.
 
 The guest adapter wraps `A0140`, the native HUD availability update
@@ -301,6 +302,22 @@ respective active controller pointers `265BC8`/`265BC4`. Selected transmission
 `295B74` is written by `CBE90` (0 auto, 1 manual). This snapshot is published by
 `race_touch_configure_features`; Java does not follow live guest pointers.
 
+Transmission changes refresh the shift buttons immediately after the native
+pause selector (`C0F50`) or front-end selector (`CBE90`) returns. Both use the
+same drag/manual predicate as the HUD snapshot and preserve NOS availability.
+This does not wait for another HUD availability update. Switching back to auto
+also clears held/pending shift input; drag always retains its shift buttons.
+
+The HUD flag alone can be set for a stock drag car. The adapter additionally
+mirrors `9E414..9E449`: player `+4` points to the vehicle and vehicle `+3F0`
+holds total NOS duration. Zero, negative values and `INT_MAX` do not enable NOS.
+This uses total capacity rather than remaining charge, preserving the control
+for an equipped system after its charge is spent.
+The vehicle pointer is read only when the NOS HUD flag is set and drift is off.
+HUD construction (`A33BC`/`A33CF`) passes zero secondary flags while the vehicle
+slot can still contain allocator poison (`AAAAAAAA`); reading capacity there
+caused a confirmed race-entry SIGSEGV at guest `AAAAAE9A`.
+
 `race_touch` filters held and pending input immediately when availability changes,
 so hidden paddles/NOS cannot generate controller presses or leave a stuck button.
 Until the first native snapshot, conditional controls stay hidden. No game HUD,
@@ -308,7 +325,8 @@ physics, transmission setting or preset XML is modified by the adapter.
 
 `tests/race_control_features.c` covers auto/manual, drag/drift (including native
 controller fallback), NOS presence, player ownership, native call ABI and removal
-of held/pending inputs. The existing SDL/USB test explicitly enables manual+NOS
+of held/pending inputs, plus gearbox changes without a fresh HUD snapshot.
+The existing SDL/USB test explicitly enables manual+NOS
 capabilities for its input checks. Native host tests and Java compilation do not
 replace device checks across actual race entries and installed NOS upgrades.
 

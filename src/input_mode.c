@@ -9,7 +9,7 @@
 #define PREFERENCE_ON 4u
 #define OVERLAY_REQUESTED 8u
 #define REVISION_STEP 16u
-static atomic_uint state;
+static atomic_uint state = OVERLAY_REQUESTED;
 
 static void change_state(unsigned mask, unsigned value)
 {

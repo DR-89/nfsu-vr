@@ -8,4 +8,7 @@
     <string name="launcher_logo">Need for Speed Underground</string>
     <string name="launcher_platform">XBOX RECOMPILATION / ANDROID</string>
     <string name="launcher_credits">&lt;a href="https://github.com/cherepavel/nfsu1-android/commit/%2$s"&gt;Билд %1$s&lt;/a&gt;　/　&lt;a href="https://github.com/cherepavel/nfsu1-android"&gt;Репозиторий&lt;/a&gt;　/　Автор порта: &lt;a href="https://github.com/cherepavel"&gt;cherepavel&lt;/a&gt;</string>
+    <string name="port_credits_title">Android-порт</string>
+    <string name="port_credits_close">Закрыть</string>
+    <string name="port_credits_body">Автор Android-порта: &lt;a href="https://github.com/cherepavel"&gt;cherepavel&lt;/a&gt;&lt;br&gt;&lt;a href="https://github.com/cherepavel/nfsu1-android/commit/%2$s"&gt;Билд %1$s&lt;/a&gt;&lt;br&gt;Репозиторий: &lt;a href="https://github.com/cherepavel/nfsu1-android"&gt;nfsu1-android&lt;/a&gt;&lt;br&gt;&lt;br&gt;Основано на Nintendo Switch порте от &lt;a href="https://github.com/antoxa2584x"&gt;antoxa2584x&lt;/a&gt;&lt;br&gt;&lt;a href="https://github.com/antoxa2584x/nfsu1-sw"&gt;nfsu1-sw&lt;/a&gt;</string>
 </resources>

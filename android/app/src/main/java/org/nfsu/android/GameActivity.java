@@ -16,6 +16,34 @@ import org.libsdl.app.SDLActivity;
 
 /** SDL hosts the game, controller input and audio on Android. */
 public final class GameActivity extends SDLActivity {
+    private android.app.Dialog portCredits;
+
+    // Called through JNI on the guest thread; all window work belongs to UI.
+    public void showPortCredits() {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || isDestroyed()
+                        || (portCredits != null && portCredits.isShowing())) return;
+                raceControls.cancelInput();
+                portCredits = PortCreditsDialog.show(GameActivity.this);
+                portCredits.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+                    @Override public void onDismiss(android.content.DialogInterface dialog) {
+                        portCredits = null;
+                        restoreFullscreen();
+                    }
+                });
+            }
+        });
+    }
+
+    @Override protected void onDestroy() {
+        if (portCredits != null) {
+            portCredits.dismiss();
+            portCredits = null;
+        }
+        super.onDestroy();
+    }
+
     private RaceControlsView raceControls;
     private TouchLayoutStore touchLayoutStore;
     private android.view.View editorToolbar;

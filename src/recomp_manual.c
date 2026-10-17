@@ -1139,6 +1139,50 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
     esp += 12;
 }
 
+/* Android replaces the retail trailers action, preserving the selector and
+ * its native touch/controller activation event. Retail handler: ret 16. */
+extern void sub_000C1FD0_gen(void);
+#ifdef __ANDROID__
+extern void android_show_port_credits(void);
+extern void sub_000DC410(void);
+static void port_credits_caption(uint32_t object, unsigned depth)
+{
+    if (!object || depth > 8) return;
+    if (MEM32(object + 0x18) == 2) {
+        PUSH32(esp, 0); PUSH32(esp, guest_str("ANDROID PORT"));
+        PUSH32(esp, object); PUSH32(esp, ROW_HANDLER_VA);
+        sub_000DC410();
+        esp += 12;
+    } else if (MEM32(object + 0x18) == 5) {
+        uint32_t child = MEM32(object + 0x60);
+        for (unsigned i = 0; child && i < 128; i++, child = MEM32(child + 4))
+            port_credits_caption(child, depth + 1);
+    }
+}
+#endif
+void sub_000C1FD0(void)
+{
+#ifdef __ANDROID__
+    uint32_t message = MEM32(esp + 4), screen = ecx;
+    uint32_t object = MEM32(esp + 8);
+    if (message == 0x0C407210u && object && MEM32(object + 0x10) == 0x8816789Fu) {
+        android_show_port_credits();
+        esp += 20;
+        return;
+    }
+#endif
+    sub_000C1FD0_gen();
+#ifdef __ANDROID__
+    if (message == 0x35F8620Bu) { /* selector initialization */
+        uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx;
+        PUSH32(esp, 0x8816789Fu); PUSH32(esp, MEM32(screen + 0xC));
+        PUSH32(esp, ROW_HANDLER_VA); sub_000DC340(); esp += 8;
+        port_credits_caption(eax, 0);
+        eax = saved_eax; ecx = saved_ecx; edx = saved_edx;
+    }
+#endif
+}
+
 static const char *const s_name_obj[] = {
     "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8", "OptionName_9",
 };
@@ -1182,19 +1226,57 @@ void sub_000C2A70(void)
 extern void sub_000C2B80_gen(void);
 #include "race_touch.h"
 /* Native HUD availability update: (player, primary flags, secondary flags).
- * Secondary 0x40000 enables the NitrousGauge. Sample only player one on the
+ * Secondary 0x40000 enables the NitrousGauge, even for a stock drag car.
+ * Its update (9E414..9E449) also checks the vehicle's total NOS duration at
+ * vehicle + 0x40 + 0x3B0: zero and INT_MAX mean no usable system. Check total
+ * capacity, not remaining charge, so an equipped empty bottle keeps its button.
+ * Sample only player one on the
  * guest thread, then publish a scalar snapshot; Java never follows guest pointers.
  * Drag/drift checks mirror HUD selection at 3B11F/3B155. Transmission 295B74
  * is written by CBE90: automatic=0, manual=1. No guest HUD state is modified. */
 extern void sub_000A0140_gen(void);
+static int race_touch_shifting_enabled(void)
+{
+    int drag = MEM8(0x00273784u) || MEM32(0x00265BC8u);
+    return drag || MEM32(0x00295B74u) == 1;
+}
+
+/* Pause and front-end gearbox selectors write the preference through different
+ * handlers. Publish after the native write, without waiting for a HUD refresh. */
+static void race_touch_transmission_changed(void)
+{
+    race_touch_configure_features(race_touch_shifting_enabled(),
+        (race_touch_button_mask() & RACE_NITRO) != 0);
+}
+
+extern void sub_000C0F50_gen(void);
+void sub_000C0F50(void)
+{
+    sub_000C0F50_gen();
+    race_touch_transmission_changed();
+}
+
+extern void sub_000CBE90_gen(void);
+void sub_000CBE90(void)
+{
+    sub_000CBE90_gen();
+    race_touch_transmission_changed();
+}
+
 void sub_000A0140(void)
 {
     if (MEM32(esp + 4) == MEM32(0x00265B84u) && MEM32(esp + 4)) {
-        int drag = MEM8(0x00273784u) || MEM32(0x00265BC8u);
         int drift = MEM8(0x00273785u) || MEM32(0x00265BC4u);
-        int manual = MEM32(0x00295B74u) == 1;
         int nitro = (MEM32(esp + 12) & 0x00040000u) != 0;
-        race_touch_configure_features(drag || manual, !drift && nitro);
+        /* A33BC/A33CF initialize the HUD with secondary flags zero before
+         * player + 4 is initialized (allocator poison 0xAAAAAAAA). Match the
+         * native gauge's availability gate before following that pointer. */
+        if (nitro && !drift) {
+            uint32_t vehicle = MEM32(MEM32(esp + 4) + 4);
+            int32_t nitro_capacity = vehicle ? (int32_t)MEM32(vehicle + 0x3F0) : 0;
+            nitro = nitro_capacity > 0 && nitro_capacity != INT32_MAX;
+        }
+        race_touch_configure_features(race_touch_shifting_enabled(), !drift && nitro);
     }
     sub_000A0140_gen();
 }
@@ -1624,6 +1706,8 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x00131050u) return sub_00131050;
     if (xbox_va == 0x00130A70u) return sub_00130A70;
     if (xbox_va == 0x000A0140u) return sub_000A0140;
+    if (xbox_va == 0x000C0F50u) return sub_000C0F50;
+    if (xbox_va == 0x000CBE90u) return sub_000CBE90;
     if (xbox_va == 0x000B5B00u) return sub_000B5B00;
     if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
     if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;

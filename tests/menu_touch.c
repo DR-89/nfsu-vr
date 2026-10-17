@@ -17,6 +17,8 @@ static MenuTouchSample next(unsigned active, unsigned down, unsigned prepare)
 
 int main(void)
 {
+    assert(input_mode_get().overlay_requested);
+    assert(input_mode_get().overlay_enabled);
     short x, y;
     menu_touch_cancel();
     assert(menu_touch_sample().reset);

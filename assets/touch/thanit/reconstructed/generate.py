@@ -11,7 +11,11 @@ for name in ('left','right','camera','brake','gas','nitro','pause'):
  <circle cx="256" cy="256" r="194" fill="url(#shell-fill)" stroke="#30ffe6" stroke-width="7"/>
  <circle cx="256" cy="256" r="178" fill="none" stroke="#b6fff1" stroke-opacity=".16" stroke-width="18"/>
  </svg>''')
- if name=='gas':
+ if name in ('left','right'):
+  points = '286,170 206,256 286,342' if name == 'left' else '226,170 306,256 226,342'
+  E.SubElement(r,'{'+ns+'}polyline',points=points,fill='none',stroke='url(#shell-light)',
+   **{'stroke-width':'30','stroke-linecap':'round','stroke-linejoin':'round'})
+ elif name=='gas':
   g=E.SubElement(r,'{'+ns+'}g')
   E.SubElement(g,'{'+ns+'}rect',x='207',y='120',width='98',height='272',rx='39',fill='url(#shell-light)')
   for y in (161,203,245,287,329):
