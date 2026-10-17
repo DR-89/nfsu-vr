@@ -138,6 +138,9 @@ uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
     return 0;
 }
 void sub_000DD490(void) { assert(!"unexpected options text refresh"); }
+void sub_000DC340(void) { assert(!"unexpected option object lookup"); }
+void sub_000DC220(void) { assert(!"unexpected option state change"); }
+void sub_000DCD30(void) { assert(!"unexpected option color change"); }
 void sub_000D7A00(void) { focus_flushes++; g_esp += 4; }
 void sub_000D6D30(void)
 {

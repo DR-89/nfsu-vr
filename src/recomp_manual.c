@@ -1180,6 +1180,61 @@ void sub_000C2A70(void)
 #ifdef __ANDROID__
 extern void sub_000C2B80_gen(void);
 #define SENSOR_HANDLER_VA (ROW_HANDLER_VA + 7u)
+/* Retail FEng: DC340 finds an object, DC220 toggles its selectable state,
+ * and DCD30 changes its color (including native cache invalidation). BF958
+ * uses the same disable/color path with FF606060 for unavailable entries. */
+extern void sub_000DC340(void);
+extern void sub_000DC220(void);
+extern void sub_000DCD30(void);
+typedef struct {
+    uint32_t object[4], color[4];
+} NativeOptionRow;
+static NativeOptionRow s_controller_touch_rows[2];
+
+static uint32_t fe_object_hash(const char *name)
+{
+    uint32_t hash = 0xFFFFFFFFu;
+    for (; *name; name++) {
+        unsigned char c = (unsigned char)*name;
+        if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+        hash = hash * 33 + c;
+    }
+    return hash;
+}
+
+static void native_option_row_enabled(NativeOptionRow *state, uint32_t screen,
+                                     unsigned row, int enabled)
+{
+    static const char *const parts[] = { "OptionName", "OptionData", "LeftArrow", "RightArrow" };
+    uint32_t package = MEM32(screen + 0xC);
+    for (unsigned i = 0; i < 4; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "%s_%u", parts[i], row);
+        uint32_t hash = fe_object_hash(name);
+        PUSH32(esp, hash); PUSH32(esp, package); PUSH32(esp, 0);
+        sub_000DC340();
+        esp += 8;
+        uint32_t object = eax;
+        if (!object) continue;
+        if (state->object[i] != object) {
+            uint32_t color = MEM32(object + 0x2C);
+            if (!color) continue;
+            state->object[i] = object;
+            state->color[i] = (MEM32(color) & 255u) |
+                ((MEM32(color + 4) & 255u) << 8) |
+                ((MEM32(color + 8) & 255u) << 16) |
+                ((MEM32(color + 12) & 255u) << 24);
+        }
+        PUSH32(esp, enabled); PUSH32(esp, hash); PUSH32(esp, package); PUSH32(esp, 0);
+        sub_000DC220();
+        esp += 12;
+        PUSH32(esp, enabled ? state->color[i] : 0xFF606060u);
+        PUSH32(esp, object); PUSH32(esp, 0);
+        sub_000DCD30();
+        esp += 8;
+    }
+}
+
 static uint32_t s_controller_settings_screen;
 static unsigned s_controller_settings_revision;
 static void controller_touch_text(uint32_t screen)
@@ -1187,17 +1242,18 @@ static void controller_touch_text(uint32_t screen)
     InputMode mode = input_mode_get();
     s_controller_settings_screen = screen;
     s_controller_settings_revision = mode.revision;
-    fe_set_text(screen, "OptionName_5", mode.controller_present ?
-        "SENSOR MODE:" : "SENSOR MODE (locked):");
+    fe_set_text(screen, "OptionName_5", "SENSOR MODE:");
     fe_set_text(screen, "OptionData_5", mode.sensor_enabled ? "On" : "Off");
     fe_set_text(screen, "OptionName_6", "RACE BUTTON OVERLAY:");
-    fe_set_text(screen, "OptionData_6", mode.sensor_enabled ?
-        (mode.overlay_requested ? "On" : "Off") : "Unavailable");
+    fe_set_text(screen, "OptionData_6", mode.overlay_requested ? "On" : "Off");
+    native_option_row_enabled(&s_controller_touch_rows[0], screen, 5, mode.sensor_editable);
+    native_option_row_enabled(&s_controller_touch_rows[1], screen, 6, mode.overlay_editable);
 }
 void sub_000C2B80(void)
 {
     uint32_t screen = ecx;
     sub_000C2B80_gen();
+    memset(s_controller_touch_rows, 0, sizeof(s_controller_touch_rows));
     for (unsigned row = 5; row <= 6; row++) {
         PUSH32(esp, 0); PUSH32(esp, 1); PUSH32(esp, row);
         ecx = screen; PUSH32(esp, 0); sub_000C1D30();
@@ -1215,10 +1271,10 @@ static void controller_touch_input(unsigned row)
         InputSensorPreference preference = mode.preference;
         int overlay = mode.overlay_requested;
         if (row == 0) {
-            if (!mode.controller_present) { esp += 8; return; }
+            if (!mode.sensor_editable) { esp += 8; return; }
             preference = mode.sensor_enabled ? INPUT_SENSOR_OFF : INPUT_SENSOR_ON;
         } else {
-            if (!mode.sensor_enabled) { esp += 8; return; }
+            if (!mode.overlay_editable) { esp += 8; return; }
             overlay = !overlay;
         }
         input_mode_configure(preference, overlay);

@@ -523,10 +523,10 @@ Options -> Controller (category 3, native setup C2B80) retains its four native
 rows and adds SENSOR MODE and RACE BUTTON OVERLAY as rows 5/6. Sensor Mode
 starts with automatic controller detection until manually changed; its visible
 value is the effective On/Off mode. With no physical pad, it is forced On and
-labelled locked, and its handler rejects changes. A saved Off becomes effective
+greyed out through the native FEng disabled-entry mechanism, and its handler rejects changes. A saved Off becomes effective
 again when a pad reconnects. Race Button Overlay defaults Off and is editable
-only while Sensor Mode is On; otherwise it displays Unavailable and ignores
-input. Both preferences are stored in nfsu1x_options.txt. The native row handlers
+only with a physical controller present and Sensor Mode On; otherwise the
+row is grey and ignores input. Labels and values remain plain On/Off. Both preferences are stored in nfsu1x_options.txt. The native row handlers
 and rendered arrows serve both controller and touch input.
 
 ### Input responsibilities
@@ -581,3 +581,22 @@ cc -std=c11 -Wall -Wextra -Werror -Isrc tests/touch_gestures.c \
   src/touch_gesture.c src/touch_orbit.c -lm -o /tmp/nfsu-touch-gestures-test
 /tmp/nfsu-touch-gestures-test
 ```
+
+### Native unavailable Controller rows
+
+The Controller adapter uses the retail FEng disabled-entry path rather than
+changing captions to locked/Unavailable. DC220 delegates to DBF50 to change
+selectability (object+1C bit 04000000), and DCD30 delegates to E4F40 to apply
+color and invalidate the native render cache. The original BF958/BF965 path
+uses FF606060 for unavailable menu entries. The shared row helper applies
+these operations to OptionName, OptionData, LeftArrow and RightArrow, keeping
+each object's original color for re-enabling.
+
+InputMode publishes sensor_editable and overlay_editable alongside effective
+state. Sensor Mode requires a physical pad for editing. Race Button Overlay
+requires both a physical pad and Sensor Mode On. This affects editability, not
+the saved overlay preference. Native input handlers also enforce the policy.
+The Controller adapter refreshes state after hotplug revisions. Host coverage
+in tests/controller_touch_options.c checks all eight component states, native
+call arguments, guest stack balance, original color restoration and rejection
+of overlay editing with no pad. Device visual acceptance remains pending.

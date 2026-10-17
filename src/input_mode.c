@@ -32,6 +32,8 @@ InputMode input_mode_get(void)
     if ((value & PREFERENCE_MASK) == PREFERENCE_ON) mode.preference = INPUT_SENSOR_ON;
     /* Never disable the only available input method. */
     mode.sensor_enabled = !mode.controller_present || mode.preference == INPUT_SENSOR_ON;
+    mode.sensor_editable = mode.controller_present;
+    mode.overlay_editable = mode.controller_present && mode.sensor_enabled;
     mode.overlay_requested = (value & OVERLAY_REQUESTED) != 0;
     mode.overlay_enabled = mode.sensor_enabled && mode.overlay_requested;
     mode.revision = value / REVISION_STEP;

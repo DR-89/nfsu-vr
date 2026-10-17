@@ -12,6 +12,8 @@ typedef struct {
     InputSensorPreference preference;
     int controller_present;
     int sensor_enabled;
+    int sensor_editable;
+    int overlay_editable;
     int overlay_requested;
     int overlay_enabled;
     unsigned revision;
