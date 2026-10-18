@@ -18,6 +18,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "../../include/nfsu_log.h"
 
 #include "apu_state.h"
 #include "apu.h"
@@ -162,7 +163,7 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
                     != NV_PAPU_FECTL_FEMETHMODE_HALTED);
             if (running && d->pause_requested) {
                 d->pause_requested = false;
-                fprintf(stderr, "[APU] started by the title"
+                NFS_LOG_INFO("audio", "[APU] started by the title"
                                 " (SECTL=%08X FECTL=%08X)\n", sectl, fectl);
             }
         }
@@ -228,10 +229,10 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
 
     /* Try XAudio2 first (lower latency) */
     if (xa2_init()) {
-        fprintf(stderr, "[APU] host audio output active\n");
+        NFS_LOG_INFO("audio", "[APU] host audio output active\n");
         return;
     }
-    fprintf(stderr, "[APU] XAudio2 unavailable, falling back to waveOut\n");
+    NFS_LOG_INFO("audio", "[APU] XAudio2 unavailable, falling back to waveOut\n");
 
     WAVEFORMATEX wfx = { 0 };
     wfx.wFormatTag      = WAVE_FORMAT_PCM;
@@ -244,7 +245,7 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     MMRESULT mr = waveOutOpen(&g_waveout.hwo, WAVE_MAPPER, &wfx,
                                0, 0, CALLBACK_NULL);
     if (mr != MMSYSERR_NOERROR) {
-        fprintf(stderr, "[APU] waveOutOpen failed (error %u)\n", mr);
+        NFS_LOG_ERROR("audio", "[APU] waveOutOpen failed (error %u)\n", mr);
         g_waveout.initialized = false;
         return;
     }
@@ -261,7 +262,7 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
     g_waveout.initialized = true;
     g_waveout.frames_written = 0;
 
-    fprintf(stderr, "[APU] waveOut audio output initialized (48kHz stereo 16-bit, %d buffers)\n",
+    NFS_LOG_INFO("audio", "[APU] waveOut audio output initialized (48kHz stereo 16-bit, %d buffers)\n",
             WAVEOUT_NUM_BUFS);
 }
 
@@ -280,7 +281,7 @@ void mcpx_apu_monitor_finalize(MCPXAPUState *d)
     }
     waveOutClose(g_waveout.hwo);
     g_waveout.initialized = false;
-    fprintf(stderr, "[APU] waveOut audio output shut down (%d frames written)\n",
+    NFS_LOG_INFO("audio", "[APU] waveOut audio output shut down (%d frames written)\n",
             g_waveout.frames_written);
 }
 
@@ -668,7 +669,7 @@ MCPXAPUState *mcpx_apu_init_standalone(uint8_t *ram_ptr)
 {
     MCPXAPUState *d = (MCPXAPUState *)calloc(1, sizeof(MCPXAPUState));
     if (!d) {
-        fprintf(stderr, "[APU] Failed to allocate MCPXAPUState\n");
+        NFS_LOG_ERROR("audio", "[APU] Failed to allocate MCPXAPUState\n");
         return NULL;
     }
 
@@ -708,10 +709,10 @@ MCPXAPUState *mcpx_apu_init_standalone(uint8_t *ram_ptr)
     mcpx_apu_wait_for_idle(d);
     qemu_mutex_unlock(&d->lock);
 
-    fprintf(stderr, "[APU] MCPX APU initialized (standalone)\n");
-    fprintf(stderr, "[APU]   RAM pointer: %p\n", (void *)ram_ptr);
-    fprintf(stderr, "[APU]   MMIO base: 0xFE800000 (512KB)\n");
-    fprintf(stderr, "[APU]   VP: %d max voices, %d samples/frame\n",
+    NFS_LOG_INFO("audio", "[APU] MCPX APU initialized (standalone)\n");
+    NFS_LOG_INFO("audio", "[APU]   RAM pointer: %p\n", (void *)ram_ptr);
+    NFS_LOG_INFO("audio", "[APU]   MMIO base: 0xFE800000 (512KB)\n");
+    NFS_LOG_INFO("audio", "[APU]   VP: %d max voices, %d samples/frame\n",
             MCPX_HW_MAX_VOICES, NUM_SAMPLES_PER_FRAME);
     return d;
 }
@@ -720,7 +721,7 @@ void mcpx_apu_shutdown(MCPXAPUState *d)
 {
     if (!d) return;
 
-    fprintf(stderr, "[APU] Shutting down MCPX APU...\n");
+    NFS_LOG_INFO("audio", "[APU] Shutting down MCPX APU...\n");
 
     qemu_mutex_lock(&d->lock);
     mcpx_apu_wait_for_idle(d);
@@ -734,7 +735,7 @@ void mcpx_apu_shutdown(MCPXAPUState *d)
 
     free(d);
     g_state = NULL;
-    fprintf(stderr, "[APU] Shutdown complete\n");
+    NFS_LOG_INFO("audio", "[APU] Shutdown complete\n");
 }
 
 /* ============================================================
@@ -804,14 +805,14 @@ void mcpx_apu_mmio_write(MCPXAPUState *d, uint64_t addr, uint64_t val, unsigned 
 void mcpx_apu_play_test_tone(MCPXAPUState *d)
 {
     if (!d) {
-        fprintf(stderr, "[APU-TEST] No APU state\n");
+        NFS_LOG_INFO("audio", "[APU-TEST] No APU state\n");
         return;
     }
 
     if (g_test_tone.active) {
         /* Toggle off */
         g_test_tone.active = false;
-        fprintf(stderr, "[APU-TEST] Test tone OFF\n");
+        NFS_LOG_INFO("audio", "[APU-TEST] Test tone OFF\n");
         return;
     }
 
@@ -832,7 +833,7 @@ void mcpx_apu_play_test_tone(MCPXAPUState *d)
     mcpx_apu_resume(d);
     qemu_mutex_unlock(&d->lock);
 
-    fprintf(stderr, "[APU-TEST] Test tone ON - 440Hz sine, amplitude=%d\n",
+    NFS_LOG_INFO("audio", "[APU-TEST] Test tone ON - 440Hz sine, amplitude=%d\n",
             g_test_tone.amplitude);
 }
 
@@ -932,7 +933,7 @@ void apu_mixer_play(int slot, int looping)
 
     static int play_log_count = 0;
     if (play_log_count < 20) {
-        fprintf(stderr, "[APU-MIX] Play voice %d: %u bytes, %u ch, %u Hz, vol=%.2f, loop=%d\n",
+        NFS_LOG_INFO("audio", "[APU-MIX] Play voice %d: %u bytes, %u ch, %u Hz, vol=%.2f, loop=%d\n",
                 slot, v->pcm_bytes, v->num_channels, v->sample_rate, v->volume, looping);
         play_log_count++;
     }

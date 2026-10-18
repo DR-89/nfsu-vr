@@ -1,4 +1,5 @@
 /* Per-thread aggregate timings. No registry, shared counter, or collector mutex. */
+#include "../xboxrecomp/include/nfsu_log.h"
 #include "../xboxrecomp/include/nfsu_perf.h"
 #include <stdio.h>
 #include <string.h>
@@ -122,7 +123,7 @@ void nfsu_perf_poll(void)
         used += n;
     }
     /* Bounded output: one summary and at most four sites plus overflow. */
-    fprintf(stderr, "%s\n", line);
+    NFS_LOG_INFO("performance", "%s\n", line);
     int selected[4] = {-1, -1, -1, -1};
     for (int rank = 0; rank < 4; rank++) {
         int best = -1;
@@ -135,7 +136,7 @@ void nfsu_perf_poll(void)
         if (best < 0) break;
         selected[rank] = best;
         PerfKernel *site = &perf.sites[best];
-        fprintf(stderr, "[PERFK] tid=%ld role=%s window_ms=%.1f rank=%d"
+        NFS_LOG_INFO("performance", "[PERFK] tid=%ld role=%s window_ms=%.1f rank=%d"
             " ordinal=%u caller=%08X calls=%llu kernel_ms=%.2f wait_ms=%.2f wait_max_ms=%.2f\n",
             syscall(SYS_gettid), perf.role ? perf.role : "worker",
             (now - perf.window) / 1e6, rank + 1, site->ordinal, site->caller,
@@ -143,7 +144,7 @@ void nfsu_perf_poll(void)
             site->wait_ns / 1e6, site->wait_max / 1e6);
     }
     if (perf.overflow.count)
-        fprintf(stderr, "[PERFK] tid=%ld bucket=overflow calls=%llu wait_ms=%.2f\n",
+        NFS_LOG_INFO("performance", "[PERFK] tid=%ld bucket=overflow calls=%llu wait_ms=%.2f\n",
             syscall(SYS_gettid), (unsigned long long)perf.overflow.count,
             perf.overflow.wait_ns / 1e6);
     memset(perf.metrics, 0, sizeof(perf.metrics));

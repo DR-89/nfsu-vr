@@ -9,6 +9,7 @@
 
 #ifndef BURNOUT3_QEMU_SHIM_H
 #define BURNOUT3_QEMU_SHIM_H
+#include "../../include/nfsu_log.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -274,11 +275,11 @@ static inline bool test_bit(long nr, const unsigned long *addr) {
  * Logging and error handling
  * ============================================================ */
 
-#define error_report(...) fprintf(stderr, "[NV2A] " __VA_ARGS__)
-#define warn_report(...) fprintf(stderr, "[NV2A-WARN] " __VA_ARGS__)
+#define error_report(...) NFS_LOG_ERROR("graphics", "[NV2A] " __VA_ARGS__)
+#define warn_report(...) NFS_LOG_WARN("graphics", "[NV2A-WARN] " __VA_ARGS__)
 #define warn_report_once(...) do { \
     static int _once = 0; \
-    if (!_once) { _once = 1; fprintf(stderr, "[NV2A-WARN] " __VA_ARGS__); } \
+    if (!_once) { _once = 1; NFS_LOG_WARN("graphics", "[NV2A-WARN] " __VA_ARGS__); } \
 } while (0)
 
 /* ============================================================

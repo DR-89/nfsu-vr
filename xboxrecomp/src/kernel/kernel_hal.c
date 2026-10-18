@@ -10,6 +10,7 @@
  *   - Simulated (IRQL tracking via TLS)
  *   - Stubbed (PCI access, SMC, interrupts)
  */
+#include "../../include/nfsu_log.h"
 
 #include "kernel.h"
 #include "recomp_context.h"
@@ -125,12 +126,12 @@ void xbox_IrqlDumpHolders(void)
 {
     int i;
 
-    fprintf(stderr, "  [IRQLHOLD] depth=%d transitions=%d, raised threads:\n",
+    NFS_LOG_INFO("runtime", "  [IRQLHOLD] depth=%d transitions=%d, raised threads:\n",
             xbox_IrqlRaisedCount(), xbox_IrqlTransitions());
     for (i = 0; i < IRQL_HOLDERS; i++) {
         LONG t = InterlockedCompareExchange(&s_holders[i].tid, 0, 0);
         if (t)
-            fprintf(stderr, "  [IRQLHOLD]   tid %lu raised from host %p\n",
+            NFS_LOG_INFO("runtime", "  [IRQLHOLD]   tid %lu raised from host %p\n",
                     (unsigned long)t, s_holders[i].ra);
     }
     fflush(stderr);
@@ -160,7 +161,7 @@ static void irql_track(KIRQL old_level, KIRQL new_level, void *ra)
     if (s_trace < 0)
         s_trace = getenv("RECOMP_IRQL_TRACE") ? 1 : 0;
     if (s_trace && InterlockedIncrement(&s_traced) <= 20) {
-        fprintf(stderr, "  [IRQL] tid %lu %s %d->%d depth=%ld\n",
+        NFS_LOG_INFO("runtime", "  [IRQL] tid %lu %s %d->%d depth=%ld\n",
                 (unsigned long)GetCurrentThreadId(),
                 now ? "raise" : "lower", old_level, new_level, (long)d);
         fflush(stderr);
@@ -290,7 +291,7 @@ VOID __fastcall xbox_KfLowerIrql(KIRQL NewIrql)
          * connecting it back to here. */
         static volatile LONG n;
         if (InterlockedIncrement(&n) <= 20) {
-            fprintf(stderr, "  [IRQLBUG] tid %lu KfLowerIrql(%d) while at %d"
+            NFS_LOG_INFO("runtime", "  [IRQLBUG] tid %lu KfLowerIrql(%d) while at %d"
                     " -- counted as a raise, depth is now stuck\n",
                     (unsigned long)GetCurrentThreadId(),
                     (int)NewIrql, (int)g_current_irql);

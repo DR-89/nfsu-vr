@@ -11,6 +11,9 @@ project(nfsu2_recomp C)
 
 if(ANDROID)
     enable_language(CXX)
+    add_compile_definitions(NFSU_USE_ZLOG=1)
+    set(ZLOG_WERROR OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/zlog EXCLUDE_FROM_ALL)
     # Generated chunks are large; bound compiler memory even on many-core PCs.
     set_property(GLOBAL PROPERTY JOB_POOLS nfsu_compile=4)
     set(CMAKE_JOB_POOL_COMPILE nfsu_compile)
@@ -75,10 +78,10 @@ set(GAME_SOURCES
 
 if(ANDROID)
     add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} ${RECOMP_GEN_SOURCES}
-        src/android_host.c src/android_saf.c src/android_diagnostics.c src/android_perf.c src/menu_touch.c src/input_mode.c src/feng_touch.c
+        src/android_host.c src/android_env.c src/android_logs.c src/android_saf.c src/android_diagnostics.c src/android_perf.c src/menu_touch.c src/input_mode.c src/feng_touch.c
         src/touch_gesture.c src/touch_orbit.c src/feng_touch_carousel.c src/feng_touch_camera.c src/feng_touch_magazines.c
         src/race_touch.c src/android_race_controls.c)
-    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 log android)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 zlog_s log android)
     target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384"
         "-Wl,--wrap=usb_gamepad_report" "-Wl,--wrap=usb_gamepad_control")
     foreach(call open open64 __open_2 fopen fopen64 stat stat64 opendir readdir readdir64 closedir)

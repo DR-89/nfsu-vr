@@ -7,7 +7,7 @@ The target device for bring-up is Retroid Pocket 4 Pro (Android 13, Mali-G77).
 
 Use JDK 21 or newer, Python 3 with `venv`, and Android SDK platform 37,
 NDK 30.0.16248370, and CMake 4.1.2. Gradle 9.8.0 and AGP 9.4.1 are pinned.
-Initialize the SDL and glslang submodules once:
+Initialize the SDL, glslang and zlog submodules once:
 
 ```sh
 git submodule update --init --recursive
@@ -115,12 +115,21 @@ lock/unlock, launcher re-entry and app switching still require device validation
 
 ## Diagnostics and validation
 
-The persistent native log is `nfsu1.log` in
-`/sdcard/Android/data/org.nfsu.android/files/`. For example:
+Native logs are in `logs/` under
+`/sdcard/Android/data/org.nfsu.android/files/`: `all.log` and separate input,
+graphics, audio, file, runtime, performance, kernel and system logs. The directory
+stays in place across launches. zlog appends and rotates individual files by
+size, naming archives with the rotation date and number. The root `nfsu1.log`
+is retained as a compatibility copy. Optional `nfsu1x_env.txt` lives in the
+root runtime directory and is read at startup. Logging uses zlog with
+TRACE/DEBUG/INFO/NOTICE/WARN/ERROR/FATAL levels and per-category thresholds. See
+[Android logging](../docs/android-logging.md) and
+[example settings](nfsu1x_env.example.txt). For example:
 
 ```sh
 adb logcat -s NFSU SDL SDL/APP AndroidRuntime
 adb pull /sdcard/Android/data/org.nfsu.android/files/nfsu1.log
+adb pull /sdcard/Android/data/org.nfsu.android/files/logs
 ```
 
 The game has a separate process, so its native shutdown does not kill the

@@ -14,6 +14,7 @@
  *
  * Build: Requires Windows SDK with d3d11.h and dxgi.h
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_internal.h"
 #include <stdio.h>
@@ -124,7 +125,7 @@ static HRESULT d3d8_present(void)
 {
     HRESULT hr = d3d8_gamma_begin(g_device_state.default_rtv);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: Gamma presentation failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: Gamma presentation failed: 0x%08lX\n", hr);
         return hr;
     }
     hr = IDXGISwapChain_Present(g_device_state.swap_chain, 1, 0);
@@ -235,7 +236,7 @@ static HRESULT d3d11_create_device_and_swap_chain(
     );
 
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: Failed to create D3D11 device: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: Failed to create D3D11 device: 0x%08lX\n", hr);
         return hr;
     }
 
@@ -434,7 +435,7 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
     DWORD now = GetTickCount();
     if (last_tick == 0) last_tick = now;
     if (now - last_tick >= 2000) {
-        fprintf(stderr, "  [D3D] %.1fs: %u present (%.1f fps), %u begin, %u end, "
+        NFS_LOG_DEBUG("graphics", "  [D3D] %.1fs: %u present (%.1f fps), %u begin, %u end, "
                 "%u clear, %u draw, %u xform, %u rs, %u tex\n",
                 (now - last_tick) / 1000.0, frame_count,
                 frame_count * 1000.0 / (now - last_tick),
@@ -1057,7 +1058,7 @@ static HRESULT __stdcall dev_CreateRenderTarget(IDirect3DDevice8 *self, UINT Wid
                 }
             }
             if (sample_count > 1) {
-                fprintf(stderr, "D3D8: MSAA %lu unsupported, falling back to %lu samples\n",
+                NFS_LOG_DEBUG("graphics", "D3D8: MSAA %lu unsupported, falling back to %lu samples\n",
                         d3d8_msaa_sample_count(MultiSample) > 1 ? (unsigned long)d3d8_msaa_sample_count(MultiSample) : 0,
                         (unsigned long)sample_count);
             } else {
@@ -1079,7 +1080,7 @@ static HRESULT __stdcall dev_CreateRenderTarget(IDirect3DDevice8 *self, UINT Wid
 
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &tex);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateRenderTarget failed: 0x%08lX (fmt=0x%X %ux%u)\n", hr, Format, Width, Height);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateRenderTarget failed: 0x%08lX (fmt=0x%X %ux%u)\n", hr, Format, Width, Height);
         return hr;
     }
 
@@ -1105,7 +1106,7 @@ static HRESULT __stdcall dev_CreateDepthStencilSurface(IDirect3DDevice8 *self, U
     dxgi = d3d8_to_dxgi_format(Format);
     if (dxgi == DXGI_FORMAT_R16_FLOAT) {
         /* F16 has no D3D11 depth equivalent; fall back to D16. */
-        fprintf(stderr, "D3D8: F16 depth surface falling back to D16\n");
+        NFS_LOG_WARN("graphics", "D3D8: F16 depth surface falling back to D16\n");
         dxgi = DXGI_FORMAT_D16_UNORM;
         surface_format = D3DFMT_D16;
     }
@@ -1127,7 +1128,7 @@ static HRESULT __stdcall dev_CreateDepthStencilSurface(IDirect3DDevice8 *self, U
                 }
             }
             if (sample_count > 1)
-                fprintf(stderr, "D3D8: depth MSAA %lu unsupported, fallback %lu samples\n",
+                NFS_LOG_DEBUG("graphics", "D3D8: depth MSAA %lu unsupported, fallback %lu samples\n",
                         (unsigned long)d3d8_msaa_sample_count(MultiSample),
                         (unsigned long)sample_count);
             else
@@ -1148,7 +1149,7 @@ static HRESULT __stdcall dev_CreateDepthStencilSurface(IDirect3DDevice8 *self, U
 
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &tex);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateDepthStencilSurface failed: 0x%08lX (fmt=0x%X)\n", hr, Format);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateDepthStencilSurface failed: 0x%08lX (fmt=0x%X)\n", hr, Format);
         return hr;
     }
 
@@ -1172,7 +1173,7 @@ static HRESULT __stdcall dev_SetRenderTarget(IDirect3DDevice8 *self, IDirect3DSu
         g_cur_rt = (D3D8Surface *)pRenderTarget;
         if (!g_cur_rt->rtv) {
             g_cur_rt = NULL;
-            fprintf(stderr, "D3D8: SetRenderTarget on non-renderable surface\n");
+            NFS_LOG_DEBUG("graphics", "D3D8: SetRenderTarget on non-renderable surface\n");
             return E_INVALIDARG;
         }
         rtv = g_cur_rt->rtv;
@@ -1185,7 +1186,7 @@ static HRESULT __stdcall dev_SetRenderTarget(IDirect3DDevice8 *self, IDirect3DSu
         g_cur_ds = (D3D8Surface *)pZStencilSurface;
         if (!g_cur_ds->dsv) {
             g_cur_ds = NULL;
-            fprintf(stderr, "D3D8: SetRenderTarget with non-depth stencil surface\n");
+            NFS_LOG_DEBUG("graphics", "D3D8: SetRenderTarget with non-depth stencil surface\n");
         } else {
             dsv = g_cur_ds->dsv;
             IDirect3DSurface8_AddRef(pZStencilSurface);
@@ -1535,25 +1536,25 @@ static HRESULT __stdcall d3d8_CreateDevice(IDirect3D8 *self, UINT Adapter, DWORD
     /* Initialize shader and state subsystems */
     hr = d3d8_shaders_init();
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: Shader init failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: Shader init failed: 0x%08lX\n", hr);
         return hr;
     }
 
     hr = d3d8_states_init();
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: State init failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: State init failed: 0x%08lX\n", hr);
         return hr;
     }
 
     hr = d3d8_combiners_init();
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: Combiner init failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: Combiner init failed: 0x%08lX\n", hr);
         /* Non-fatal: fall back to fixed-function pixel shaders */
     }
 
     hr = d3d8_vsh_init();
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: VSH init failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: VSH init failed: 0x%08lX\n", hr);
         /* Non-fatal: fall back to FVF vertex shaders */
     }
 
@@ -1561,7 +1562,7 @@ static HRESULT __stdcall d3d8_CreateDevice(IDirect3D8 *self, UINT Adapter, DWORD
     g_device_initialized = TRUE;
 
     *ppDevice = &g_device;
-    fprintf(stderr, "D3D8: Device created (%ux%u)\n", g_device_state.width, g_device_state.height);
+    NFS_LOG_DEBUG("graphics", "D3D8: Device created (%ux%u)\n", g_device_state.width, g_device_state.height);
     return S_OK;
 }
 

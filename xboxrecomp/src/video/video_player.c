@@ -16,6 +16,7 @@
  */
 #if defined(_WIN32)
 #define COBJMACROS
+#include "../../include/nfsu_log.h"
 #include <windows.h>
 #include <mfapi.h>
 #include <mfidl.h>
@@ -101,22 +102,22 @@ int video_init(void)
     /* COM must be initialized for Media Foundation */
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
-        fprintf(stderr, "  [VIDEO] CoInitializeEx failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "  [VIDEO] CoInitializeEx failed: 0x%08lX\n", hr);
         /* Try apartment-threaded as fallback */
         hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(hr) && hr != S_FALSE) {
-            fprintf(stderr, "  [VIDEO] CoInitializeEx (STA) also failed: 0x%08lX\n", hr);
+            NFS_LOG_ERROR("graphics", "  [VIDEO] CoInitializeEx (STA) also failed: 0x%08lX\n", hr);
             return -1;
         }
     }
 
     hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
     if (FAILED(hr)) {
-        fprintf(stderr, "  [VIDEO] MFStartup failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "  [VIDEO] MFStartup failed: 0x%08lX\n", hr);
         return -1;
     }
     g_vp.initialized = 1;
-    fprintf(stderr, "  [VIDEO] Media Foundation initialized\n");
+    NFS_LOG_INFO("graphics", "  [VIDEO] Media Foundation initialized\n");
     return 0;
 }
 
@@ -148,7 +149,7 @@ int video_open(const char *path)
     {
         FILE *f = fopen(path, "rb");
         if (!f) {
-            fprintf(stderr, "  [VIDEO] File not found: %s\n", path);
+            NFS_LOG_INFO("graphics", "  [VIDEO] File not found: %s\n", path);
             return -1;
         }
         fclose(f);
@@ -163,7 +164,7 @@ int video_open(const char *path)
     hr = MFCreateSourceReaderFromURL(wpath, attrs, &g_vp.reader);
     free(wpath);
     if (FAILED(hr)) {
-        fprintf(stderr, "  [VIDEO] Failed to open: %s (hr=0x%08lX)\n", path, hr);
+        NFS_LOG_ERROR("graphics", "  [VIDEO] Failed to open: %s (hr=0x%08lX)\n", path, hr);
         goto fail;
     }
 
@@ -171,7 +172,7 @@ int video_open(const char *path)
     hr = IMFSourceReader_GetNativeMediaType(g_vp.reader,
             (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &native_type);
     if (FAILED(hr)) {
-        fprintf(stderr, "  [VIDEO] No video stream found (hr=0x%08lX)\n", hr);
+        NFS_LOG_INFO("graphics", "  [VIDEO] No video stream found (hr=0x%08lX)\n", hr);
         goto fail;
     }
 
@@ -227,7 +228,7 @@ int video_open(const char *path)
 
     if (FAILED(hr)) {
         /* Try NV12 as fallback — widely supported, we'll convert manually */
-        fprintf(stderr, "  [VIDEO] RGB32 failed (0x%08lX), trying NV12...\n", hr);
+        NFS_LOG_INFO("graphics", "  [VIDEO] RGB32 failed (0x%08lX), trying NV12...\n", hr);
         IMFMediaType_SetGUID(output_type, &MF_MT_SUBTYPE, &MFVideoFormat_NV12);
         hr = IMFSourceReader_SetCurrentMediaType(g_vp.reader,
                 (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, NULL, output_type);
@@ -235,7 +236,7 @@ int video_open(const char *path)
 
     if (FAILED(hr)) {
         /* Last resort: try YUY2 */
-        fprintf(stderr, "  [VIDEO] NV12 failed (0x%08lX), trying YUY2...\n", hr);
+        NFS_LOG_INFO("graphics", "  [VIDEO] NV12 failed (0x%08lX), trying YUY2...\n", hr);
         IMFMediaType_SetGUID(output_type, &MF_MT_SUBTYPE, &MFVideoFormat_YUY2);
         hr = IMFSourceReader_SetCurrentMediaType(g_vp.reader,
                 (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, NULL, output_type);
@@ -243,7 +244,7 @@ int video_open(const char *path)
 
     if (FAILED(hr)) {
         /* Accept whatever the decoder gives us */
-        fprintf(stderr, "  [VIDEO] All formats failed, using decoder default (hr=0x%08lX)\n", hr);
+        NFS_LOG_INFO("graphics", "  [VIDEO] All formats failed, using decoder default (hr=0x%08lX)\n", hr);
         IMFMediaType_Release(output_type);
         output_type = NULL;
         /* Re-query the actual output type */
@@ -258,16 +259,16 @@ int video_open(const char *path)
         IMFMediaType_GetGUID(output_type, &MF_MT_SUBTYPE, &subtype);
         if (IsEqualGUID(&subtype, &MFVideoFormat_RGB32)) {
             g_vp.format = VP_FMT_RGB32;
-            fprintf(stderr, "  [VIDEO] Output format: RGB32\n");
+            NFS_LOG_INFO("graphics", "  [VIDEO] Output format: RGB32\n");
         } else if (IsEqualGUID(&subtype, &MFVideoFormat_NV12)) {
             g_vp.format = VP_FMT_NV12;
-            fprintf(stderr, "  [VIDEO] Output format: NV12\n");
+            NFS_LOG_INFO("graphics", "  [VIDEO] Output format: NV12\n");
         } else if (IsEqualGUID(&subtype, &MFVideoFormat_YUY2)) {
             g_vp.format = VP_FMT_YUY2;
-            fprintf(stderr, "  [VIDEO] Output format: YUY2\n");
+            NFS_LOG_INFO("graphics", "  [VIDEO] Output format: YUY2\n");
         } else {
             g_vp.format = VP_FMT_NV12; /* assume NV12 */
-            fprintf(stderr, "  [VIDEO] Output format: unknown GUID, assuming NV12\n");
+            NFS_LOG_INFO("graphics", "  [VIDEO] Output format: unknown GUID, assuming NV12\n");
         }
     }
 
@@ -312,7 +313,7 @@ int video_open(const char *path)
     hr = d3d8_CreateTextureImpl(g_vp.tex_width, g_vp.tex_height, 1, 0,
                                 D3DFMT_LIN_A8R8G8B8, &g_vp.texture);
     if (FAILED(hr)) {
-        fprintf(stderr, "  [VIDEO] Failed to create texture %ux%u (hr=0x%08lX)\n",
+        NFS_LOG_ERROR("graphics", "  [VIDEO] Failed to create texture %ux%u (hr=0x%08lX)\n",
                 g_vp.tex_width, g_vp.tex_height, hr);
         goto fail;
     }
@@ -324,7 +325,7 @@ int video_open(const char *path)
 
     if (attrs) IMFAttributes_Release(attrs);
 
-    fprintf(stderr, "  [VIDEO] Opened: %s (%dx%d, %.1fs, %.1f fps)\n",
+    NFS_LOG_INFO("graphics", "  [VIDEO] Opened: %s (%dx%d, %.1fs, %.1f fps)\n",
             path, g_vp.width, g_vp.height, g_vp.duration,
             1.0f / g_vp.frame_time);
     return 0;
@@ -463,7 +464,7 @@ static int decode_one_frame(void)
             }
             IMFMediaBuffer_Release(mb);
         }
-        fprintf(stderr, "  [VIDEO] source rows are %s\n",
+        NFS_LOG_INFO("graphics", "  [VIDEO] source rows are %s\n",
                 g_vp.bottom_up ? "bottom-up" : "top-down");
     }
 
@@ -664,7 +665,7 @@ int video_dump_frame_bmp(const char *path)
     }
     free(line);
     fclose(f);
-    fprintf(stderr, "  [VIDEO] wrote %s (%ux%u)\n", path, w, h);
+    NFS_LOG_INFO("graphics", "  [VIDEO] wrote %s (%ux%u)\n", path, w, h);
     return 0;
 }
 

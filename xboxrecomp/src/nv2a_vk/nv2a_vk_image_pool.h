@@ -12,6 +12,7 @@
  * Larger images, and everything once the blocks are full, allocate as
  * before. RECOMP_VK_TEX_POOL=0 off. */
 #ifdef __ANDROID__
+#include "../../include/nfsu_log.h"
 #include <sys/system_properties.h>
 #endif
 
@@ -158,7 +159,7 @@ static int pool_bind(VkImage img, const VkMemoryRequirements *rq)
         b->type = type;
         pool_put(b, 0, POOL_BLOCK);
         s_pool_reserved += POOL_BLOCK;
-        LOGE("texture pool: reserved %u MiB\n", (unsigned)(s_pool_reserved >> 20));
+        NFS_LOG_INFO("graphics", "  [VK] " "texture pool: reserved %u MiB\n", (unsigned)(s_pool_reserved >> 20));
         if (!pool_take(b, rq->size, rq->alignment, &at)) return 0;
     }
     {
@@ -223,7 +224,7 @@ static void pool_release(VkImage img)
 
 static void pool_report(void)
 {
-    fprintf(stderr, "[texpool] %s: %u pooled / %u block allocations, %u standalone, reserved %u MiB, used %.1f MiB\n",
+    NFS_LOG_WARN("graphics", "[texpool] %s: %u pooled / %u block allocations, %u standalone, reserved %u MiB, used %.1f MiB\n",
         s_pool_on == 1 ? "on" : "off", s_pool_hits, s_pool_allocations, s_pool_fallbacks,
         (unsigned)(s_pool_reserved >> 20), s_pool_used / 1048576.0);
 }

@@ -1,0 +1,37 @@
+# Copy as nfsu1x_env.txt into Android/data/org.nfsu.android/files/.
+# Fully restart the game after editing. No inline comments after values.
+
+# Short reproduction of missing touch/steering input. Exact 1 enables; 0 disables.
+RECOMP_INPUT_TRACE=1
+
+# Global threshold; category thresholds override it.
+# TRACE, DEBUG, INFO, NOTICE, WARN, ERROR, FATAL, OFF
+# WARNING is an alias for WARN; CRITICAL is an alias for FATAL.
+RECOMP_LOG_LEVEL=INFO
+# RECOMP_LOG_INPUT_LEVEL=TRACE
+# RECOMP_LOG_GRAPHICS_LEVEL=DEBUG
+# RECOMP_LOG_AUDIO_LEVEL=TRACE
+# RECOMP_LOG_FILES_LEVEL=DEBUG
+# RECOMP_LOG_RUNTIME_LEVEL=DEBUG
+# RECOMP_LOG_PERFORMANCE_LEVEL=INFO
+# RECOMP_LOG_KERNEL_LEVEL=TRACE
+# RECOMP_LOG_SYSTEM_LEVEL=INFO
+
+# Permit the kernel logger (zlog writes kernel.log and both combined files).
+RECOMP_NO_LOG=0
+
+# Keep noisy periodic kernel/GPU output suppressed. Use 0 when investigating it.
+RECOMP_QUIET=1
+
+# Optional once-per-second USB input snapshot. Presence enables it, even =0.
+# RECOMP_INPUT_DIAG=1
+
+# Other presence-enabled traces: remove the line to disable.
+# RECOMP_USB_TRACE=1
+# RECOMP_RUMBLE_TRACE=1
+# RECOMP_APU_TRACE=1
+
+# Numeric/explicit switches:
+# RECOMP_FPS_LOG=1
+# RECOMP_VK_TRACE=1
+# XBOX_LOG_LEVEL=3

@@ -9,6 +9,7 @@
  *
  * State objects are cached and recreated only when dirty.
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_internal.h"
 #include <string.h>
@@ -150,7 +151,7 @@ static void update_blend_state(const DWORD *rs)
 
     hr = ID3D11Device_CreateBlendState(d3d8_GetD3D11Device(), &bd, &g_blend_state);
     if (FAILED(hr))
-        fprintf(stderr, "D3D8: CreateBlendState failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateBlendState failed: 0x%08lX\n", hr);
 }
 
 static void update_depth_stencil_state(const DWORD *rs)
@@ -183,7 +184,7 @@ static void update_depth_stencil_state(const DWORD *rs)
 
     hr = ID3D11Device_CreateDepthStencilState(d3d8_GetD3D11Device(), &dsd, &g_ds_state);
     if (FAILED(hr))
-        fprintf(stderr, "D3D8: CreateDepthStencilState failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateDepthStencilState failed: 0x%08lX\n", hr);
     else
         memcpy(&g_last_ds_desc, &dsd, sizeof(dsd));
 }
@@ -225,7 +226,7 @@ static void update_rasterizer_state(const DWORD *rs)
 
     hr = ID3D11Device_CreateRasterizerState(d3d8_GetD3D11Device(), &rd, &g_raster_state);
     if (FAILED(hr))
-        fprintf(stderr, "D3D8: CreateRasterizerState failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateRasterizerState failed: 0x%08lX\n", hr);
 }
 
 /* ================================================================

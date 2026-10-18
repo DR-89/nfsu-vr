@@ -15,6 +15,7 @@
  * When NV2A register combiners are active, the combiner module
  * overrides the pixel shader (d3d8_combiners.c).
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_internal.h"
 #include "d3d8_fvf.h"
@@ -514,7 +515,7 @@ static ID3D11PixelShader *ff_ps_get_shader(UINT sig)
     free(src);
 
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: PS compile failed (sig 0x%02X): %s\n", sig,
+        NFS_LOG_ERROR("graphics", "D3D8: PS compile failed (sig 0x%02X): %s\n", sig,
                 errors ? (char *)ID3D10Blob_GetBufferPointer(errors) : "unknown");
         if (errors) ID3D10Blob_Release(errors);
         return NULL;
@@ -725,7 +726,7 @@ static ID3D11InputLayout *get_or_create_layout(DWORD fvf)
             &layout);
 
         if (FAILED(hr)) {
-            fprintf(stderr, "D3D8: CreateInputLayout failed for FVF 0x%lX: 0x%08lX\n", fvf, hr);
+            NFS_LOG_ERROR("graphics", "D3D8: CreateInputLayout failed for FVF 0x%lX: 0x%08lX\n", fvf, hr);
             layout = NULL;
         }
 
@@ -830,7 +831,7 @@ HRESULT d3d8_shaders_init(void)
     hr = D3DCompile(g_vs_source, strlen(g_vs_source), "vs_ffp",
                     NULL, NULL, "main", "vs_5_0", 0, 0, &g_vs_blob, &errors);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: VS compile failed: %s\n",
+        NFS_LOG_ERROR("graphics", "D3D8: VS compile failed: %s\n",
                 errors ? (char *)ID3D10Blob_GetBufferPointer(errors) : "unknown");
         if (errors) ID3D10Blob_Release(errors);
         return hr;
@@ -868,7 +869,7 @@ HRESULT d3d8_shaders_init(void)
     hr = ID3D11Device_CreateBuffer(d3d8_GetD3D11Device(), &cbd, NULL, &g_ps_cb);
     if (FAILED(hr)) return hr;
 
-    fprintf(stderr, "D3D8: Fixed-function shaders compiled OK (multi-texture + lighting + fog)\n");
+    NFS_LOG_DEBUG("graphics", "D3D8: Fixed-function shaders compiled OK (multi-texture + lighting + fog)\n");
     return S_OK;
 }
 

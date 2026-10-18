@@ -15,6 +15,7 @@
  *   6 = crash_select    (100 crash junctions)
  *   7 = driver_details  (Progress / Rewards / Records / Profile / Settings / Training / Extras)
  */
+#include "../../include/nfsu_log.h"
 
 #include "nv2a_pgraph_d3d11.h"
 #include "nv2a_state.h"
@@ -178,7 +179,7 @@ static void replay_pushbuffer(const uint32_t *data, uint32_t num_dwords)
     if (g_replay_frame <= 5 || (g_replay_frame % 300) == 0) {
         PgraphD3D11Stats stats;
         pgraph_d3d11_get_stats(&stats);
-        fprintf(stderr, "[PB-REPLAY] Frame %u [%s]: %u methods, %u draws, "
+        NFS_LOG_DEBUG("graphics", "[PB-REPLAY] Frame %u [%s]: %u methods, %u draws, "
                 "translator draws=%u verts=%u\n",
                 g_replay_frame, menu_names[g_current_menu],
                 method_count, draw_count,
@@ -258,7 +259,7 @@ void nv2a_pb_replay_frame(void)
     /* Detect and potentially switch menu state */
     int new_menu = detect_menu_state();
     if (new_menu != g_current_menu) {
-        fprintf(stderr, "[PB-REPLAY] Menu switch: %s -> %s\n",
+        NFS_LOG_DEBUG("graphics", "[PB-REPLAY] Menu switch: %s -> %s\n",
                 menu_names[g_current_menu], menu_names[new_menu]);
         g_current_menu = new_menu;
     }
@@ -331,13 +332,13 @@ void nv2a_pb_replay_set_active(int active)
         pgraph_d3d11_init();
         QueryPerformanceFrequency(&g_replay_freq);
         QueryPerformanceCounter(&g_replay_start_time);
-        fprintf(stderr, "[PB-REPLAY] Multi-state replay ENABLED (%d menu states)\n", MENU_COUNT);
-        fprintf(stderr, "[PB-REPLAY] Keys 1-8 switch menu states:\n");
+        NFS_LOG_DEBUG("graphics", "[PB-REPLAY] Multi-state replay ENABLED (%d menu states)\n", MENU_COUNT);
+        NFS_LOG_DEBUG("graphics", "[PB-REPLAY] Keys 1-8 switch menu states:\n");
         for (int i = 0; i < MENU_COUNT; i++)
-            fprintf(stderr, "  %d = %s (%u dwords)\n", i + 1, menu_names[i],
+            NFS_LOG_DEBUG("graphics", "  %d = %s (%u dwords)\n", i + 1, menu_names[i],
                     menu_pb_dwords[i]);
     } else {
-        fprintf(stderr, "[PB-REPLAY] Push buffer replay disabled\n");
+        NFS_LOG_DEBUG("graphics", "[PB-REPLAY] Push buffer replay disabled\n");
     }
 }
 

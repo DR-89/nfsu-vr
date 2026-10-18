@@ -10,6 +10,7 @@
 
 #ifndef BURNOUT3_NV2A_STATE_H
 #define BURNOUT3_NV2A_STATE_H
+#include "../../include/nfsu_log.h"
 
 #include "qemu_shim.h"
 #include "nv2a_regs.h"
@@ -20,13 +21,13 @@
 #endif
 
 #if DEBUG_NV2A
-# define NV2A_DPRINTF(format, ...)  fprintf(stderr, "nv2a: " format, ## __VA_ARGS__)
+# define NV2A_DPRINTF(format, ...)  NFS_LOG_DEBUG("graphics", "nv2a: " format, ## __VA_ARGS__)
 #else
 # define NV2A_DPRINTF(format, ...)  do { } while (0)
 #endif
 
 #define NV2A_XPRINTF(x, ...) do { \
-    if (x) { fprintf(stderr, "nv2a: " __VA_ARGS__); } \
+    if (x) { NFS_LOG_DEBUG("graphics", "nv2a: " __VA_ARGS__); } \
 } while (0)
 
 #define NV2A_UNCONFIRMED(...)  do {} while (0)

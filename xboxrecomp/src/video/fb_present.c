@@ -14,6 +14,7 @@
  *
  * Off unless RECOMP_FB_WINDOW is set.
  */
+#include "../../include/nfsu_log.h"
 #include <stdint.h>
 
 #if defined(_WIN32)
@@ -141,7 +142,7 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (getenv("RECOMP_KEY_TRACE")) {
             static unsigned n;
             if (n++ < 40) {
-                fprintf(stderr, "  [KEY] down vk=0x%02X\n", (unsigned)w);
+                NFS_LOG_DEBUG("graphics", "  [KEY] down vk=0x%02X\n", (unsigned)w);
                 fflush(stderr);
             }
         }
@@ -237,7 +238,7 @@ int xbox_FramebufferDumpBmp(const char *path)
     }
     free(line);
     fclose(f);
-    fprintf(stderr, "  [FBWIN] wrote %s (%ux%u from 0x%08X)\n",
+    NFS_LOG_DEBUG("graphics", "  [FBWIN] wrote %s (%ux%u from 0x%08X)\n",
             path, s_fb_width, s_fb_height, s_fb_va);
     return 0;
 }
@@ -283,7 +284,7 @@ static DWORD WINAPI fb_thread(LPVOID unused)
 
     s_rgb = (uint32_t *)calloc((size_t)s_fb_width * s_fb_height, 4);
 
-    fprintf(stderr, "  [FBWIN] framebuffer window open (%ux%u)\n",
+    NFS_LOG_DEBUG("graphics", "  [FBWIN] framebuffer window open (%ux%u)\n",
             s_fb_width, s_fb_height);
 
     while (InterlockedCompareExchange(&s_fb_running, 1, 1)) {

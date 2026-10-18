@@ -18,6 +18,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "../../include/nfsu_log.h"
 
 #include "apu_state.h"
 #include "fpconv.h"
@@ -25,7 +26,7 @@
 /* #define DEBUG_MCPX */
 
 #ifdef DEBUG_MCPX
-#define DPRINTF(fmt, ...) fprintf(stderr, fmt, ## __VA_ARGS__)
+#define DPRINTF(fmt, ...) NFS_LOG_STREAM("audio", NFS_LOG_LEVEL_INFO, fmt, ## __VA_ARGS__)
 #else
 #define DPRINTF(fmt, ...) do { } while (0)
 #endif
@@ -587,7 +588,7 @@ void mcpx_apu_vp_write(void *opaque, hwaddr addr, uint64_t val,
     if (trace < 0) trace = getenv("RECOMP_APU_TRACE") != NULL;
     if (trace && traced < 4000) {
         traced++;
-        fprintf(stderr, "[APU-FE] %04X %08X\n", (unsigned)addr, (unsigned)val);
+        NFS_LOG_INFO("audio", "[APU-FE] %04X %08X\n", (unsigned)addr, (unsigned)val);
     }
     /* Dispatch known methods through fe_method */
     fe_method(d, (uint32_t)addr, (uint32_t)val);
@@ -740,7 +741,7 @@ static float voice_step_envelope(MCPXAPUState *d, uint16_t v, uint32_t reg_0,
         return 0.0f;
 
     default:
-        fprintf(stderr, "[APU] Unknown envelope state 0x%x\n", cur);
+        NFS_LOG_INFO("audio", "[APU] Unknown envelope state 0x%x\n", cur);
         return 0.0f;
     }
 }
@@ -1109,7 +1110,7 @@ static int vdump_want(uint16_t v)
         s_vdump.cap = (size_t)s_vdump.left * NUM_SAMPLES_PER_FRAME * 4;
         s_vdump.buf = (float *)malloc(s_vdump.cap * sizeof(float));
         s_vdump.on = s_vdump.buf != NULL;
-        fprintf(stderr, "[APU] voice dump: v%03X to %s\n", s_vdump.voice, s_vdump.path);
+        NFS_LOG_INFO("audio", "[APU] voice dump: v%03X to %s\n", s_vdump.voice, s_vdump.path);
     }
     return s_vdump.on && !s_vdump.done && v == s_vdump.voice;
 }
@@ -1121,7 +1122,7 @@ static void vdump_frame(MCPXAPUState *d, uint16_t v, float post[][2], int fmode,
     if (!(++frames % 1500)) {
         uint32_t fca = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_FCA, 0xFFFFFFFF);
         uint32_t fcb = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_FCB, 0xFFFFFFFF);
-        fprintf(stderr, "[APU-VD] v%03X fmode %d fca %08X fcb %08X rate %.6f ea %.3f"
+        NFS_LOG_INFO("audio", "[APU-VD] v%03X fmode %d fca %08X fcb %08X rate %.6f ea %.3f"
                         " vol %03X %03X %03X %03X %03X %03X %03X %03X bins %d %d %d %d %d %d %d %d"
                         " fmt %08X ba %08X ebo %X cbo %X phys %08X\n", v, fmode, fca, fcb, rate, ea,
                 vol[0], vol[1], vol[2], vol[3], vol[4], vol[5], vol[6], vol[7],
@@ -1143,7 +1144,7 @@ static void vdump_frame(MCPXAPUState *d, uint16_t v, float post[][2], int fmode,
     if (--s_vdump.left <= 0) {
         FILE *f = fopen(s_vdump.path, "wb");
         if (f) { fwrite(s_vdump.buf, sizeof(float), s_vdump.n, f); fclose(f); }
-        fprintf(stderr, "[APU] voice dump written (%zu floats)\n", s_vdump.n);
+        NFS_LOG_INFO("audio", "[APU] voice dump written (%zu floats)\n", s_vdump.n);
         s_vdump.done = 1;
     }
 }
@@ -1402,7 +1403,7 @@ static void apu_vp_trace_second(void)
     static DWORD next;
     if (g_tr_on <= 0 || GetTickCount() < next) return;
     next = GetTickCount() + 1000;
-    fprintf(stderr, "[APU-VP] unpaused %d sounding %d (voice-frames/s) mixpeak %.3f\n"
+    NFS_LOG_TRACE("audio", "[APU-VP] unpaused %d sounding %d (voice-frames/s) mixpeak %.3f\n"
                     "[APU-VP]   quiet: %s\n[APU-VP]   loud:  %s\n",
             g_tr_unpaused, g_tr_sounding, g_vp_mix_peak, g_tr_quiet, g_tr_loud);
     g_tr_unpaused = g_tr_sounding = 0;
@@ -1468,7 +1469,7 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
             uint32_t st, tot;
             if (next) {
                 mcpx_apu_ring_stats(&st, &tot);
-                fprintf(stderr, "[APU] ring voices: %u of %u samples stale (%.2f%%)\n",
+                NFS_LOG_INFO("audio", "[APU] ring voices: %u of %u samples stale (%.2f%%)\n",
                         st, tot, tot ? 100.0 * st / tot : 0.0);
             }
             next = GetTickCount() + 10000;

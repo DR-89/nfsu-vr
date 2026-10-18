@@ -11,6 +11,7 @@
  * 3. Zero-fill the BSS region
  * 4. Set memory protection (read-only for .rdata)
  */
+#include "../../include/nfsu_log.h"
 
 #include "xbox_memory_layout.h"
 #include "kernel.h"
@@ -443,11 +444,11 @@ static void ac97_arm_write_trap(void)
             g_ac97_veh = NULL;
         }
         g_ac97_page = NULL;
-        fprintf(stderr, "  AC97: could not arm the bus-master write trap;"
+        NFS_LOG_ERROR("runtime", "  AC97: could not arm the bus-master write trap;"
                         " a channel reset will spin\n");
         return;
     }
-    fprintf(stderr, "  AC97: bus-master writes trapped at 0x%08X"
+    NFS_LOG_INFO("runtime", "  AC97: bus-master writes trapped at 0x%08X"
                     " (channel reset completes on write)\n",
             XBOX_MCPX_BASE + AC97_NABM_OFFSET);
 }
@@ -511,7 +512,7 @@ int xbox_MmioRegister(uint32_t lo, uint32_t hi,
     g_mmio[g_mmio_count].write = write;
     g_mmio[g_mmio_count].opaque = opaque;
     g_mmio_count++;
-    fprintf(stderr, "  MMIO: 0x%08X..0x%08X routed to a device model\n", lo, hi);
+    NFS_LOG_INFO("runtime", "  MMIO: 0x%08X..0x%08X routed to a device model\n", lo, hi);
     return 0;
 }
 
@@ -561,7 +562,7 @@ int xbox_ApuDspAckWord(uint32_t va)
     if (g_dsp_ack_count >= XBOX_MAX_DSP_ACK)
         return -1;
     g_dsp_ack[g_dsp_ack_count++] = va;
-    fprintf(stderr, "  DSP ack: command word 0x%08X will be completed"
+    NFS_LOG_INFO("runtime", "  DSP ack: command word 0x%08X will be completed"
                     " immediately\n", va);
     return 0;
 }
@@ -583,7 +584,7 @@ static void dsp_ack_init(void)
         q = (*end == ',') ? end + 1 : end;
     }
     if (g_dsp_ack_count)
-        fprintf(stderr, "  DSP ack: %d command word(s) will be completed"
+        NFS_LOG_INFO("runtime", "  DSP ack: %d command word(s) will be completed"
                         " immediately\n", g_dsp_ack_count);
 }
 
@@ -625,7 +626,7 @@ static void poke_init(void)
         q = (*end == ',') ? end + 1 : end;
     }
     if (g_poke_count)
-        fprintf(stderr, "  POKE: holding %d guest global(s) -- bring-up probe,"
+        NFS_LOG_INFO("runtime", "  POKE: holding %d guest global(s) -- bring-up probe,"
                         " not a fix\n", g_poke_count);
 }
 
@@ -699,7 +700,7 @@ int xbox_Nv2aMirrorFence(uint32_t device_ptr_va,
     g_fence_mirrors[g_fence_mirror_count].put_off = put_off;
     g_fence_mirrors[g_fence_mirror_count].get_ptr_off = get_ptr_off;
     g_fence_mirror_count++;
-    fprintf(stderr, "  NV2A fence mirror: device at 0x%08X,"
+    NFS_LOG_INFO("runtime", "  NV2A fence mirror: device at 0x%08X,"
             " PUT +0x%X -> *(GET +0x%X)\n",
             device_ptr_va, put_off, get_ptr_off);
     return 0;
@@ -769,7 +770,7 @@ int xbox_Nv2aMirrorCounter(uint32_t device_ptr_va,
     g_counter_mirrors[g_counter_mirror_count].src_off = src_off;
     g_counter_mirrors[g_counter_mirror_count].dst_off = dst_off;
     g_counter_mirror_count++;
-    fprintf(stderr, "  NV2A counter mirror: device at 0x%08X,"
+    NFS_LOG_INFO("runtime", "  NV2A counter mirror: device at 0x%08X,"
             " +0x%X -> +0x%X\n", device_ptr_va, src_off, dst_off);
     return 0;
 }
@@ -830,7 +831,7 @@ int xbox_Nv2aFrameCounter(uint32_t device_ptr_va, uint32_t counter_off)
     g_frame_counters[g_frame_counter_count].device_ptr_va = device_ptr_va;
     g_frame_counters[g_frame_counter_count].counter_off   = counter_off;
     g_frame_counter_count++;
-    fprintf(stderr, "  Frame counter: device at 0x%08X, count +0x%X @ %d Hz\n",
+    NFS_LOG_INFO("runtime", "  Frame counter: device at 0x%08X, count +0x%X @ %d Hz\n",
             device_ptr_va, counter_off, 1000 / XBOX_FRAME_PERIOD_MS);
     return 0;
 }
@@ -986,7 +987,7 @@ static void framebuffer_probe_tick(void)
         sum = sum * 33u + p[i];
         if (p[i]) nonzero++;
     }
-    fprintf(stderr, "  [FB] 0x%08X sum=%08X nonzero=%u/%u %s\n",
+    NFS_LOG_INFO("runtime", "  [FB] 0x%08X sum=%08X nonzero=%u/%u %s\n",
             s_fb_va, sum, nonzero, n,
             sum != last_sum ? "CHANGED" : "same");
     last_sum = sum;
@@ -1379,7 +1380,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
                 if (s_nv2a_trace && !xbox_log_quiet()) {
                     uint32_t g = *(volatile uint32_t *)
                                  ((char *)regs + NV2A_USER_DMA_GET);
-                    fprintf(stderr, "  [NV2A] DMA_PUT = 0x%08X  DMA_GET = "
+                    NFS_LOG_INFO("runtime", "  [NV2A] DMA_PUT = 0x%08X  DMA_GET = "
                             "0x%08X%s\n", put, g,
                             g == put ? "" : "  (GPU behind)");
                     fflush(stderr);
@@ -1391,7 +1392,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
             uint32_t start = *(volatile uint32_t *)((char *)regs + 0x600800);
             if (start != last_start) {
                 last_start = start;
-                fprintf(stderr, "  [NV2A] PCRTC_START = 0x%08X\n", start);
+                NFS_LOG_INFO("runtime", "  [NV2A] PCRTC_START = 0x%08X\n", start);
                 fflush(stderr);
             }
         }
@@ -1453,7 +1454,7 @@ static void xbox_Nv2aAckStart(void)
     CloseHandle(CreateThread(NULL, 0, nv2a_flag_thread, g_nv2a_memory, 0, NULL));
     CloseHandle(CreateThread(NULL, 0, tick_count_thread, NULL, 0, NULL));
     if (g_nv2a_ack_thread) {
-        fprintf(stderr, "  NV2A busy-bit ack: %zu register(s) acknowledged\n",
+        NFS_LOG_INFO("runtime", "  NV2A busy-bit ack: %zu register(s) acknowledged\n",
                 sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]));
     }
 }
@@ -1532,7 +1533,7 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
         seen[count] = va;
         hits[count] = 0;
         count++;
-        fprintf(stderr, "[ABI] sub_%08X:%s%s%s%s\n"
+        NFS_LOG_INFO("runtime", "[ABI] sub_%08X:%s%s%s%s\n"
                         "      ebx %08X->%08X esi %08X->%08X"
                         " edi %08X->%08X esp %08X->%08X\n",
                 va,
@@ -1547,12 +1548,12 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
          * suspects, so name them. */
         {
             int t;
-            fprintf(stderr, "      esp delta %+d, recent icall targets:",
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "      esp delta %+d, recent icall targets:",
                     (int)(g_esp - esp0));
             for (t = 4; t >= 1; t--)
-                fprintf(stderr, " %08X",
+                NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " %08X",
                         g_icall_trace[(g_icall_trace_idx - t) & 15]);
-            fputc('\n', stderr);
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "\n");
         }
         fflush(stderr);
     }
@@ -1678,7 +1679,7 @@ static void watch_report(void)
 
     if (now == g_watch_last)
         return;
-    fprintf(stderr, "[WATCH] [%08X] %08X -> %08X  (esp=%08X)\n",
+    NFS_LOG_INFO("runtime", "[WATCH] [%08X] %08X -> %08X  (esp=%08X)\n",
             g_watch_va, g_watch_last, now, esp);
     g_watch_last = now;
 
@@ -1693,7 +1694,7 @@ static void watch_report(void)
             break;
         v = *(const uint32_t *)(mem + slot);
         if (watch_is_code(v)) {
-            fprintf(stderr, "         [esp+%-4u] %08X\n", i * 4u, v);
+            NFS_LOG_INFO("runtime", "         [esp+%-4u] %08X\n", i * 4u, v);
             shown++;
         }
     }
@@ -1707,7 +1708,7 @@ static void watch_report(void)
             uint32_t slot = esp + i * 4u;
             if (!peek_readable(slot))
                 break;
-            fprintf(stderr, "         raw[esp+%-4u] %08X\n", i * 4u,
+            NFS_LOG_INFO("runtime", "         raw[esp+%-4u] %08X\n", i * 4u,
                     *(const uint32_t *)(mem + slot));
         }
     }
@@ -1800,7 +1801,7 @@ static DWORD WINAPI watch_resolver(LPVOID unused)
         Sleep(20);
     }
     if (!g_watch_page)
-        fprintf(stderr, "  WATCH: %u-deep chain from 0x%08X never resolved\n",
+        NFS_LOG_INFO("runtime", "  WATCH: %u-deep chain from 0x%08X never resolved\n",
                 g_watch_derefs, g_watch_root);
     return 0;
 }
@@ -1823,7 +1824,7 @@ void xbox_WatchInit(void)
         g_watch_off = (uint32_t)strtoul(endp + 1, NULL, 0);
 
     if (g_watch_derefs) {
-        fprintf(stderr, "  WATCH: resolving %u-deep chain from 0x%08X "
+        NFS_LOG_INFO("runtime", "  WATCH: resolving %u-deep chain from 0x%08X "
                         "+0x%X\n", g_watch_derefs, g_watch_root, g_watch_off);
         CloseHandle(CreateThread(NULL, 0, watch_resolver, NULL, 0, NULL));
         return;
@@ -1837,7 +1838,7 @@ static int watch_arm(uint32_t va)
 
     g_watch_va = va;
     if (!peek_readable(g_watch_va)) {
-        fprintf(stderr, "  WATCH: 0x%08X is not in a mapped window; "
+        NFS_LOG_INFO("runtime", "  WATCH: 0x%08X is not in a mapped window; "
                         "not armed\n", g_watch_va);
         return 0;
     }
@@ -1854,11 +1855,11 @@ static int watch_arm(uint32_t va)
             g_watch_veh = NULL;
         }
         g_watch_page = NULL;
-        fprintf(stderr, "  WATCH: cannot trap 0x%08X; not armed\n",
+        NFS_LOG_ERROR("runtime", "  WATCH: cannot trap 0x%08X; not armed\n",
                 g_watch_va);
         return 0;
     }
-    fprintf(stderr, "  WATCH: writes to the page of 0x%08X are trapped "
+    NFS_LOG_INFO("runtime", "  WATCH: writes to the page of 0x%08X are trapped "
                     "(current %08X)\n", g_watch_va, g_watch_last);
     fflush(stderr);
     return 1;
@@ -1879,7 +1880,7 @@ void xbox_PeekSample(const char *label)
         return;
     strncpy(buf, spec, sizeof buf - 1);
     buf[sizeof buf - 1] = 0;
-    fprintf(stderr, "  %s:", label ? label : "peek");
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "  %s:", label ? label : "peek");
     for (q = buf; *q; ) {
         /* "[[0x006DF414]]+0x14" follows two pointers and adds an offset.
          * The fields worth watching during bring-up are usually inside heap
@@ -1905,12 +1906,12 @@ void xbox_PeekSample(const char *label)
         if (*end == '+')
             a += (uint32_t)strtoul(end + 1, &end, 0);
         if (ok && peek_readable(a))
-            fprintf(stderr, " [%08X]=%08X", a, *(const uint32_t *)(mem + a));
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " [%08X]=%08X", a, *(const uint32_t *)(mem + a));
         else
-            fprintf(stderr, " [%08X]=??", a);
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " [%08X]=??", a);
         q = (*end == ',') ? end + 1 : end;
     }
-    fprintf(stderr, "\n");
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "\n");
     fflush(stderr);
 }
 
@@ -1925,7 +1926,7 @@ static void watchdog_dump(const char *why)
 
     mem = (const uint8_t *)g_memory_offset;
     esp = s_watchdog_esp ? *s_watchdog_esp : 0;
-    fprintf(stderr, "[WATCHDOG] %s; guest esp=0x%08X\n"
+    NFS_LOG_INFO("runtime", "[WATCHDOG] %s; guest esp=0x%08X\n"
             "  regs: eax=%08X ecx=%08X edx=%08X ebx=%08X esi=%08X edi=%08X\n",
             why, esp,
             s_watchdog_regs[0] ? *s_watchdog_regs[0] : 0,
@@ -1942,13 +1943,13 @@ static void watchdog_dump(const char *why)
         /* The running indirect-call total separates a hang from mere
          * slowness. Kernel calls cannot: a pure CPU loop makes none, so
          * "same count at 20s and 60s" proves nothing about it. */
-        fprintf(stderr, "  icalls so far: %llu\n",
+        NFS_LOG_INFO("runtime", "  icalls so far: %llu\n",
                 (unsigned long long)g_icall_count);
-        fprintf(stderr, "  recent ICALL targets:");
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "  recent ICALL targets:");
         for (k = 0; k < 16; k++)
-            fprintf(stderr, " %08X",
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " %08X",
                     g_icall_trace[(g_icall_trace_idx + k) & 15]);
-        fprintf(stderr, "\n");
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "\n");
     }
     /* Guest globals worth seeing at the moment of the hang.
      *
@@ -1975,7 +1976,7 @@ static void watchdog_dump(const char *why)
     if (g_nv2a_memory) {
         const char *r = (const char *)g_nv2a_memory;
 #define WD_NV2A(off) (*(const volatile uint32_t *)(r + (off)))
-        fprintf(stderr, "  NV2A USER  PUT=%08X GET=%08X\n"
+        NFS_LOG_INFO("runtime", "  NV2A USER  PUT=%08X GET=%08X\n"
                         "  NV2A PFIFO PUT=%08X GET=%08X REF=%08X SUBR=%08X\n",
                 WD_NV2A(NV2A_USER_DMA_PUT), WD_NV2A(NV2A_USER_DMA_GET),
                 WD_NV2A(NV2A_PFIFO_DMA_PUT), WD_NV2A(NV2A_PFIFO_DMA_GET),
@@ -1986,7 +1987,7 @@ static void watchdog_dump(const char *why)
     for (i = 0; i < 400 && esp; i++) {
         uint32_t a = esp + i * 4;
         if (a < XBOX_STACK_BASE || a >= XBOX_STACK_TOP) break;
-        fprintf(stderr, "    GS %08X %08X\n", a,
+        NFS_LOG_INFO("runtime", "    GS %08X %08X\n", a,
                 *(const uint32_t *)(mem + a));
     }
     fflush(stderr);
@@ -2101,11 +2102,11 @@ void xbox_perf_sample(void)
     long long kc = xbox_kernel_call_count();
     uint32_t k, idx = g_icall_trace_idx;
 
-    fprintf(stderr, "[perf] guest: %llu indirect calls, %lld kernel calls; last targets",
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "[perf] guest: %llu indirect calls, %lld kernel calls; last targets",
             (unsigned long long)(ic - last_icalls), kc - last_kcalls);
     for (k = 1; k <= 6; k++)
-        fprintf(stderr, " %08X", g_icall_trace[(idx - k) & 15]);
-    fprintf(stderr, "\n");
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " %08X", g_icall_trace[(idx - k) & 15]);
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "\n");
     last_icalls = ic;
     last_kcalls = kc;
 }
@@ -2118,7 +2119,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     const uint8_t *xbe = (const uint8_t *)xbe_data;
 
     if (g_memory_base) {
-        fprintf(stderr, "xbox_MemoryLayoutInit: already initialized\n");
+        NFS_LOG_INFO("runtime", "xbox_MemoryLayoutInit: already initialized\n");
         return FALSE;
     }
 
@@ -2155,8 +2156,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         NULL                    /* unnamed mapping */
     );
     if (!g_mapping_handle) {
-        fprintf(stderr, "xbox_MemoryLayoutInit: CreateFileMapping failed (error %lu)\n",
-                GetLastError());
+        NFS_LOG_ERROR("runtime", "xbox_MemoryLayoutInit: CreateFileMapping failed (error %lu)\n",
+                (unsigned long)GetLastError());
         return FALSE;
     }
 
@@ -2205,7 +2206,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 
 #ifdef __ANDROID__
         if (!g_memory_base) {
-            fprintf(stderr, "Cannot reserve the Android guest address space\n");
+            NFS_LOG_ERROR("runtime", "Cannot reserve the Android guest address space\n");
             CloseHandle(g_mapping_handle);
             g_mapping_handle = NULL;
             return FALSE;
@@ -2234,7 +2235,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     }
 
     if (!g_memory_base) {
-        fprintf(stderr, "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
+        NFS_LOG_ERROR("runtime", "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
                 g_memory_size / 1024);
         CloseHandle(g_mapping_handle);
         g_mapping_handle = NULL;
@@ -2296,22 +2297,22 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 #endif
 #endif
         if (host_page > 0 && (uint32_t)host_page > XBOX_TIB_MAIN) {
-            fprintf(stderr, "  RECOMP_TRAP_NULL: not available -- the host page "
+            NFS_LOG_INFO("runtime", "  RECOMP_TRAP_NULL: not available -- the host page "
                     "is %ld bytes, so trapping guest page zero would also trap "
                     "the TIB at 0x%08X\n", host_page, XBOX_TIB_MAIN);
         } else {
             if (VirtualProtect(g_memory_base, 0x1000, PAGE_NOACCESS, &old_protect)) {
-                fprintf(stderr, "  guest page 0 is PAGE_NOACCESS"
+                NFS_LOG_INFO("runtime", "  guest page 0 is PAGE_NOACCESS"
                                 " (null dereferences fault)\n");
             }
         }
     }
 
     if (g_memory_offset == 0) {
-        fprintf(stderr, "xbox_MemoryLayoutInit: mapped %zu KB at 0x%08X (original Xbox address)\n",
+        NFS_LOG_INFO("runtime", "xbox_MemoryLayoutInit: mapped %zu KB at 0x%08X (original Xbox address)\n",
                 g_memory_size / 1024, XBOX_MAP_START);
     } else {
-        fprintf(stderr, "xbox_MemoryLayoutInit: mapped %zu KB at 0x%p (offset %+td from Xbox base)\n",
+        NFS_LOG_INFO("runtime", "xbox_MemoryLayoutInit: mapped %zu KB at 0x%p (offset %+td from Xbox base)\n",
                 g_memory_size / 1024, g_memory_base, g_memory_offset);
     }
 
@@ -2338,7 +2339,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         if (header_size > xbe_size)
             header_size = (DWORD)xbe_size;
         memcpy(XBOX_VA(XBOX_BASE_ADDRESS), xbe, header_size);
-        fprintf(stderr, "  XBE header: %u bytes at %p (Xbox VA 0x%08X)\n",
+        NFS_LOG_INFO("runtime", "  XBE header: %u bytes at %p (Xbox VA 0x%08X)\n",
                 header_size, XBOX_VA(XBOX_BASE_ADDRESS), XBOX_BASE_ADDRESS);
     }
 
@@ -2367,7 +2368,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 
         if (num_sections > 64) num_sections = 64;  /* sanity cap */
 
-        fprintf(stderr, "  XBE sections: %u (headers at file offset 0x%08X)\n",
+        NFS_LOG_INFO("runtime", "  XBE sections: %u (headers at file offset 0x%08X)\n",
                 num_sections, sect_headers_off);
 
         for (DWORD si = 0; si < num_sections; si++) {
@@ -2412,8 +2413,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             if (copy_size > 0 && have_data) {
                 memcpy(XBOX_VA(sec_va), xbe + sec_raw_off, copy_size);
             } else if (!have_data) {
-                fprintf(stderr,
-                        "  WARNING: section %u (%s) raw data 0x%08X+%u runs past "
+                NFS_LOG_WARN("runtime", "  WARNING: section %u (%s) raw data 0x%08X+%u runs past "
                         "the %zu-byte image -- left zeroed\n",
                         si, sec_name, sec_raw_off, copy_size, xbe_size);
                 sections_short++;
@@ -2443,16 +2443,15 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 total_bytes += copy_size;
             }
 
-            fprintf(stderr, "  [%2u] %-12s VA=0x%08X vsize=%-8u raw=0x%08X rsize=%-8u%s\n",
+            NFS_LOG_INFO("runtime", "  [%2u] %-12s VA=0x%08X vsize=%-8u raw=0x%08X rsize=%-8u%s\n",
                     si, sec_name, sec_va, sec_vsize, sec_raw_off, sec_raw_size,
                     (sec_raw_size < sec_vsize) ? " (BSS)" : "");
         }
 
-        fprintf(stderr, "  Loaded %d/%u sections (%zu bytes total)\n",
+        NFS_LOG_INFO("runtime", "  Loaded %d/%u sections (%zu bytes total)\n",
                 sections_loaded, num_sections, total_bytes);
         if (sections_short) {
-            fprintf(stderr,
-                    "  ERROR: %d section(s) had no data in the image -- the XBE "
+            NFS_LOG_ERROR("runtime", "  ERROR: %d section(s) had no data in the image -- the XBE "
                     "is truncated or was read short; the title will not run\n",
                     sections_short);
         }
@@ -2496,10 +2495,10 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 thunk_count++;
             }
             xbox_kernel_set_thunk_address(thunk_va, thunk_count);
-            fprintf(stderr, "  Kernel thunks: %u entries at Xbox VA 0x%08X\n",
+            NFS_LOG_INFO("runtime", "  Kernel thunks: %u entries at Xbox VA 0x%08X\n",
                     thunk_count, thunk_va);
         } else {
-            fprintf(stderr, "  WARNING: kernel thunk VA 0x%08X out of range (raw=0x%08X)\n",
+            NFS_LOG_WARN("runtime", "  WARNING: kernel thunk VA 0x%08X out of range (raw=0x%08X)\n",
                     thunk_va, thunk_raw);
         }
     }
@@ -2525,7 +2524,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      * g_esp is the global stack pointer shared by all translated functions.
      */
     g_esp = XBOX_STACK_TOP;
-    fprintf(stderr, "  Stack: %u KB at Xbox VA 0x%08X (ESP = 0x%08X)\n",
+    NFS_LOG_INFO("runtime", "  Stack: %u KB at Xbox VA 0x%08X (ESP = 0x%08X)\n",
             XBOX_STACK_SIZE / 1024, XBOX_STACK_BASE, g_esp);
 
     /*
@@ -2639,7 +2638,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 g_tls_template_va = FAKE_TLS_BLOCK_VA;
                 g_tls_total       = total;
 
-                fprintf(stderr, "  TLS: %u-byte block at 0x%08X,"
+                NFS_LOG_INFO("runtime", "  TLS: %u-byte block at 0x%08X,"
                         " fs:[4] = 0x%08X (index will be %d)\n",
                         total, FAKE_TLS_BLOCK_VA, FAKE_TLS_BLOCK_VA + total,
                         -(int)(total / 4));
@@ -2648,7 +2647,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         #undef FAKE_TLS_BLOCK_VA
         #undef FAKE_TLS_THREAD_VA
 
-        fprintf(stderr, "  TIB: fake TIB at VA 0x%X, TLS at 0x%08X, RW data at 0x%08X\n",
+        NFS_LOG_INFO("runtime", "  TIB: fake TIB at VA 0x%X, TLS at 0x%08X, RW data at 0x%08X\n",
                 XBOX_FS_BASE, FAKE_TLS_VA, FAKE_RWDATA_VA);
 
         #undef FAKE_TLS_VA
@@ -2693,12 +2692,12 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 PAGE_READWRITE
             );
         if (g_contig_memory) {
-            fprintf(stderr, "  Contiguous window: %u MB at Xbox VA 0x%08X\n",
+            NFS_LOG_INFO("runtime", "  Contiguous window: %u MB at Xbox VA 0x%08X\n",
                     XBOX_CONTIG_SIZE / (1024 * 1024), XBOX_CONTIG_BASE);
         } else {
-            fprintf(stderr, "  WARNING: contiguous window at 0x%08X failed "
+            NFS_LOG_ERROR("runtime", "  WARNING: contiguous window at 0x%08X failed "
                     "(error %lu); pinned physical allocations will fault\n",
-                    XBOX_CONTIG_BASE, GetLastError());
+                    XBOX_CONTIG_BASE, (unsigned long)GetLastError());
         }
     }
 
@@ -2736,13 +2735,13 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                     || getenv("RECOMP_PB_SCAN") != NULL
                     || getenv("RECOMP_PB_EXEC") != NULL;
         if (g_nv2a_memory) {
-            fprintf(stderr, "  NV2A register aperture: %u MB at Xbox VA "
+            NFS_LOG_INFO("runtime", "  NV2A register aperture: %u MB at Xbox VA "
                     "0x%08X (zeroed, no register semantics)\n",
                     XBOX_NV2A_SIZE / (1024 * 1024), XBOX_NV2A_BASE);
         } else {
-            fprintf(stderr, "  WARNING: NV2A aperture at 0x%08X failed "
+            NFS_LOG_ERROR("runtime", "  WARNING: NV2A aperture at 0x%08X failed "
                     "(error %lu); D3D register access will fault\n",
-                    XBOX_NV2A_BASE, GetLastError());
+                    XBOX_NV2A_BASE, (unsigned long)GetLastError());
         }
     }
 
@@ -2824,7 +2823,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                                        + MCPX_AC97_CODEC_STATUS)
                     |= MCPX_AC97_CODEC_READY;
                 g_ac97_poll_page = (char *)g_mcpx_memory + AC97_NABM_OFFSET;
-                fprintf(stderr, "  AC97: codec reported ready at 0x%08X"
+                NFS_LOG_INFO("runtime", "  AC97: codec reported ready at 0x%08X"
                                 " (plain memory; reset bits polled)\n",
                         XBOX_MCPX_BASE + MCPX_AC97_CODEC_STATUS);
             } else if (getenv("RECOMP_AC97_READY")) {
@@ -2842,7 +2841,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                                    PAGE_NOACCESS, &old_protect))
                     g_apu_mmio_trapped = 1;
                 if (g_apu_mmio_trapped)
-                    fprintf(stderr, "  APU: 0x%08X..0x%08X trapped for MMIO\n",
+                    NFS_LOG_INFO("runtime", "  APU: 0x%08X..0x%08X trapped for MMIO\n",
                             XBOX_MCPX_BASE, XBOX_MCPX_BASE + 0x00080000u);
                 *(volatile uint32_t *)((char *)g_mcpx_memory
                                        + MCPX_AC97_CODEC_STATUS)
@@ -2850,17 +2849,17 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 /* Before the trap is armed: this write would otherwise be
                  * the first thing to fault. */
                 ac97_arm_write_trap();
-                fprintf(stderr, "  AC97: codec reported ready at 0x%08X"
+                NFS_LOG_INFO("runtime", "  AC97: codec reported ready at 0x%08X"
                                 " (DirectSound will initialise)\n",
                         XBOX_MCPX_BASE + MCPX_AC97_CODEC_STATUS);
             }
-            fprintf(stderr, "  MCPX device aperture: %u MB at Xbox VA "
+            NFS_LOG_INFO("runtime", "  MCPX device aperture: %u MB at Xbox VA "
                     "0x%08X (APU/AC97/USB/NIC, zeroed)\n",
                     XBOX_MCPX_SIZE / (1024 * 1024), XBOX_MCPX_BASE);
         } else {
-            fprintf(stderr, "  WARNING: MCPX aperture at 0x%08X failed "
+            NFS_LOG_ERROR("runtime", "  WARNING: MCPX aperture at 0x%08X failed "
                     "(error %lu); USB/audio register access will fault\n",
-                    XBOX_MCPX_BASE, GetLastError());
+                    XBOX_MCPX_BASE, (unsigned long)GetLastError());
         }
     }
 
@@ -2876,13 +2875,13 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             PAGE_READWRITE
         );
         if (g_flash_memory) {
-            fprintf(stderr, "  Flash ROM aperture: %u MB at Xbox VA "
+            NFS_LOG_INFO("runtime", "  Flash ROM aperture: %u MB at Xbox VA "
                     "0x%08X (zeroed, not a real BIOS image)\n",
                     XBOX_FLASH_SIZE / (1024 * 1024), XBOX_FLASH_BASE);
         } else {
-            fprintf(stderr, "  WARNING: flash aperture at 0x%08X failed "
+            NFS_LOG_ERROR("runtime", "  WARNING: flash aperture at 0x%08X failed "
                     "(error %lu); a title reading flash will fault\n",
-                    XBOX_FLASH_BASE, GetLastError());
+                    XBOX_FLASH_BASE, (unsigned long)GetLastError());
         }
     }
 
@@ -2916,10 +2915,10 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
              * section search finds nothing, which is the safe path. */
             memset(g_kernel_memory, 0, KERNEL_PAGE_SIZE);
             *(uint32_t *)((uint8_t *)g_kernel_memory + 0x3C) = 0x80;  /* e_lfanew */
-            fprintf(stderr, "  Kernel: fake PE header at Xbox VA 0x%08X (native %p)\n",
+            NFS_LOG_INFO("runtime", "  Kernel: fake PE header at Xbox VA 0x%08X (native %p)\n",
                     XBOX_KERNEL_BASE, g_kernel_memory);
         } else {
-            fprintf(stderr, "  WARNING: could not map Xbox kernel VA 0x%08X\n",
+            NFS_LOG_ERROR("runtime", "  WARNING: could not map Xbox kernel VA 0x%08X\n",
                     XBOX_KERNEL_BASE);
         }
         #undef XBOX_KERNEL_BASE
@@ -2927,7 +2926,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     }
 
     /* Initialize the dynamic heap. */
-    fprintf(stderr, "  Heap: %u MB at Xbox VA 0x%08X-0x%08X\n",
+    NFS_LOG_INFO("runtime", "  Heap: %u MB at Xbox VA 0x%08X-0x%08X\n",
             (unsigned)((XBOX_HEAP_TOP - XBOX_HEAP_BASE) / (1024 * 1024)),
             XBOX_HEAP_BASE, XBOX_HEAP_TOP);
 
@@ -2968,7 +2967,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             uint64_t guest_hi = guest_lo + g_memory_size;
 
             if (guest_lo < tiled_hi && tiled_lo < guest_hi) {
-                fprintf(stderr, "  Mirror %d: skipped, overlaps the tiled"
+                NFS_LOG_INFO("runtime", "  Mirror %d: skipped, overlaps the tiled"
                                 " aperture at 0x%08X\n",
                         m + 1, (unsigned)XBOX_TILED_BASE);
                 continue;
@@ -2988,11 +2987,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             if (g_mirror_views[m]) {
                 mirrors_ok++;
             } else {
-                fprintf(stderr, "  Mirror %d: FAILED at %p (error %lu)\n",
-                        m + 1, (void *)mirror_base, GetLastError());
+                NFS_LOG_ERROR("runtime", "  Mirror %d: FAILED at %p (error %lu)\n",
+                        m + 1, (void *)mirror_base, (unsigned long)GetLastError());
             }
         }
-        fprintf(stderr, "  RAM mirror: %d/%d views mapped (covers %d MB)\n",
+        NFS_LOG_INFO("runtime", "  RAM mirror: %d/%d views mapped (covers %d MB)\n",
                 mirrors_ok, XBOX_NUM_MIRRORS,
                 (int)((mirrors_ok + 1) * g_memory_size / (1024 * 1024)));
     }
@@ -3031,14 +3030,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         android_release_span_window((uintptr_t)extvma_base, (size_t)extvma_size);
         if (VirtualAlloc(extvma_base, (SIZE_T)extvma_size, MEM_RESERVE, PAGE_NOACCESS)) {
             g_xbox_extvma_reserved = 1;
-            fprintf(stderr, "  Extended VMA: reserved %llu MB at %p\n",
+            NFS_LOG_INFO("runtime", "  Extended VMA: reserved %llu MB at %p\n",
                     (unsigned long long)(extvma_size / (1024 * 1024)), extvma_base);
         } else {
-            fprintf(stderr, "  Extended VMA: FAILED to reserve %llu MB at %p (error %lu) --"
+            NFS_LOG_ERROR("runtime", "  Extended VMA: FAILED to reserve %llu MB at %p (error %lu) --"
                             " a title reservation up here will get a clean failure"
                             " instead of using this memory\n",
                     (unsigned long long)(extvma_size / (1024 * 1024)), extvma_base,
-                    GetLastError());
+                    (unsigned long)GetLastError());
         }
     }
 
@@ -3106,29 +3105,29 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 
                 *via_tiled = 0xA5C30F17u;
                 if (*via_contig != 0xA5C30F17u)
-                    fprintf(stderr, "  WARNING: tiled aperture does NOT alias"
+                    NFS_LOG_WARN("runtime", "  WARNING: tiled aperture does NOT alias"
                             " the contiguous window (wrote A5C30F17, read"
                             " %08X) -- the GPU will sample empty textures\n",
                             *via_contig);
                 else
-                    fprintf(stderr, "  Tiled aperture alias verified"
+                    NFS_LOG_INFO("runtime", "  Tiled aperture alias verified"
                             " (tiled 0x%08X == contiguous 0x%08X)\n",
                             XBOX_TILED_BASE, XBOX_CONTIG_BASE);
                 *via_contig = saved;
             }
-            fprintf(stderr, "  Tiled aperture: %u MB at Xbox VA 0x%08X"
+            NFS_LOG_INFO("runtime", "  Tiled aperture: %u MB at Xbox VA 0x%08X"
                     " (aliases the contiguous window)\n",
                     (unsigned)(g_memory_size / (1024 * 1024)),
                     XBOX_TILED_BASE);
         } else {
-            fprintf(stderr, "  WARNING: tiled aperture at 0x%08X failed"
+            NFS_LOG_ERROR("runtime", "  WARNING: tiled aperture at 0x%08X failed"
                     " (error %lu); rendering writes will fault\n",
-                    XBOX_TILED_BASE, GetLastError());
+                    XBOX_TILED_BASE, (unsigned long)GetLastError());
         }
     }
 
     xbox_WatchInit();
-    fprintf(stderr, "xbox_MemoryLayoutInit: complete\n");
+    NFS_LOG_INFO("runtime", "xbox_MemoryLayoutInit: complete\n");
     return TRUE;
 }
 
@@ -3157,7 +3156,7 @@ void xbox_ProtectMirrorsForDebug(void)
             n++;
         }
     }
-    fprintf(stderr, "  Mirrors: %d/%d made read-only (debug)\n",
+    NFS_LOG_INFO("runtime", "  Mirrors: %d/%d made read-only (debug)\n",
             n, XBOX_NUM_MIRRORS);
 }
 
@@ -3225,7 +3224,7 @@ void xbox_MemoryLayoutShutdown(void)
         g_span_base = NULL;
         g_span_size = 0;
     }
-    fprintf(stderr, "xbox_MemoryLayoutShutdown: released\n");
+    NFS_LOG_INFO("runtime", "xbox_MemoryLayoutShutdown: released\n");
 }
 
 /* Bump allocator for pure address-space reservations, above RAM.
@@ -3588,7 +3587,7 @@ uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
                         largest = g_contig_blocks[i].size;
                 }
             ReleaseSRWLockExclusive(&g_contig_lock);
-            fprintf(stderr, "  [CONTIG] arena exhausted (%u requested, %u of %u used, "
+            NFS_LOG_ERROR("runtime", "  [CONTIG] arena exhausted (%u requested, %u of %u used, "
                     "%u free below the top in %d blocks, largest %u)\n",
                     size, g_contig_next - XBOX_CONTIG_BASE,
                     (unsigned)XBOX_CONTIG_SIZE, free_bytes, g_contig_count, largest);
@@ -3650,7 +3649,7 @@ int xbox_ContiguousFree(uint32_t va)
         int blocks = g_contig_count;
         ReleaseSRWLockExclusive(&g_contig_lock);
         if (++frees <= 4 || frees % 256 == 0) {
-            fprintf(stderr, "  [CONTIG] free #%u va=0x%08X (top %u KB, %d blocks)\n",
+            NFS_LOG_INFO("runtime", "  [CONTIG] free #%u va=0x%08X (top %u KB, %d blocks)\n",
                     frees, va, top / 1024, blocks);
             fflush(stderr);
         }
@@ -3761,7 +3760,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
     result = (g_heap_next + alignment - 1) & ~(alignment - 1);
 
     if (result + size > XBOX_HEAP_TOP) {
-        fprintf(stderr, "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
+        NFS_LOG_ERROR("runtime", "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
                 size, g_heap_next - XBOX_HEAP_BASE,
                 (unsigned)(XBOX_HEAP_TOP - XBOX_HEAP_BASE));
         /* Who ate the heap? Group live blocks by size -- an exhausted heap is
@@ -3785,7 +3784,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
                 }
                 for (int j = 0; j < used; j++) {
                     if ((uint64_t)hist[j].n * hist[j].size < 1024 * 1024) continue;
-                    fprintf(stderr, "  [HEAP] %d live blocks of %u bytes (%u KB)\n",
+                    NFS_LOG_INFO("runtime", "  [HEAP] %d live blocks of %u bytes (%u KB)\n",
                             hist[j].n, hist[j].size,
                             (unsigned)((uint64_t)hist[j].n * hist[j].size / 1024));
                 }
@@ -3811,7 +3810,7 @@ static uint32_t heap_alloc_locked(uint32_t size, uint32_t alignment)
     /* Rate-limited: a debug title makes thousands of these and the log is a
      * diagnostic, not a transaction record. */
     if (g_heap_alloc_count <= 32 || (g_heap_alloc_count % 512) == 0) {
-        fprintf(stderr, "  [HEAP] #%d: size=%u align=%u → 0x%08X..0x%08X (used %u/%u)\n",
+        NFS_LOG_INFO("runtime", "  [HEAP] #%d: size=%u align=%u → 0x%08X..0x%08X (used %u/%u)\n",
                 g_heap_alloc_count, size, alignment, result, result + size,
                 g_heap_next - XBOX_HEAP_BASE,
                 (unsigned)(XBOX_HEAP_TOP - XBOX_HEAP_BASE));
@@ -3865,7 +3864,7 @@ void xbox_HeapFree(uint32_t xbox_va)
     AcquireSRWLockExclusive(&g_heap_lock);
     frees++;
     if (frees <= 8) {
-        fprintf(stderr, "  [HEAP] free #%d va=0x%08X blocks=%d\n",
+        NFS_LOG_INFO("runtime", "  [HEAP] free #%d va=0x%08X blocks=%d\n",
                 frees, xbox_va, g_heap_block_count);
         fflush(stderr);
     }
@@ -3875,7 +3874,7 @@ void xbox_HeapFree(uint32_t xbox_va)
         }
         g_heap_blocks[i].free = 1;
         if (++matched % 512 == 0) {
-            fprintf(stderr, "  [HEAP] frees=%d matched=%d blocks=%d\n",
+            NFS_LOG_INFO("runtime", "  [HEAP] frees=%d matched=%d blocks=%d\n",
                     frees, matched, g_heap_block_count);
             fflush(stderr);
         }

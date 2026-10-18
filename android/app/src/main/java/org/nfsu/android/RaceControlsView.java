@@ -116,6 +116,42 @@ final class RaceControlsView extends View {
     private static native boolean nativeVisible();
     private static native void nativeSetButtons(int mask);
     private static native void nativeCancel();
+    private static native boolean nativeInputTraceEnabled();
+    private static native void nativeTraceInput(String message);
+    private final SparseIntArray tracePointers = new SparseIntArray();
+    private int traceHeld = -1;
+
+    private void traceInput(MotionEvent event, boolean accepted) {
+        if (!nativeInputTraceEnabled()) return;
+        int action = event.getActionMasked();
+        boolean changed = action != MotionEvent.ACTION_MOVE || traceHeld != held;
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int id = event.getPointerId(i);
+            int target = hit(event.getX(i), event.getY(i));
+            int status = target + 1 + (screenHold.owns(id) ? 32 : 0);
+            if (tracePointers.get(id, -1) != status) changed = true;
+            tracePointers.put(id, status);
+        }
+        traceHeld = held;
+        if (changed) {
+            nativeTraceInput("eventTime=" + event.getEventTime() + " action=" + action
+                    + " index=" + event.getActionIndex() + " accepted=" + accepted
+                    + " resumed=" + resumed + " racing=" + racing + " editing=" + editing
+                    + " mask=" + held + " available=" + buttonMask
+                    + " size=" + getWidth() + "x" + getHeight());
+            for (int i = 0; i < event.getPointerCount(); i++) {
+                int id = event.getPointerId(i);
+                int target = hit(event.getX(i), event.getY(i));
+                nativeTraceInput("pointer=" + id + " x=" + event.getX(i) + " y=" + event.getY(i)
+                        + " hit=" + (target < 0 ? "none" : TouchLayout.IDS[target])
+                        + " holdOwner=" + screenHold.owns(id));
+            }
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+            tracePointers.clear();
+        else if (action == MotionEvent.ACTION_POINTER_UP)
+            tracePointers.delete(event.getPointerId(event.getActionIndex()));
+    }
 
     private final Runnable refresh = new Runnable() {
         @Override public void run() {
@@ -290,17 +326,28 @@ final class RaceControlsView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent event) {
-        if (editing) return editTouch(event);
-        if (!resumed || (!racing && !holdEnabled)) return false;
+        if (editing) {
+            boolean accepted = editTouch(event);
+            traceInput(event, accepted);
+            return accepted;
+        }
+        if (!resumed || (!racing && !holdEnabled)) {
+            traceInput(event, false);
+            return false;
+        }
         int action = event.getActionMasked();
         int index = event.getActionIndex();
         if (action == MotionEvent.ACTION_DOWN) {
             if (racing && hit(event.getX(), event.getY()) >= 0) {
                 pointers.clear();
-            } else if (!holdEnabled) return false;
+            } else if (!holdEnabled) {
+                traceInput(event, false);
+                return false;
+            }
         }
         if (action == MotionEvent.ACTION_CANCEL) {
             cancelInput();
+            traceInput(event, true);
             return true;
         }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
@@ -336,6 +383,7 @@ final class RaceControlsView extends View {
             if (button >= 0) held |= 1 << button;
         }
         nativeSetButtons(held);
+        traceInput(event, true);
         invalidate();
         return true;
     }

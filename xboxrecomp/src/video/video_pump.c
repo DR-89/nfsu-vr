@@ -11,6 +11,7 @@
  */
 #if defined(_WIN32)
 #define COBJMACROS
+#include "../../include/nfsu_log.h"
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -69,13 +70,13 @@ static DWORD WINAPI vp_thread(LPVOID unused)
 
     hwnd = vp_create_window();
     if (!hwnd) {
-        fprintf(stderr, "  [VIDEO] window creation failed\n");
+        NFS_LOG_ERROR("graphics", "  [VIDEO] window creation failed\n");
         goto done;
     }
 
     d3d = xbox_Direct3DCreate8(0);
     if (!d3d) {
-        fprintf(stderr, "  [VIDEO] Direct3DCreate8 failed\n");
+        NFS_LOG_ERROR("graphics", "  [VIDEO] Direct3DCreate8 failed\n");
         goto done;
     }
 
@@ -92,18 +93,18 @@ static DWORD WINAPI vp_thread(LPVOID unused)
 
     hr = d3d->lpVtbl->CreateDevice(d3d, 0, 0, hwnd, 0, &pp, &dev);
     if (FAILED(hr) || !dev) {
-        fprintf(stderr, "  [VIDEO] CreateDevice failed: 0x%08lX\n", (unsigned long)hr);
+        NFS_LOG_ERROR("graphics", "  [VIDEO] CreateDevice failed: 0x%08lX\n", (unsigned long)hr);
         goto done;
     }
 
     if (video_init() != 0)
         goto done;
     if (video_open(s_path) != 0) {
-        fprintf(stderr, "  [VIDEO] could not open %s\n", s_path);
+        NFS_LOG_ERROR("graphics", "  [VIDEO] could not open %s\n", s_path);
         goto done;
     }
 
-    fprintf(stderr, "  [VIDEO] playing %s\n", s_path);
+    NFS_LOG_DEBUG("graphics", "  [VIDEO] playing %s\n", s_path);
     last = GetTickCount();
 
     while (InterlockedCompareExchange(&s_playing, 1, 1)) {
@@ -147,7 +148,7 @@ static DWORD WINAPI vp_thread(LPVOID unused)
         Sleep(1);
     }
 
-    fprintf(stderr, "  [VIDEO] finished %s after %u presented frames\n",
+    NFS_LOG_DEBUG("graphics", "  [VIDEO] finished %s after %u presented frames\n",
             s_path, frames);
     video_close();
     video_shutdown();

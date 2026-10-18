@@ -1,4 +1,5 @@
 /* Android paths and persistent diagnostics. SDL owns the Java/native entry. */
+#include "../xboxrecomp/include/nfsu_log.h"
 #include <SDL.h>
 #include <SDL_vulkan.h>
 #include <android/native_window_jni.h>
@@ -16,6 +17,10 @@
 #include "menu_touch.h"
 #include "race_touch.h"
 #include "android_input.h"
+#include "android_env.h"
+#include "android_input_trace.h"
+#include "android_logs.h"
+#include <fcntl.h>
 
 int android_host_boot(int argc, char **argv)
 {
@@ -40,16 +45,28 @@ int android_host_boot(int argc, char **argv)
     }
     if (!freopen(log_path, "w", stdout) || dup2(fileno(stdout), fileno(stderr)) < 0)
         return 0;
-    setenv("RECOMP_QUIET", "1", 0);
-    /* One APK supports both sides of the diagnostic-overhead comparison. */
+    android_env_load("nfsu1x_env.txt");
     char diagnostics[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.diagnostics", diagnostics);
     nfsu_diagnostics_enabled = strcmp(diagnostics, "1") == 0;
-    fprintf(stderr, "[ANDROID] detailed diagnostics=%d\n", nfsu_diagnostics_enabled);
+    if (nfsu_diagnostics_enabled && !getenv("RECOMP_LOG_LEVEL")) {
+        setenv("RECOMP_LOG_AUDIO_LEVEL", "TRACE", 0);
+        setenv("RECOMP_LOG_RUNTIME_LEVEL", "DEBUG", 0);
+    }
+    /* Raw third-party stdio and zlog both append to the compatibility file. */
+    int log_flags = fcntl(fileno(stdout), F_GETFL);
+    if (log_flags >= 0) fcntl(fileno(stdout), F_SETFL, log_flags | O_APPEND);
+    if (!android_logs_start())
+        NFS_LOG_WARN("system", "zlog unavailable; using nfsu1.log only");
+    NFS_LOG_INFO("system", "[ANDROID] input trace=%d (RECOMP_INPUT_TRACE)\n",
+            android_input_trace_enabled());
+    setenv("RECOMP_QUIET", "1", 0);
+    /* One APK supports both sides of the diagnostic-overhead comparison. */
+    NFS_LOG_INFO("system", "[ANDROID] detailed diagnostics=%d\n", nfsu_diagnostics_enabled);
     char perf_mode[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.perf", perf_mode);
     nfsu_perf_enabled = strcmp(perf_mode, "0") != 0;
-    fprintf(stderr, "[ANDROID] performance counters=%d\n", nfsu_perf_enabled);
+    NFS_LOG_INFO("system", "[ANDROID] performance counters=%d\n", nfsu_perf_enabled);
     setenv("NFSU2_GAME_DIR", argv[1], 1);
     setenv("NFSU2_SAVE_DIR", save, 1);
     setenv("RECOMP_PROG_CACHE", cache, 1);
@@ -57,25 +74,24 @@ int android_host_boot(int argc, char **argv)
     char gil_eager[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.gil_eager", gil_eager);
     if (*gil_eager && strcmp(gil_eager, "0") != 0 && strcmp(gil_eager, "1") != 0)
-        fprintf(stderr, "[ANDROID] invalid debug.nfsu.gil_eager=%s; using 1\n", gil_eager);
+        NFS_LOG_WARN("system", "[ANDROID] invalid debug.nfsu.gil_eager=%s; using 1\n", gil_eager);
     const char *gil_mode = strcmp(gil_eager, "0") == 0 ? "0" : "1";
     setenv("RECOMP_GIL_EAGER", gil_mode, 1);
-    fprintf(stderr, "[ANDROID] GIL eager=%s (debug.nfsu.gil_eager)\n", gil_mode);
+    NFS_LOG_INFO("system", "[ANDROID] GIL eager=%s (debug.nfsu.gil_eager)\n", gil_mode);
     char gil_quantum[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.gil_quantum_us", gil_quantum);
     setenv("RECOMP_GIL_MAIN_QUANTUM_US", *gil_quantum ? gil_quantum : "0", 1);
     char scheduler[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.scheduler", scheduler);
     setenv("RECOMP_GUEST_SCHEDULER", strcmp(scheduler, "0") == 0 ? "0" : "1", 1);
-    fprintf(stderr, "[ANDROID] guest scheduler=%s\n", getenv("RECOMP_GUEST_SCHEDULER"));
+    NFS_LOG_INFO("system", "[ANDROID] guest scheduler=%s\n", getenv("RECOMP_GUEST_SCHEDULER"));
     char executor[PROP_VALUE_MAX] = {0};
     __system_property_get("debug.nfsu.executor", executor);
     setenv("RECOMP_GUEST_EXECUTOR", strcmp(executor, "1") == 0 ? "1" : "0", 1);
-    fprintf(stderr, "[ANDROID] guest executor=%s (experimental)\n", getenv("RECOMP_GUEST_EXECUTOR"));
+    NFS_LOG_INFO("system", "[ANDROID] guest executor=%s (experimental)\n", getenv("RECOMP_GUEST_EXECUTOR"));
     setenv("RECOMP_CULL", "0", 0);
     setenv("RECOMP_VK_INSTANCE", "0", 0);
     if (nfsu_diagnostics_enabled) setenv("RECOMP_INPUT_DIAG", "1", 1);
-    else unsetenv("RECOMP_INPUT_DIAG");
     /* Retail XPP 1EF01B maps (root_port - 1) XOR 2 to Xbox player slot.
      * HC0 port index 2 is player one; HC1 is not started by this title. */
     setenv("RECOMP_USB_HC", "0", 1);
@@ -115,7 +131,7 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_GameActivity_nativeSurfaceChanged(
     menu_touch_cancel();
     race_touch_cancel();
     if (old != window) host_window.generation++;
-    fprintf(stderr, "[ANDROID] window generation=%llu size=%dx%d available=%d\n",
+    NFS_LOG_INFO("system", "[ANDROID] window generation=%llu size=%dx%d available=%d\n",
             (unsigned long long)host_window.generation, width, height, window != NULL);
     pthread_cond_broadcast(&host_changed);
     pthread_mutex_unlock(&host_mutex);
@@ -215,7 +231,7 @@ int android_host_run(void)
             touching = 0;
             menu_touch_cancel();
             race_touch_cancel();
-            fprintf(stderr, "[ANDROID] foreground=%d\n", active);
+            NFS_LOG_INFO("system", "[ANDROID] foreground=%d\n", active);
             pthread_cond_broadcast(&host_changed);
             pthread_mutex_unlock(&host_mutex);
         }

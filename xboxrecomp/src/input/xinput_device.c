@@ -9,6 +9,7 @@
  *   _WIN32 -> Windows XInput
  *   POSIX  -> SDL2 GameController
  */
+#include "../../include/nfsu_log.h"
 
 #include "xinput_xbox.h"
 #include <stdlib.h>
@@ -268,7 +269,7 @@ static void open_controllers(void)
         if (!g_pads[slot]) {
             g_pads[slot] = SDL_GameControllerOpen(i);
             g_controller_connected[slot] = (g_pads[slot] != NULL);
-            fprintf(stderr, "  [INPUT] SDL controller %d: %s (%s)\n", slot,
+            NFS_LOG_INFO("input", "  [INPUT] SDL controller %d: %s (%s)\n", slot,
                 SDL_JoystickNameForIndex(i), g_pads[slot] ? "opened" : SDL_GetError());
         }
         slot++;
@@ -279,7 +280,7 @@ void xbox_InputInit(void)
 {
     if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER))
         SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
-    fprintf(stderr, "  [INPUT] SDL detected %d joystick(s)\n", SDL_NumJoysticks());
+    NFS_LOG_INFO("input", "  [INPUT] SDL detected %d joystick(s)\n", SDL_NumJoysticks());
     open_controllers();
 }
 

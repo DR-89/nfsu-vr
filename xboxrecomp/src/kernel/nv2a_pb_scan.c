@@ -20,6 +20,7 @@
  * For a method header: count = (w >> 18) & 0x7FF, subchannel = (w >> 13) & 7,
  * method = w & 0x1FFC.
  */
+#include "../../include/nfsu_log.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>   /* ptrdiff_t */
@@ -68,7 +69,7 @@ static void note(uint32_t subch, uint32_t method)
         static int warned;
         if (!warned) {
             warned = 1;
-            fprintf(stderr, "[PB] method table full at %d -- inventory is"
+            NFS_LOG_DEBUG("graphics", "[PB] method table full at %d -- inventory is"
                             " truncated\n", PB_MAX_METHODS);
         }
     }
@@ -142,12 +143,12 @@ void nv2a_pb_scan_report(void)
         nv2a_pb_exec_report();
     if (!s_seen_count || !getenv("RECOMP_PB_SCAN"))
         return;
-    fprintf(stderr, "[PB] %u segments, %u words, %u jumps, %u unrecognised"
+    NFS_LOG_DEBUG("graphics", "[PB] %u segments, %u words, %u jumps, %u unrecognised"
                     " -- %d distinct (subchannel, method) pairs\n",
             s_tot_segments, s_tot_words, s_tot_jumps, s_tot_unknown,
             s_seen_count);
     for (i = 0; i < s_seen_count; i++)
-        fprintf(stderr, "  [PB]   subch %u  method 0x%04X  x%-6u %s\n",
+        NFS_LOG_DEBUG("graphics", "  [PB]   subch %u  method 0x%04X  x%-6u %s\n",
                 s_seen[i].subch, s_seen[i].method, s_seen[i].count,
                 nv097_name(s_seen[i].method));
     fflush(stderr);
@@ -198,18 +199,18 @@ static int pb_bad_target(uint32_t w, uint32_t at, uint32_t target, uint32_t put)
     if (target < PB_RAM_BYTES)
         return 0;
     if (++total <= 16 || total % 100 == 0) {
-        fprintf(stderr, "  [PB] bad target #%u 0x%08X from word 0x%08X at 0x%08X"
+        NFS_LOG_DEBUG("graphics", "  [PB] bad target #%u 0x%08X from word 0x%08X at 0x%08X"
                         " (PUT 0x%08X); resync\n", total, target, w, at, put);
         if (total <= 4)
             for (k = 0; k < PB_HIST && k < s_hist_n; k++) {
                 unsigned i = (s_hist_n - 1 - k) % PB_HIST;
-                fprintf(stderr, "  [PB]   earlier header 0x%08X at 0x%08X\n",
+                NFS_LOG_DEBUG("graphics", "  [PB]   earlier header 0x%08X at 0x%08X\n",
                         s_hist[i].w, s_hist[i].at);
             }
         if (total <= 4)
             for (k = 0; k < PB_HIST && k < s_flow_n; k++) {
                 unsigned i = (s_flow_n - 1 - k) % PB_HIST;
-                fprintf(stderr, "  [PB]   earlier flow 0x%08X at 0x%08X -> 0x%08X\n",
+                NFS_LOG_DEBUG("graphics", "  [PB]   earlier flow 0x%08X at 0x%08X -> 0x%08X\n",
                         s_flow[i].w, s_flow[i].at, s_flow[i].to);
             }
     }

@@ -24,6 +24,7 @@
  *   to native pointers by adding g_xbox_mem_offset. Different functions have
  *   different parameter layouts (pointer vs value), so each needs its own bridge.
  */
+#include "../../include/nfsu_log.h"
 
 #include "kernel.h"
 #include "xbox_memory_layout.h"
@@ -177,8 +178,7 @@ static int bridge_buf_ok(uint32_t va, uint32_t bytes, const char *export_name)
     if (distinct < (int)(sizeof(seen) / sizeof(seen[0])))
         seen[distinct++] = export_name;
 
-    fprintf(stderr,
-            "  [KERNEL] %s: buffer 0x%08X length %u is not mapped guest "
+    NFS_LOG_INFO("runtime", "  [KERNEL] %s: buffer 0x%08X length %u is not mapped guest "
             "memory; returning STATUS_ACCESS_VIOLATION\n",
             export_name, va, (unsigned)bytes);
     fflush(stderr);
@@ -315,7 +315,7 @@ static void kernel_data_init(void)
 
                 BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_LAUNCH_DATA_PAGE) =
                     page;
-                fprintf(stderr, "  Launch data: type 3 at 0x%08X, "
+                NFS_LOG_INFO("runtime", "  Launch data: type 3 at 0x%08X, "
                                 "command line %s\n", page, cmdline);
             } else {
                 BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_LAUNCH_DATA_PAGE) = 0;
@@ -415,7 +415,7 @@ static void kernel_data_init(void)
         }
     }
 
-    fprintf(stderr, "  Kernel data exports: initialized at Xbox VA 0x%08X\n",
+    NFS_LOG_INFO("runtime", "  Kernel data exports: initialized at Xbox VA 0x%08X\n",
             XBOX_KERNEL_DATA_BASE);
 }
 
@@ -655,8 +655,8 @@ static int gil_enabled(void)
             xgs_init((volatile LONG *)&g_gil_contended);
             xgs_diagnostics(nfsu_perf_enabled);
             xgs_wait_accounting(gil_wait_park_account, gil_wait_resume_account);
-            fprintf(stderr, "  [THREAD] guest scheduler: priority ready queue, native stacks\n");
-            fprintf(stderr, "  [THREAD] guest dispatcher: handle events/semaphores, atomic waits\n");
+            NFS_LOG_INFO("runtime", "  [THREAD] guest scheduler: priority ready queue, native stacks\n");
+            NFS_LOG_INFO("runtime", "  [THREAD] guest dispatcher: handle events/semaphores, atomic waits\n");
         }
 #endif
 #if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
@@ -666,10 +666,10 @@ static int gil_enabled(void)
             long us = strtol(quantum, &end, 10);
             if (end != quantum && !*end && us >= 0 && us <= 1000)
                 s_gil_main_quantum_ns = (uint64_t)us * 1000;
-            else fprintf(stderr, "  [THREAD] invalid main quantum '%s'; using 0\n", quantum);
+            else NFS_LOG_WARN("runtime", "  [THREAD] invalid main quantum '%s'; using 0\n", quantum);
         }
         if (!xbox_guest_scheduler_active())
-            fprintf(stderr, "  [THREAD] main PREEMPT quantum=%llu us\n",
+            NFS_LOG_DEBUG("runtime", "  [THREAD] main PREEMPT quantum=%llu us\n",
                     (unsigned long long)(s_gil_main_quantum_ns / 1000));
 #endif
         InitializeCriticalSection(&s_gil_cs);
@@ -678,10 +678,10 @@ static int gil_enabled(void)
 #endif
         s_gil_on = !(e && *e == '0');
         if (s_gil_on)
-            fprintf(stderr, "  [THREAD] guest code serialised under one lock (RECOMP_GIL)\n");
+            NFS_LOG_DEBUG("runtime", "  [THREAD] guest code serialised under one lock (RECOMP_GIL)\n");
 #if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
         if (s_gil_on && !xbox_guest_scheduler_active())
-            fprintf(stderr, "  [THREAD] GIL handoff: targeted FIFO wake, 1 ms preemption timeout\n");
+            NFS_LOG_INFO("runtime", "  [THREAD] GIL handoff: targeted FIFO wake, 1 ms preemption timeout\n");
 #endif
     }
     return s_gil_on;
@@ -731,7 +731,7 @@ static int gil_eager(void)
         const char *e = getenv("RECOMP_GIL_EAGER");
         on = e && *e == '1';
         if (on)
-            fprintf(stderr, "  [THREAD] guest lock handed over by priority (RECOMP_GIL_EAGER)\n");
+            NFS_LOG_DEBUG("runtime", "  [THREAD] guest lock handed over by priority (RECOMP_GIL_EAGER)\n");
     }
     return on;
 }
@@ -838,7 +838,7 @@ static void gil_lock(void)
         {
             static int seen[GIL_PRIOS];
             if (!seen[prio]++)
-                fprintf(stderr, "  [THREAD] guest lock: first holder at priority %d%s\n",
+                NFS_LOG_DEBUG("runtime", "  [THREAD] guest lock: first holder at priority %d%s\n",
                         prio - 16, t_gil_main ? " (main thread)" : "");
         }
         /* Keep asking while someone above us waits; lower waiters raise it
@@ -1100,7 +1100,7 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
         if (tib)
             g_fs_base = tib;
         else
-            fprintf(stderr, "  [KERNEL] worker thread has no TIB of its own;"
+            NFS_LOG_INFO("runtime", "  [KERNEL] worker thread has no TIB of its own;"
                             " it shares the main thread's\n");
     }
     free(s);
@@ -1110,7 +1110,7 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
 
     bridge_run_thread_inline(fn, ctx1, ctx2);
 
-    fprintf(stderr, "  [KERNEL] worker thread returned (eax=0x%08X)\n", g_eax);
+    NFS_LOG_INFO("runtime", "  [KERNEL] worker thread returned (eax=0x%08X)\n", g_eax);
     fflush(stderr);
     /* The routine returned instead of calling PsTerminateSystemThread; the
      * stack is still ours to give back. */
@@ -1255,7 +1255,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                         && (g_thread_call_count == 0);
     g_thread_call_count++;
 
-    fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx #%d: routine=0x%08X ctx1=0x%08X ctx2=0x%08X\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThreadEx #%d: routine=0x%08X ctx1=0x%08X ctx2=0x%08X\n",
             g_thread_call_count, start_routine, start_context1, start_context2);
     fflush(stderr);
 
@@ -1286,7 +1286,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                 g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
                 bridge_run_initial_guest(fn);
                 g_esp += 12;
-                fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: main thread returned (g_eax=0x%08X)\n", g_eax);
+                NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThreadEx: main thread returned (g_eax=0x%08X)\n", g_eax);
                 fflush(stderr);
             } else {
                 /* Worker thread: a real one.
@@ -1313,7 +1313,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                 uint32_t stack_top;
 
                 if (inline_workers && !strcmp(inline_workers, "inline")) {
-                    fprintf(stderr, "  [KERNEL] RECOMP_WORKERS=inline: running "
+                    NFS_LOG_INFO("runtime", "  [KERNEL] RECOMP_WORKERS=inline: running "
                             "worker 0x%08X on this thread\n", start_routine);
                     fflush(stderr);
                     bridge_run_thread_inline(fn, start_context1, start_context2);
@@ -1323,7 +1323,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                 stack_top = xbox_AllocThreadStack();
 
                 if (!stack_top) {
-                    fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: out of "
+                    NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThreadEx: out of "
                             "thread stacks, running worker 0x%08X inline\n",
                             start_routine);
                     fflush(stderr);
@@ -1332,7 +1332,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                     HANDLE th = bridge_spawn_thread(fn, start_context1,
                                                     start_context2, stack_top,
                                                     (uint8_t)STACK_ARG(7));
-                    fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: spawned "
+                    NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThreadEx: spawned "
                             "worker 0x%08X (ctx=0x%08X, stack top 0x%08X)\n",
                             start_routine, start_context1, stack_top);
                     fflush(stderr);
@@ -1342,7 +1342,7 @@ static void bridge_PsCreateSystemThreadEx(void)
                 }
             }
         } else {
-            fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: start routine 0x%08X not found in dispatch!\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThreadEx: start routine 0x%08X not found in dispatch!\n",
                     start_routine);
         }
     }
@@ -1373,7 +1373,7 @@ static void bridge_NtClose(void)
     uint32_t raw_handle = STACK_ARG(0);
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] NtClose: handle=0x%08X\n", raw_handle);
+        NFS_LOG_INFO("runtime", "  [KERNEL] NtClose: handle=0x%08X\n", raw_handle);
         fflush(stderr);
     }
 
@@ -1404,7 +1404,7 @@ static void bridge_MmAllocateContiguousMemory(void)
     uint32_t xbox_va = xbox_ContiguousAlloc(size, 4096);
 
     if (KERNEL_LOG_ON_HALF()) {
-        fprintf(stderr, "  [KERNEL] MmAllocateContiguousMemory: size=%u → Xbox VA 0x%08X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] MmAllocateContiguousMemory: size=%u → Xbox VA 0x%08X\n",
                 size, xbox_va);
         fflush(stderr);
     }
@@ -1444,7 +1444,7 @@ static void bridge_MmAllocateSystemMemory(void)
     if (xbox_va)
         memset((void *)((uintptr_t)xbox_va + g_xbox_mem_offset), 0, size);
     else
-        fprintf(stderr, "  [KERNEL] MmAllocateSystemMemory: %u bytes REFUSED\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] MmAllocateSystemMemory: %u bytes REFUSED\n",
                 size);
     g_eax = xbox_va;
 }
@@ -1489,7 +1489,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
         memset((void *)((uintptr_t)xbox_va + g_xbox_mem_offset), 0, size);
 
         if (KERNEL_LOG_ON_HALF()) {
-            fprintf(stderr, "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u "
+            NFS_LOG_INFO("runtime", "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u "
                     "pinned phys 0x%08X -> Xbox VA 0x%08X (zeroed)\n",
                     size, low, xbox_va);
             fflush(stderr);
@@ -1502,7 +1502,7 @@ static void bridge_MmAllocateContiguousMemoryEx(void)
     xbox_va = xbox_ContiguousAlloc(size, align);
 
     if (KERNEL_LOG_ON_HALF()) {
-        fprintf(stderr, "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u align=%u → Xbox VA 0x%08X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] MmAllocateContiguousMemoryEx: size=%u align=%u → Xbox VA 0x%08X\n",
                 size, align, xbox_va);
         fflush(stderr);
     }
@@ -1541,7 +1541,7 @@ static void bridge_NtAllocateVirtualMemory(void)
     uint32_t base_hint = base_ptr ? BRIDGE_MEM32(base_ptr) : 0;
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] NtAllocateVirtualMemory: base=0x%08X size=%u type=0x%X prot=0x%X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] NtAllocateVirtualMemory: base=0x%08X size=%u type=0x%X prot=0x%X\n",
                 base_hint, size, alloc_type, protect);
         fflush(stderr);
     }
@@ -1561,7 +1561,7 @@ static void bridge_NtAllocateVirtualMemory(void)
         uint32_t vm_status;
         if (guest_vmem_allocate(&vm_base, &vm_size, alloc_type, protect, &vm_status)) {
             if (KERNEL_LOG_ON()) {
-                fprintf(stderr, "  [KERNEL] NtAllocateVirtualMemory (extended VMA): "
+                NFS_LOG_INFO("runtime", "  [KERNEL] NtAllocateVirtualMemory (extended VMA): "
                                 "base=0x%08X size=%u status=0x%08X\n",
                         vm_base, vm_size, vm_status);
                 fflush(stderr);
@@ -1609,8 +1609,7 @@ static void bridge_NtAllocateVirtualMemory(void)
     if (base_hint >= (g_xbox_map_size ? g_xbox_map_size : g_xbox_total_ram)) {
         static unsigned warned;
         if (warned++ < 8)
-            fprintf(stderr,
-                    "  [KERNEL] WARNING: allocation at 0x%08X is above "
+            NFS_LOG_WARN("runtime", "  [KERNEL] WARNING: allocation at 0x%08X is above "
                     "%u MB mapped; it aliases 0x%08X\n",
                     base_hint,
                     (unsigned)((g_xbox_map_size ? g_xbox_map_size
@@ -1627,7 +1626,7 @@ static void bridge_NtAllocateVirtualMemory(void)
          * The memory is already committed by our bump allocator.
          * Don't change the base address - just return success. */
         if (KERNEL_LOG_ON()) {
-            fprintf(stderr, "  [KERNEL] → MEM_COMMIT on existing region 0x%08X, no-op\n", base_hint);
+            NFS_LOG_INFO("runtime", "  [KERNEL] → MEM_COMMIT on existing region 0x%08X, no-op\n", base_hint);
             fflush(stderr);
         }
         g_eax = 0; /* STATUS_SUCCESS */
@@ -1672,7 +1671,7 @@ static void bridge_NtAllocateVirtualMemory(void)
          * RAM, so nothing changes for titles that did not. */
         xbox_va = xbox_ReserveAlloc(size, 4096);
         if (xbox_va) {
-            fprintf(stderr, "  [KERNEL] NtAllocateVirtualMemory: reserve of %u"
+            NFS_LOG_INFO("runtime", "  [KERNEL] NtAllocateVirtualMemory: reserve of %u"
                             " granted at 0x%08X above RAM\n", size, xbox_va);
             fflush(stderr);
         }
@@ -1684,7 +1683,7 @@ static void bridge_NtAllocateVirtualMemory(void)
             xbox_va = xbox_HeapAlloc(want, 4096);
         }
         if (xbox_va) {
-            fprintf(stderr, "  [KERNEL] NtAllocateVirtualMemory: reserve of %u "
+            NFS_LOG_ERROR("runtime", "  [KERNEL] NtAllocateVirtualMemory: reserve of %u "
                             "clamped to %u (heap cannot back the full range)\n",
                     size, want);
             fflush(stderr);
@@ -1769,7 +1768,7 @@ static void bridge_NtQueryVirtualMemory(void)
             BRIDGE_MEM32(info_va + 0x14) = vm_info[5]; /* Protect */
             BRIDGE_MEM32(info_va + 0x18) = vm_info[6]; /* Type */
             if (KERNEL_LOG_ON()) {
-                fprintf(stderr, "  [KERNEL] NtQueryVirtualMemory (extended VMA): "
+                NFS_LOG_INFO("runtime", "  [KERNEL] NtQueryVirtualMemory (extended VMA): "
                                 "base=0x%08X -> state=0x%X size=%u\n",
                         base_va, vm_info[4], vm_info[3]);
                 fflush(stderr);
@@ -1804,7 +1803,7 @@ static void bridge_NtQueryVirtualMemory(void)
     }
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] NtQueryVirtualMemory: base=0x%08X -> "
+        NFS_LOG_INFO("runtime", "  [KERNEL] NtQueryVirtualMemory: base=0x%08X -> "
                         "state=0x%X size=%u\n", base_va,
                         BRIDGE_MEM32(info_va + 0x10),
                         BRIDGE_MEM32(info_va + 0x0C));
@@ -1991,18 +1990,18 @@ static void bridge_HalReturnToFirmware(void)
                 path[i] = (char)c;
             }
             path[i] = 0;
-            fprintf(stderr, "  [KERNEL] launch data page 0x%08X:"
+            NFS_LOG_INFO("runtime", "  [KERNEL] launch data page 0x%08X:"
                             " type=%u titleid=0x%08X path='%s'\n",
                     page, BRIDGE_MEM32(page), BRIDGE_MEM32(page + 4), path);
             /* XapiBootToDash packs its reason and two parameters into the
              * front of the launch data, so this says why the title asked to
              * leave rather than merely that it did. */
-            fprintf(stderr, "  [KERNEL]   launch data:");
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "  [KERNEL]   launch data:");
             for (i = 0; i < 8; i++)
-                fprintf(stderr, " %08X", BRIDGE_MEM32(page + 1024 + i * 4));
-            fprintf(stderr, "\n");
+                NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, " %08X", BRIDGE_MEM32(page + 1024 + i * 4));
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_INFO, "\n");
         } else {
-            fprintf(stderr, "  [KERNEL] no launch data page set\n");
+            NFS_LOG_INFO("runtime", "  [KERNEL] no launch data page set\n");
         }
     }
 
@@ -2016,18 +2015,18 @@ static void bridge_HalReturnToFirmware(void)
         const uint8_t *mem = (const uint8_t *)g_xbox_mem_offset;
         uint32_t i;
 
-        fprintf(stderr, "  [KERNEL] exit requested, guest esp=0x%08X:\n", g_esp);
+        NFS_LOG_INFO("runtime", "  [KERNEL] exit requested, guest esp=0x%08X:\n", g_esp);
         for (i = 0; i < 200; i++) {
             uint32_t a = g_esp + i * 4;
             if (a < 0x00010000u || a >= 0x04000000u) break;
-            fprintf(stderr, "    GS %08X %08X\n", a,
+            NFS_LOG_INFO("runtime", "    GS %08X %08X\n", a,
                     *(const uint32_t *)(mem + a));
         }
         fflush(stderr);
     }
 
     xbox_PeekSample("exit peek");
-    fprintf(stderr, "  [KERNEL] HalReturnToFirmware: routine=%u - title is exiting\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] HalReturnToFirmware: routine=%u - title is exiting\n",
             routine);
     fflush(stderr);
 
@@ -2054,7 +2053,7 @@ static void bridge_HalReturnToFirmware(void)
             waited += 50;
         }
         if (waited)
-            fprintf(stderr, "  [KERNEL] waited %dms for the video to finish\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] waited %dms for the video to finish\n",
                     waited);
     }
 
@@ -2067,7 +2066,7 @@ static void bridge_ExAllocatePool(void)
     uint32_t xbox_va = xbox_HeapAlloc(size, 16);
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] ExAllocatePool: size=%u → Xbox VA 0x%08X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] ExAllocatePool: size=%u → Xbox VA 0x%08X\n",
                 size, xbox_va);
         fflush(stderr);
     }
@@ -2082,7 +2081,7 @@ static void bridge_ExAllocatePoolWithTag(void)
     uint32_t xbox_va = xbox_HeapAlloc(size, 16);
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] ExAllocatePoolWithTag: size=%u tag='%c%c%c%c' → Xbox VA 0x%08X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] ExAllocatePoolWithTag: size=%u tag='%c%c%c%c' → Xbox VA 0x%08X\n",
                 size,
                 (char)(tag & 0xFF), (char)((tag >> 8) & 0xFF),
                 (char)((tag >> 16) & 0xFF), (char)((tag >> 24) & 0xFF),
@@ -2185,7 +2184,7 @@ static void bridge_NtCreateEvent(void)
         bridge_write_handle(handle_ptr, local_handle);
     }
 
-    fprintf(stderr, "  [BRIDGE] NtCreateEvent: handle_ptr=0x%08X type=%u init=%u → status=0x%08X handle=0x%08X\n",
+    NFS_LOG_INFO("runtime", "  [BRIDGE] NtCreateEvent: handle_ptr=0x%08X type=%u init=%u → status=0x%08X handle=0x%08X\n",
             handle_ptr, event_type, initial_state, (uint32_t)status,
             (uint32_t)(uintptr_t)local_handle);
 
@@ -2519,7 +2518,7 @@ static void bridge_NtWaitForSingleObjectEx(void)
 
     static int logged = 0;
     if (logged++ < 20) {
-        fprintf(stderr, "  [KERNEL] NtWaitForSingleObjectEx: token=0x%08X "
+        NFS_LOG_INFO("runtime", "  [KERNEL] NtWaitForSingleObjectEx: token=0x%08X "
                 "handle=%p timeout=%s\n",
                 STACK_ARG(0), handle, timeout_ptr ? "finite" : "INFINITE");
         fflush(stderr);
@@ -2566,7 +2565,7 @@ void xbox_main_wait_report(double secs)
             len += snprintf(line + len, sizeof line - len, " %08X<%08X h%X=%.0f%%/%u",
                             s_mw[k].r1, s_mw[k].r2, s_mw[k].token,
                             s_mw[k].us / (secs * 1e4), s_mw[k].n);
-    fprintf(stderr, "%s\n", line);
+    NFS_LOG_INFO("runtime", "%s\n", line);
     memset(s_mw, 0, sizeof s_mw);
 }
 
@@ -2628,10 +2627,10 @@ static void bridge_NtWaitForMultipleObjectsEx(void)
     {
         static int logged;
         if (logged++ < 20) {
-            fprintf(stderr, "  [KERNEL] NtWaitForMultipleObjectsEx: count=%u type=%u timeout=%s\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] NtWaitForMultipleObjectsEx: count=%u type=%u timeout=%s\n",
                     count, wait_type, timeout_ptr ? "finite" : "INFINITE");
             for (i = 0; i < count; i++)
-                fprintf(stderr, "      [%u] token=0x%08X host=%p\n", i,
+                NFS_LOG_INFO("runtime", "      [%u] token=0x%08X host=%p\n", i,
                         BRIDGE_MEM32(handles_va + i * 4), handles[i]);
             fflush(stderr);
         }
@@ -2684,7 +2683,7 @@ static void bridge_NtUserIoApcDispatcher(void)
     fn = recomp_lookup(apc_context);
     if (!fn) fn = recomp_lookup_manual(apc_context);
     if (!fn) {
-        fprintf(stderr, "  [KERNEL] NtUserIoApcDispatcher: completion routine "
+        NFS_LOG_INFO("runtime", "  [KERNEL] NtUserIoApcDispatcher: completion routine "
                 "0x%08X not in dispatch\n", apc_context);
         fflush(stderr);
         g_eax = 0;
@@ -2726,7 +2725,7 @@ static void bridge_KeDelayExecutionThread(void)
  */
 static void bridge_KeBugCheck(void)
 {
-    fprintf(stderr, "  [KERNEL] *** KeBugCheck: code=0x%08X ***\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] *** KeBugCheck: code=0x%08X ***\n",
             STACK_ARG(0));
     fflush(stderr);
     g_eax = 0;
@@ -2734,7 +2733,7 @@ static void bridge_KeBugCheck(void)
 
 static void bridge_KeBugCheckEx(void)
 {
-    fprintf(stderr, "  [KERNEL] *** KeBugCheckEx: code=0x%08X "
+    NFS_LOG_INFO("runtime", "  [KERNEL] *** KeBugCheckEx: code=0x%08X "
             "(0x%08X, 0x%08X, 0x%08X, 0x%08X) ***\n",
             STACK_ARG(0), STACK_ARG(1), STACK_ARG(2),
             STACK_ARG(3), STACK_ARG(4));
@@ -2785,7 +2784,7 @@ static void bridge_AvSetDisplayMode(void)
      * in. This is the only place the address is stated: the title never writes
      * PCRTC_START itself, so without this there is nothing that says where the
      * guest believes its picture is. */
-    fprintf(stderr, "  [AV] SetDisplayMode mode=0x%08X format=0x%08X"
+    NFS_LOG_INFO("runtime", "  [AV] SetDisplayMode mode=0x%08X format=0x%08X"
                     " pitch=%u fb=0x%08X\n", mode, format, pitch, fb);
     fflush(stderr);
 
@@ -2838,7 +2837,7 @@ static void bridge_PsTerminateSystemThread(void)
 {
     uint32_t exit_status = STACK_ARG(0);
 
-    fprintf(stderr, "  [KERNEL] PsTerminateSystemThread: status=0x%08X%s\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] PsTerminateSystemThread: status=0x%08X%s\n",
             exit_status, g_is_spawned_thread ? " (worker)" : " (main)");
     fflush(stderr);
 
@@ -2941,7 +2940,7 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
     fn = recomp_lookup(routine);
     if (!fn) fn = recomp_lookup_manual(routine);
     if (!fn) {
-        fprintf(stderr, "  [KERNEL] DPC routine 0x%08X not in dispatch\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] DPC routine 0x%08X not in dispatch\n",
                 routine);
         fflush(stderr);
         return 0;
@@ -2992,7 +2991,7 @@ static void bridge_KeSynchronizeExecution(void)
     fn = routine ? recomp_lookup(routine) : NULL;
     if (!fn && routine) fn = recomp_lookup_manual(routine);
     if (!fn) {
-        fprintf(stderr, "  [KERNEL] KeSynchronizeExecution: routine 0x%08X "
+        NFS_LOG_INFO("runtime", "  [KERNEL] KeSynchronizeExecution: routine 0x%08X "
                         "not in dispatch\n", routine);
         fflush(stderr);
         g_eax = 0;
@@ -3087,7 +3086,7 @@ static void bridge_KeInsertQueueDpc(void)
     next = (tail + 1) % XBOX_MAX_PENDING_DPC;
     if (next == g_dpc_head) {
         dpc_unlock();
-        fprintf(stderr, "  [KERNEL] DPC queue full, dropping 0x%08X\n", dpc);
+        NFS_LOG_INFO("runtime", "  [KERNEL] DPC queue full, dropping 0x%08X\n", dpc);
         fflush(stderr);
         g_eax = 0;
         return;
@@ -3274,7 +3273,7 @@ static void kernel_vblank_tick(void)
         if (claimed < 0 || !queued)
             xbox_Nv2aVblankDrop();
         if (n++ < 3)
-            fprintf(stderr, "  [NV2A] vblank -> ISR %s\n",
+            NFS_LOG_INFO("runtime", "  [NV2A] vblank -> ISR %s\n",
                     claimed < 0 ? "not callable" :
                     claimed ? "claimed it" : "declined it");
         fflush(stderr);
@@ -3299,7 +3298,7 @@ static void kernel_service_irqs(void)
         claimed = kernel_raise_interrupt(v);
         if (logged < 5) {
             logged++;
-            fprintf(stderr, "  [KERNEL] irq %u -> ISR %s\n", v,
+            NFS_LOG_INFO("runtime", "  [KERNEL] irq %u -> ISR %s\n", v,
                     claimed < 0 ? "not connected" : claimed ? "claimed it" : "declined it");
             fflush(stderr);
         }
@@ -3433,7 +3432,7 @@ static void bridge_KeConnectInterrupt(void)
         uint32_t vector = BRIDGE_MEM32(interrupt_va + 8);
         if (vector < XBOX_MAX_VECTORS) {
             g_connected_isr[vector] = interrupt_va;
-            fprintf(stderr, "  [KERNEL] KeConnectInterrupt: vector %u -> "
+            NFS_LOG_INFO("runtime", "  [KERNEL] KeConnectInterrupt: vector %u -> "
                             "routine 0x%08X context 0x%08X\n",
                     vector, BRIDGE_MEM32(interrupt_va + 0),
                     BRIDGE_MEM32(interrupt_va + 4));
@@ -3518,7 +3517,7 @@ static void bridge_KeInitializeTimerEx(void)
 
     ev = CreateEventW(NULL, (type == 0) ? TRUE : FALSE, FALSE, NULL);
     if (!ev) {
-        fprintf(stderr, "  [KERNEL] KeInitializeTimerEx: CreateEventW failed "
+        NFS_LOG_ERROR("runtime", "  [KERNEL] KeInitializeTimerEx: CreateEventW failed "
                         "(error %u)\n", GetLastError());
         g_eax = 0;
         return;
@@ -3591,13 +3590,13 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
     (void)unused;
     if (!bridge_on_executor()) xbox_guest_pin(1);
     if (slot < 0) {
-        fprintf(stderr, "  [KERNEL] timer thread has no worker stack; "
+        NFS_LOG_INFO("runtime", "  [KERNEL] timer thread has no worker stack; "
                         "timer DPCs will not run\n");
         fflush(stderr);
         return 0;
     }
     g_esp = XBOX_WORKER_STACK_TOP(slot);
-    fprintf(stderr, "  [KERNEL] timer thread on worker stack slice %d (top 0x%08X)\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] timer thread on worker stack slice %d (top 0x%08X)\n",
             slot, XBOX_WORKER_STACK_TOP(slot));
     fflush(stderr);
     {
@@ -3607,7 +3606,7 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          * before the routine runs. */
         uint32_t tib = xbox_AllocThreadTib();
         if (!tib) {
-            fprintf(stderr, "  [KERNEL] timer thread has no TIB; "
+            NFS_LOG_INFO("runtime", "  [KERNEL] timer thread has no TIB; "
                             "timer DPCs will not run\n");
             fflush(stderr);
             return 0;
@@ -3655,7 +3654,7 @@ static void kernel_set_timer(uint32_t timer_va, long long due_100ns,
     if (!g_timer_started) {
         InitializeCriticalSection(&g_timer_lock);
         g_timer_started = 1;
-        fprintf(stderr, "  [KERNEL] timer arm/expiry signals serialized (timer fix v1)\n");
+        NFS_LOG_INFO("runtime", "  [KERNEL] timer arm/expiry signals serialized (timer fix v1)\n");
 #ifdef NFSU_GUEST_EXECUTOR
         if (bridge_on_executor()) {
             XgfFiber *fiber;
@@ -3868,7 +3867,7 @@ static uint32_t bridge_handle_token(HANDLE h)
             s_handle_table[i] = h;
             return BRIDGE_HANDLE_TAG | (uint32_t)i;
         }
-    fprintf(stderr, "  [BRIDGE] handle table full\n");
+    NFS_LOG_INFO("runtime", "  [BRIDGE] handle table full\n");
     return 0;
 }
 
@@ -3996,7 +3995,7 @@ static NTSTATUS bridge_create_file_impl(
     }
 
     if (bridge_is_cdrom_device(name.Buffer)) {
-        fprintf(stderr, "  [FILE] %s -> synthetic DVD device handle\n",
+        NFS_LOG_INFO("files", "  [FILE] %s -> synthetic DVD device handle\n",
                 name.Buffer);
         if (handle_va)
             BRIDGE_MEM32(handle_va) = BRIDGE_CDROM_HANDLE;
@@ -4014,14 +4013,14 @@ static NTSTATUS bridge_create_file_impl(
         bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
 #ifdef __ANDROID__
         const char *diagnostic_path = w32_handle_path(h);
-        fprintf(stderr, "[FILEOPEN] caller=%08X token=%08X options=%08X path=%s\n",
+        NFS_LOG_INFO("files", "[FILEOPEN] caller=%08X token=%08X options=%08X path=%s\n",
                 g_xbox_kernel_caller, handle_va ? BRIDGE_MEM32(handle_va) : 0,
                 options, diagnostic_path ? diagnostic_path : "(unknown)");
 #endif
     } else {
         bridge_write_iostatus(iostatus_va, st, 0);
 #ifdef __ANDROID__
-        fprintf(stderr, "[FILEOPENFAIL] caller=%08X status=%08X path=%.512s\n",
+        NFS_LOG_ERROR("files", "[FILEOPENFAIL] caller=%08X status=%08X path=%.512s\n",
                 g_xbox_kernel_caller, (uint32_t)st, name.Buffer ? name.Buffer : "(unknown)");
 #endif
     }
@@ -4177,13 +4176,13 @@ static void bridge_NtCreateFile(void)
         extern uint32_t xbox_LastFileError(void);
         uint32_t _e = g_eax ? xbox_LastFileError() : 0u;
         if (g_eax)
-            fprintf(stderr, "  [FILE] -> 0x%08X FAILED (win32 err=%u%s)\n",
+            NFS_LOG_ERROR("files", "  [FILE] -> 0x%08X FAILED (win32 err=%u%s)\n",
                     g_eax, _e,
                     _e == 32u ? " ERROR_SHARING_VIOLATION"
                   : _e ==  2u ? " ERROR_FILE_NOT_FOUND"
                   : _e ==  3u ? " ERROR_PATH_NOT_FOUND" : "");
         else
-            fprintf(stderr, "  [FILE] -> 0x%08X\n", g_eax);
+            NFS_LOG_INFO("files", "  [FILE] -> 0x%08X\n", g_eax);
     }
     fflush(stderr);
     /* Vitals: opens, misses and the last file opened. */
@@ -4276,7 +4275,7 @@ static void deliver_one_apc(uint32_t apc_routine, uint32_t apc_context,
         if (apc_routine >= KERNEL_VA_BASE && apc_routine < KERNEL_VA_END) {
             ord = g_slot_ordinals[(apc_routine - KERNEL_VA_BASE) / 4];
         }
-        fprintf(stderr, "  [KERNEL] file I/O APC 0x%08X unresolved"
+        NFS_LOG_INFO("runtime", "  [KERNEL] file I/O APC 0x%08X unresolved"
                 " (kernel ordinal %u)\n", apc_routine, ord);
         fflush(stderr);
     }
@@ -4332,7 +4331,7 @@ static void bridge_XeSection(int load)
     BRIDGE_MEM32(section + XBE_SECTION_REFCOUNT_OFFSET) = count;
 
     if (KERNEL_LOG_ON())
-        fprintf(stderr, "  [XBE] Xe%sSection(0x%08X) refcount=%u\n",
+        NFS_LOG_INFO("runtime", "  [XBE] Xe%sSection(0x%08X) refcount=%u\n",
                 load ? "Load" : "Unload", section, count);
     g_eax = 0;
 }
@@ -4547,14 +4546,14 @@ static void bridge_NtReadFile(void)
          * early looks identical to one that never started -- until you can
          * see where each one landed. */
         if (poff)
-            fprintf(stderr, "  [READ] from=0x%08X ev=%08X apc=%08X @%lld want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
+            NFS_LOG_INFO("runtime", "  [READ] from=0x%08X ev=%08X apc=%08X @%lld want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
                     g_xbox_kernel_caller, STACK_ARG(1), STACK_ARG(2),
                     (long long)off.QuadPart, length, got,
                     (uint32_t)ios.Status,
                     got > 0 ? p[0] : 0, got > 1 ? p[1] : 0,
                     got > 2 ? p[2] : 0, got > 3 ? p[3] : 0);
         else
-            fprintf(stderr, "  [READ] from=0x%08X @seq want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
+            NFS_LOG_INFO("runtime", "  [READ] from=0x%08X @seq want=%u got=%u st=0x%08X  %02X %02X %02X %02X\n",
                     g_xbox_kernel_caller,
                     length, got, (uint32_t)ios.Status,
                     got > 0 ? p[0] : 0, got > 1 ? p[1] : 0,
@@ -4808,8 +4807,7 @@ static void bridge_NtQuerySymbolicLinkObject(void)
         if (!buf_va || len >= max_len) {
             static unsigned warned;
             if (warned++ < 4) {
-                fprintf(stderr,
-                        "  [KERNEL] NtQuerySymbolicLinkObject: buffer 0x%08X "
+                NFS_LOG_DEBUG("runtime", "  [KERNEL] NtQuerySymbolicLinkObject: buffer 0x%08X "
                         "max=%u cannot hold %u bytes; returning "
                         "STATUS_BUFFER_TOO_SMALL\n",
                         buf_va, (unsigned)max_len, (unsigned)len + 1);
@@ -4902,7 +4900,7 @@ static void bridge_NtDeviceIoControlFile(void)
             uint32_t data_len = BRIDGE_MEM32(in_va + 12);
             uint32_t page     = BRIDGE_MEM8(in_va + 30) & 0x3F;
 
-            fprintf(stderr, "  [FILE] DVD MODE SENSE(10) page 0x%02X, "
+            NFS_LOG_INFO("runtime", "  [FILE] DVD MODE SENSE(10) page 0x%02X, "
                             "%u bytes -> authentication page\n", page, data_len);
 
             if (data_va && data_len) {
@@ -4937,7 +4935,7 @@ static void bridge_NtDeviceIoControlFile(void)
             return;
         }
 
-        fprintf(stderr, "  [FILE] DVD device IOCTL 0x%X (in=%u out=%u) "
+        NFS_LOG_INFO("files", "  [FILE] DVD device IOCTL 0x%X (in=%u out=%u) "
                         "-> STATUS_SUCCESS\n", ioctl, in_len, out_len);
         if (out_va && out_len) {
             uint32_t i;
@@ -5006,7 +5004,7 @@ static void bridge_NtDeviceIoControlFile(void)
         return;
     }
 
-    fprintf(stderr, "  [FILE] NtDeviceIoControlFile(0x%X) - unhandled\n", ioctl);
+    NFS_LOG_WARN("files", "  [FILE] NtDeviceIoControlFile(0x%X) - unhandled\n", ioctl);
     bridge_write_iostatus(ios_va, 0xC00000BBu, 0);
     g_eax = 0xC00000BBu; /* STATUS_NOT_SUPPORTED */
 }
@@ -5016,7 +5014,7 @@ static void bridge_NtFsControlFile(void)
 {
     uint32_t fsctl = STACK_ARG(5);
     uint32_t ios_va = STACK_ARG(4);
-    fprintf(stderr, "  [FILE] NtFsControlFile(0x%X) - stub\n", fsctl);
+    NFS_LOG_INFO("files", "  [FILE] NtFsControlFile(0x%X) - stub\n", fsctl);
     bridge_write_iostatus(ios_va, 0xC00000BBu, 0);
     g_eax = 0xC00000BBu;
 }
@@ -5113,7 +5111,7 @@ static void bridge_RtlRaiseException(void)
     static int raise_count = 0;
     raise_count++;
     if (raise_count <= 10) {
-        fprintf(stderr, "  [KERNEL] RtlRaiseException: record=0x%08X code=0x%08X (#%d)\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] RtlRaiseException: record=0x%08X code=0x%08X (#%d)\n",
                 record_ptr, code, raise_count);
         fflush(stderr);
     }
@@ -5148,7 +5146,7 @@ static void bridge_MmMapIoSpace(void)
     uint32_t protect = STACK_ARG(2);
     uint32_t xbox_va = xbox_HeapAlloc(num_bytes, 4096);
 
-    fprintf(stderr, "  [KERNEL] MmMapIoSpace: phys=0x%08X size=%u → Xbox VA 0x%08X\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] MmMapIoSpace: phys=0x%08X size=%u → Xbox VA 0x%08X\n",
             phys_addr, num_bytes, xbox_va);
     fflush(stderr);
 
@@ -5311,7 +5309,7 @@ static void bridge_KeSetBasePriorityThread(void)
     HANDLE h = guest_thread_host(STACK_ARG(0));
     static int shown;
     if (shown++ < 16)
-        fprintf(stderr, "  [KERNEL] KeSetBasePriorityThread(0x%08X, %d)%s\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] KeSetBasePriorityThread(0x%08X, %d)%s\n",
                 STACK_ARG(0), (int)STACK_ARG(1), h ? "" : " -- unknown thread");
     g_eax = h ? (uint32_t)xbox_KeSetBasePriorityThread(h, (LONG)STACK_ARG(1)) : 0;
 }
@@ -6279,7 +6277,7 @@ static void bridge_NtDuplicateObject(void)
                          &dup, 0, FALSE, opts)) {
         static int logged = 0;
         if (logged++ < 8) {
-            fprintf(stderr, "  [KERNEL] NtDuplicateObject: token=0x%08X "
+            NFS_LOG_ERROR("runtime", "  [KERNEL] NtDuplicateObject: token=0x%08X "
                     "handle=%p failed (error %lu)\n",
                     STACK_ARG(0), src, (unsigned long)GetLastError());
             fflush(stderr);
@@ -7248,7 +7246,7 @@ static void ke_shadow_insert(uint32_t guest_va, HANDLE host)
 
     /* Table full -- log and drop the new object. The caller's subsequent
      * waits will fall back to XBOX_TO_NATIVE and fail gracefully. */
-    fprintf(stderr, "  [KERNEL] Ke shadow table full; dropping VA 0x%08X\n",
+    NFS_LOG_INFO("runtime", "  [KERNEL] Ke shadow table full; dropping VA 0x%08X\n",
             guest_va);
     LeaveCriticalSection(&g_ke_shadow_cs);
     CloseHandle(host);
@@ -7416,8 +7414,7 @@ static void bridge_DbgPrint(void)
         size_t i, n = 0;
         for (i = 0; i < 512 && fmt[i]; i++)
             n++;
-        fwrite(fmt, 1, n, stderr);
-        fputc('\n', stderr);
+        NFS_LOG_DEBUG("runtime", "%.*s\n", (int)n, fmt);
         fflush(stderr);
     }
     g_eax = 0;
@@ -7833,7 +7830,7 @@ static void bridge_IoAllocateIrp(void)
     if (va)
         memset((void *)((uintptr_t)va + g_xbox_mem_offset), 0, total);
     else
-        fprintf(stderr, "  [KERNEL] IoAllocateIrp: %u bytes REFUSED\n", total);
+        NFS_LOG_INFO("runtime", "  [KERNEL] IoAllocateIrp: %u bytes REFUSED\n", total);
     g_eax = va;
 }
 
@@ -7965,7 +7962,7 @@ static void bridge_KeInitializeEvent(void)
     BOOL manual_reset = (event_type == 0) ? TRUE : FALSE;
     HANDLE h = CreateEventW(NULL, manual_reset, initial_state ? TRUE : FALSE, NULL);
     if (!h) {
-        fprintf(stderr, "  [KERNEL] KeInitializeEvent: CreateEventW failed (error %u)\n",
+        NFS_LOG_ERROR("runtime", "  [KERNEL] KeInitializeEvent: CreateEventW failed (error %u)\n",
                 GetLastError());
         g_eax = 0;
         return;
@@ -7997,7 +7994,7 @@ static void bridge_KeInitializeMutant(void)
 
     HANDLE h = CreateMutexW(NULL, initial_owner ? TRUE : FALSE, NULL);
     if (!h) {
-        fprintf(stderr, "  [KERNEL] KeInitializeMutant: CreateMutexW failed (error %u)\n",
+        NFS_LOG_ERROR("runtime", "  [KERNEL] KeInitializeMutant: CreateMutexW failed (error %u)\n",
                 GetLastError());
         g_eax = 0;
         return;
@@ -8028,7 +8025,7 @@ static void bridge_KeInitializeSemaphore(void)
 
     HANDLE h = CreateSemaphoreW(NULL, (LONG)count, (LONG)limit, NULL);
     if (!h) {
-        fprintf(stderr, "  [KERNEL] KeInitializeSemaphore: CreateSemaphoreW failed (error %u)\n",
+        NFS_LOG_ERROR("runtime", "  [KERNEL] KeInitializeSemaphore: CreateSemaphoreW failed (error %u)\n",
                 GetLastError());
         g_eax = 0;
         return;
@@ -8397,7 +8394,7 @@ static void bridge_KeSetPriorityThread(void)
     LONG p = (LONG)STACK_ARG(1);
     static int shown;
     if (shown++ < 16)
-        fprintf(stderr, "  [KERNEL] KeSetPriorityThread(0x%08X, %d)%s\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] KeSetPriorityThread(0x%08X, %d)%s\n",
                 STACK_ARG(0), (int)p, h ? "" : " -- unknown thread");
     g_eax = 8;                                   /* previous: assume normal */
     if (h)
@@ -8554,7 +8551,7 @@ static void bridge_NtCreateTimer(void)
 
     h = CreateWaitableTimerW(NULL, TRUE, NULL);
     if (!h) {
-        fprintf(stderr, "  [KERNEL] NtCreateTimer: CreateWaitableTimerW failed (error %u)\n",
+        NFS_LOG_ERROR("runtime", "  [KERNEL] NtCreateTimer: CreateWaitableTimerW failed (error %u)\n",
                 GetLastError());
         g_eax = 0xC000009Au;  /* STATUS_INSUFFICIENT_RESOURCES */
         return;
@@ -8875,7 +8872,7 @@ static void bridge_PsCreateSystemThread(void)
                 }
             }
         } else {
-            fprintf(stderr, "  [KERNEL] PsCreateSystemThread: start routine 0x%08X not found in dispatch!\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] PsCreateSystemThread: start routine 0x%08X not found in dispatch!\n",
                     start_routine);
         }
     }
@@ -9027,7 +9024,7 @@ static void bridge_RtlFreeAnsiString(void)
 static void bridge_RtlRaiseStatus(void)
 {
     uint32_t status = STACK_ARG(0);
-    fprintf(stderr, "  [KERNEL] RtlRaiseStatus: 0x%08X (swallowed)\n", status);
+    NFS_LOG_INFO("runtime", "  [KERNEL] RtlRaiseStatus: 0x%08X (swallowed)\n", status);
     g_eax = 0;
 }
 
@@ -10524,7 +10521,7 @@ static void kernel_thunk_dispatch_body(void)
     ULONG ordinal;
 
     if (slot < 0 || slot >= XBOX_KERNEL_THUNK_TABLE_SIZE) {
-        fprintf(stderr, "  [KERNEL] bad slot %d\n", slot);
+        NFS_LOG_INFO("runtime", "  [KERNEL] bad slot %d\n", slot);
         g_eax = 0;
         g_esp += 4;  /* pop dummy return address */
         return;
@@ -10542,8 +10539,7 @@ static void kernel_thunk_dispatch_body(void)
          * caller pushed it before dispatching here. Logging it turns "some
          * function is calling this" into "this call site is", which is the
          * difference between guessing and knowing when a title recurses. */
-        fprintf(stderr,
-                "  [KERNEL] #%lld: ordinal %u (slot %d) esp=0x%08X ret=0x%08X\n",
+        NFS_LOG_INFO("runtime", "  [KERNEL] #%lld: ordinal %u (slot %d) esp=0x%08X ret=0x%08X\n",
                 g_kernel_call_count, ordinal, slot, g_esp,
                 g_esp ? BRIDGE_MEM32(g_esp) : 0);
         fflush(stderr);
@@ -10555,7 +10551,7 @@ static void kernel_thunk_dispatch_body(void)
         if (last_summary_tick == 0) last_summary_tick = now;
         if (now - last_summary_tick >= 2000 && g_kernel_call_count > 200
                 && !xbox_log_quiet()) {
-            fprintf(stderr, "  [KERNEL] summary: %lld total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] summary: %lld total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
                     g_kernel_call_count, ordinal, slot, g_esp);
             /* And which ones, ranked. "Latest" names whatever the sample
              * happened to land on; the question behind this line is what a
@@ -10575,7 +10571,7 @@ static void kernel_thunk_dispatch_body(void)
                     if (best < 0)
                         break;
                     shown_ord[best] = 1;
-                    fprintf(stderr, "  [KERNEL]   ordinal %3d x%llu\n", best,
+                    NFS_LOG_INFO("runtime", "  [KERNEL]   ordinal %3d x%llu\n", best,
                             (unsigned long long)g_ordinal_calls[best]);
                 }
             }
@@ -10615,7 +10611,7 @@ static void kernel_thunk_dispatch_body(void)
             static uint32_t seen = 0xDEADBEEFu;
             if (_watch_before != seen) {
                 seen = _watch_before;
-                fprintf(stderr, "  [KWATCH] 0x%08X = %08X before ordinal %u"
+                NFS_LOG_INFO("runtime", "  [KWATCH] 0x%08X = %08X before ordinal %u"
                                 " (call #%lld)\n",
                         g_kernel_watch_va, _watch_before, ordinal,
                         g_kernel_call_count);
@@ -10662,7 +10658,7 @@ static void kernel_thunk_dispatch_body(void)
         static uint8_t warned[XBOX_KERNEL_THUNK_TABLE_SIZE];
         if (!warned[slot]) {
             warned[slot] = 1;
-            fprintf(stderr, "  [KERNEL] WARNING: no bridge for ordinal %u (slot %d), returning 0\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] WARNING: no bridge for ordinal %u (slot %d), returning 0\n",
                     ordinal, slot);
             /* "Returning 0" is the harmless half. The damaging half is the
              * stack: the Xbox kernel is stdcall, so the callee owes the caller
@@ -10673,7 +10669,7 @@ static void kernel_thunk_dispatch_body(void)
              * frames away from here. Say so, because a title that dies of this
              * looks nothing like a title that is missing a kernel function. */
             if (g_slot_arg_unknown[slot])
-                fprintf(stderr, "  [KERNEL]   ordinal %u has no entry in "
+                NFS_LOG_INFO("runtime", "  [KERNEL]   ordinal %u has no entry in "
                         "stdcall_args_for_ordinal(). If it takes arguments, "
                         "this call is corrupting the caller's stack -- add its "
                         "argument size there before anything else.\n", ordinal);
@@ -10696,8 +10692,7 @@ static void kernel_thunk_dispatch_body(void)
     if (g_kernel_watch_va) {
         uint32_t _after = BRIDGE_MEM32(g_kernel_watch_va);
         if (_after != _watch_before) {
-            fprintf(stderr,
-                    "  [KWATCH] ordinal %u changed Xbox VA 0x%08X: "
+            NFS_LOG_INFO("runtime", "  [KWATCH] ordinal %u changed Xbox VA 0x%08X: "
                     "%08X -> %08X\n",
                     ordinal, g_kernel_watch_va, _watch_before, _after);
             fflush(stderr);
@@ -10705,7 +10700,7 @@ static void kernel_thunk_dispatch_body(void)
     }
 
     if (KERNEL_LOG_ON()) {
-        fprintf(stderr, "  [KERNEL] → returned 0x%08X\n", g_eax);
+        NFS_LOG_INFO("runtime", "  [KERNEL] → returned 0x%08X\n", g_eax);
         fflush(stderr);
     }
 }
@@ -10767,8 +10762,7 @@ void xbox_kernel_set_thunk_address(uint32_t xbox_va, uint32_t count)
     if (count && count <= XBOX_KERNEL_THUNK_TABLE_SIZE) {
         g_thunk_table_count = count;
     } else if (count > XBOX_KERNEL_THUNK_TABLE_SIZE) {
-        fprintf(stderr,
-                "  Kernel thunk bridge: XBE declares %u thunk slots, clamping to %d\n",
+        NFS_LOG_INFO("runtime", "  Kernel thunk bridge: XBE declares %u thunk slots, clamping to %d\n",
                 count, XBOX_KERNEL_THUNK_TABLE_SIZE);
         g_thunk_table_count = XBOX_KERNEL_THUNK_TABLE_SIZE;
     }
@@ -10802,7 +10796,7 @@ void xbox_kernel_bridge_init(void)
     int unbridged = 0;
     DWORD old_protect;
 
-    fprintf(stderr, "  Kernel thunk bridge: resolving %d entries at 0x%08X\n",
+    NFS_LOG_INFO("runtime", "  Kernel thunk bridge: resolving %d entries at 0x%08X\n",
             g_thunk_table_count, g_thunk_table_base);
 
     /* The thunk table lives in .rdata which is marked PAGE_READONLY.
@@ -10854,7 +10848,7 @@ void xbox_kernel_bridge_init(void)
                 bridged++;
             } else {
                 unbridged++;
-                fprintf(stderr, "  [KERNEL] unbridged function thunk: ordinal %lu"
+                NFS_LOG_INFO("runtime", "  [KERNEL] unbridged function thunk: ordinal %lu"
                         " (slot %u, VA 0x%08X)\n",
                         (unsigned long)ordinal, i, KERNEL_VA_BASE + i * 4);
             }
@@ -10911,7 +10905,7 @@ void xbox_kernel_bridge_init(void)
             resolved++;
             if (g_slot_bridges[slot]) bridged++; else unbridged++;
 
-            fprintf(stderr, "  [KERNEL] extra thunk at 0x%08X: ordinal %u (slot %d)\n",
+            NFS_LOG_INFO("runtime", "  [KERNEL] extra thunk at 0x%08X: ordinal %u (slot %d)\n",
                     va, g_slot_ordinals[slot], slot);
         }
 
@@ -10927,9 +10921,9 @@ void xbox_kernel_bridge_init(void)
         &old_protect
     );
 
-    fprintf(stderr, "  Kernel thunk bridge: %d/%d resolved (%d bridged, %d stub)\n",
+    NFS_LOG_INFO("runtime", "  Kernel thunk bridge: %d/%d resolved (%d bridged, %d stub)\n",
             resolved, g_thunk_table_count, bridged, unbridged);
-    fprintf(stderr, "  Synthetic VA range: 0x%08X-0x%08X\n",
+    NFS_LOG_INFO("runtime", "  Synthetic VA range: 0x%08X-0x%08X\n",
             KERNEL_VA_BASE, KERNEL_VA_BASE + (resolved - 1) * 4);
 
 }
@@ -10982,7 +10976,7 @@ int xbox_guest_executor_prepare(void)
     XgfExecutor *executor = xgf_executor_create();
     if (!executor) abort();
     __atomic_store_n(&s_title_executor, executor, __ATOMIC_RELEASE);
-    fprintf(stderr, "[EXECUTOR] enabled: one native executor, virtual title threads (experimental)\n");
+    NFS_LOG_INFO("runtime", "[EXECUTOR] enabled: one native executor, virtual title threads (experimental)\n");
     return 1;
 #else
     return 0;

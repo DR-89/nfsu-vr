@@ -11,6 +11,7 @@
  * - Each DirectSound buffer maps to an XAudio2 source voice (future)
  * - 3D audio emulated using X3DAudio (future)
  */
+#include "../../include/nfsu_log.h"
 
 #include "dsound_xbox.h"
 #include "../apu/apu.h"
@@ -292,7 +293,7 @@ static HRESULT __stdcall ds_CreateSoundBuffer(IDirectSound8 *self, const DSBUFFE
 
     static int create_log_count = 0;
     if (create_log_count < 30) {
-        fprintf(stderr, "[DSOUND] CreateSoundBuffer: %u bytes, %d ch, %u Hz, %d-bit → mixer slot %d\n",
+        NFS_LOG_INFO("audio", "[DSOUND] CreateSoundBuffer: %u bytes, %d ch, %u Hz, %d-bit → mixer slot %d\n",
                 desc ? desc->dwBufferBytes : 0, buf->channels, buf->frequency,
                 buf->bits_per_sample, buf->mixer_slot);
         create_log_count++;
@@ -381,6 +382,6 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
     (void)pGuid; (void)pUnkOuter;
     if (!ppDS) return E_INVALIDARG;
     *ppDS = &g_dsound;
-    fprintf(stderr, "Audio: DirectSound created (stub - no audio output)\n");
+    NFS_LOG_INFO("audio", "Audio: DirectSound created (stub - no audio output)\n");
     return S_OK;
 }

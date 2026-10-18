@@ -8,6 +8,7 @@
  * Phase 2: Full frame sequence (viewport, transforms, clear color,
  *          begin/end draw, inline vertex data)
  */
+#include "../../include/nfsu_log.h"
 
 #include "nv2a_state.h"
 #include <stdio.h>
@@ -259,7 +260,7 @@ void nv2a_pb_test_frame(void)
 
     /* Log first few frames and periodically */
     if (g_pb_test_frame <= 3 || (g_pb_test_frame % 300) == 0) {
-        fprintf(stderr, "[PB-TEST] Frame %d: wrote %u dwords (%u bytes) at 0x%08X\n",
+        NFS_LOG_DEBUG("graphics", "[PB-TEST] Frame %d: wrote %u dwords (%u bytes) at 0x%08X\n",
                 g_pb_test_frame, dwords, dwords * 4, write_ptr);
         fflush(stderr);
     }
@@ -310,7 +311,7 @@ void nv2a_pb_test_set_active(int active)
 {
     g_pb_test_active = active;
     g_pb_test_frame = 0;
-    fprintf(stderr, "[PB-TEST] Push buffer test %s\n", active ? "ENABLED" : "disabled");
+    NFS_LOG_DEBUG("graphics", "[PB-TEST] Push buffer test %s\n", active ? "ENABLED" : "disabled");
 }
 
 int nv2a_pb_test_is_active(void)

@@ -1,3 +1,4 @@
+#include "../../include/nfsu_log.h"
 #include "guest_vmem.h"
 #include "xbox_memory_layout.h"
 #include <string.h>
@@ -80,9 +81,9 @@ static int extvma_commit(uint32_t start, uint32_t end)
     host_addr = (void *)((uintptr_t)g_xbox_mem_offset + start);
     len = (SIZE_T)(end - start);
     if (!VirtualAlloc(host_addr, len, MEM_COMMIT, PAGE_READWRITE)) {
-        fprintf(stderr, "guest_vmem: failed to commit extended-VMA host backing "
+        NFS_LOG_ERROR("runtime", "guest_vmem: failed to commit extended-VMA host backing "
                         "at %p (%zu bytes, error %lu)\n",
-                host_addr, (size_t)len, GetLastError());
+                host_addr, (size_t)len, (unsigned long)GetLastError());
         return 0;
     }
     return 1;

@@ -21,6 +21,7 @@
  * License as published by the Free Software Foundation; either
  * version 2 of the License, or (at your option) any later version.
  */
+#include "../../include/nfsu_log.h"
 
 #include "apu_state.h"
 #include "fpconv.h"
@@ -75,7 +76,7 @@ static void dsp_ack_init(void)
         p = (*end == ',') ? end + 1 : end;
     }
     if (s_dsp_ack_count)
-        fprintf(stderr, "[APU] DSP doorbell ack: %d address(es), first 0x%08X\n",
+        NFS_LOG_INFO("audio", "[APU] DSP doorbell ack: %d address(es), first 0x%08X\n",
                 s_dsp_ack_count, s_dsp_ack[0]);
 }
 
@@ -127,7 +128,7 @@ static void dsp_ack_frame(MCPXAPUState *d)
         if (*slot) {
             static int shown[APU_DSP_ACK_MAX];
             if (shown[i]++ < 3)
-                fprintf(stderr, "[APU] DSP doorbell 0x%08X: command 0x%08X"
+                NFS_LOG_INFO("audio", "[APU] DSP doorbell 0x%08X: command 0x%08X"
                                 " acknowledged\n", s_dsp_ack[i], *slot);
             *slot = 0;
         }
@@ -149,7 +150,7 @@ void mcpx_apu_dsp_init(MCPXAPUState *d)
     d->ep.realtime = false;
     downmix_init();
 
-    fprintf(stderr, "[APU] DSP GP/EP initialized (STUBBED - passthrough mode)\n");
+    NFS_LOG_INFO("audio", "[APU] DSP GP/EP initialized (STUBBED - passthrough mode)\n");
 }
 
 void mcpx_apu_update_dsp_preference(MCPXAPUState *d)

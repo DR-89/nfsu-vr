@@ -1,4 +1,5 @@
 /* gl_api.c -- fill the entry-point table declared in gl_api.h. */
+#include "../../include/nfsu_log.h"
 #include "gl_api.h"
 
 #include <stdio.h>
@@ -14,7 +15,7 @@ int nv2a_gl_load(void *(*getproc)(const char *name))
 #define NV2A_GL_RESOLVE(ret, name, args) \
     p_##name = (PFN_##name)getproc(#name); \
     if (!p_##name) { \
-        fprintf(stderr, "  [GL] missing entry point %s\n", #name); \
+        NFS_LOG_DEBUG("graphics", "  [GL] missing entry point %s\n", #name); \
         missing++; \
     }
     NV2A_GL_FUNCS(NV2A_GL_RESOLVE)

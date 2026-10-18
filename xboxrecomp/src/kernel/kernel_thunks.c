@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <time.h>
+#include "../../include/nfsu_log.h"
 
 extern ptrdiff_t g_xbox_mem_offset;
 
@@ -41,6 +42,7 @@ static int   g_log_level = XBOX_LOG_INFO;
 static CRITICAL_SECTION g_log_cs;
 static BOOL  g_log_cs_init = FALSE;
 
+#ifndef NFSU_USE_ZLOG
 static const char* xbox_log_level_str(int level)
 {
     switch (level) {
@@ -52,9 +54,21 @@ static const char* xbox_log_level_str(int level)
         default:             return "?????";
     }
 }
+#endif
 
 void xbox_log(int level, const char* subsystem, const char* fmt, ...)
 {
+#ifdef NFSU_USE_ZLOG
+    static const int levels[] = {NFS_LOG_LEVEL_ERROR, NFS_LOG_LEVEL_WARN,
+        NFS_LOG_LEVEL_INFO, NFS_LOG_LEVEL_DEBUG, NFS_LOG_LEVEL_TRACE};
+    if (level < XBOX_LOG_ERROR || level > XBOX_LOG_TRACE || g_log_level < 0) return;
+    /* An explicit old level remains a source-side limit; otherwise zlog owns it. */
+    if (getenv("XBOX_LOG_LEVEL") && level > g_log_level) return;
+    va_list args;
+    va_start(args, fmt);
+    nfs_log_vmessage_tagged("kernel", levels[level], __FILE__, __func__, __LINE__, subsystem, fmt, args);
+    va_end(args);
+#else
     va_list args;
     char timestamp[32];
     SYSTEMTIME st;
@@ -81,6 +95,7 @@ void xbox_log(int level, const char* subsystem, const char* fmt, ...)
 
     if (g_log_cs_init)
         LeaveCriticalSection(&g_log_cs);
+#endif
 }
 
 /* ============================================================================
@@ -408,8 +423,12 @@ void xbox_kernel_init(void)
         const char *nl = getenv("RECOMP_NO_LOG");
         if (nl && *nl == '1')
             g_log_level = -1;
-        else
+        else {
+#ifndef __ANDROID__
             g_log_file = fopen("xbox_kernel.log", "w");
+#endif
+            /* Android's zlog adapter writes kernel.log and the combined logs. */
+        }
     }
 
     /* Set log level from environment variable if present */

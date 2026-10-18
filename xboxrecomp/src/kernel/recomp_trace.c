@@ -10,6 +10,7 @@
  * Output goes to stderr, unbuffered, because the question tracing answers is
  * usually "what was the last thing that happened before it died".
  */
+#include "../../include/nfsu_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,7 +68,7 @@ static void prof_report(void)
 
     if (!g_prof_used)
         return;
-    fprintf(stderr, "\n[PROFILE] %d functions entered%s, hottest first:\n",
+    NFS_LOG_TRACE("runtime", "\n[PROFILE] %d functions entered%s, hottest first:\n",
             g_prof_used, g_prof_full ? " (table full, some dropped)" : "");
     for (shown = 0; shown < 40; shown++) {
         int best = -1;
@@ -85,7 +86,7 @@ static void prof_report(void)
         if (best < 0)
             break;
         taken[ntaken++] = best;
-        fprintf(stderr, "  %14llu  %s (0x%08X)\n",
+        NFS_LOG_TRACE("runtime", "  %14llu  %s (0x%08X)\n",
                 g_prof[best].hits, g_prof_name[best] ? g_prof_name[best] : "?",
                 g_prof[best].va);
     }
@@ -151,7 +152,7 @@ void recomp_trace_enter(const char *name, uint32_t va)
      * [esp], and it names the call site, which is the thing a trace of "who
      * reached this" actually needs. Reading a guest stack dump for it works
      * only when the frames above are still live. */
-    fprintf(stderr, "[TRACE] -> %s (0x%08X)  from=%08X esp=%08X eax=%08X "
+    NFS_LOG_TRACE("runtime", "[TRACE] -> %s (0x%08X)  from=%08X esp=%08X eax=%08X "
             "ecx=%08X esi=%08X edi=%08X ebx=%08X\n",
             name, va,
             *(const uint32_t *)((uintptr_t)g_esp + xbox_GetMemoryOffset()),
@@ -167,11 +168,11 @@ void recomp_trace_enter(const char *name, uint32_t va)
 
         if (n <= 0 || n > 32)
             n = 8;
-        fprintf(stderr, "         args:");
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "         args:");
         for (i = 1; i <= n; i++)
-            fprintf(stderr, " %d=%08X", i,
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, " %d=%08X", i,
                     *(const uint32_t *)(mem + g_esp + i * 4));
-        fprintf(stderr, "\n");
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "\n");
         /* And the object eax points at. A matrix of NaNs says the maths went
          * wrong; whether its inputs were already zero says whether the maths
          * is at fault or the data behind it was never built. */
@@ -184,19 +185,19 @@ void recomp_trace_enter(const char *name, uint32_t va)
                 int k;
                 if (a < 0x00010000u || a >= 0x04000000u)
                     continue;
-                fprintf(stderr, "         arg%d -> [%08X]:", i, a);
+                NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "         arg%d -> [%08X]:", i, a);
                 for (k = 0; k < 12; k++)
-                    fprintf(stderr, " %08X",
+                    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, " %08X",
                             *(const uint32_t *)(mem + a + k * 4));
-                fprintf(stderr, "\n");
+                NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "\n");
             }
         }
         if (g_eax > 0x00010000u && g_eax < 0x04000000u) {
-            fprintf(stderr, "         [eax=%08X]:", g_eax);
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "         [eax=%08X]:", g_eax);
             for (i = 0; i < 24; i++)
-                fprintf(stderr, " %08X",
+                NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, " %08X",
                         *(const uint32_t *)(mem + g_eax + i * 4));
-            fprintf(stderr, "\n");
+            NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "\n");
         }
     }
     fflush(stderr);
@@ -209,7 +210,7 @@ void recomp_trace_exit(const char *name, uint32_t va)
 {
     if (prof_enabled()) return;     /* entries alone carry the count */
     if (!trace_budget()) return;
-    fprintf(stderr, "[TRACE] <- %s (0x%08X)  esp=%08X eax=%08X ecx=%08X "
+    NFS_LOG_TRACE("runtime", "[TRACE] <- %s (0x%08X)  esp=%08X eax=%08X ecx=%08X "
             "esi=%08X edi=%08X ebx=%08X\n",
             name, va, g_esp, g_eax, g_ecx, g_esi, g_edi, g_ebx);
     fflush(stderr);
@@ -222,7 +223,7 @@ void recomp_trace_esp(const char *name, const char *tag)
 {
     if (prof_enabled()) return;
     if (!trace_budget()) return;
-    fprintf(stderr, "[ESP] %s @%s  esp=%08X esi=%08X edi=%08X\n",
+    NFS_LOG_TRACE("runtime", "[ESP] %s @%s  esp=%08X esi=%08X edi=%08X\n",
             name, tag, g_esp, g_esi, g_edi);
     fflush(stderr);
 }
@@ -250,7 +251,7 @@ void recomp_debug_service(uint32_t service, uint32_t arg_va)
     uint32_t buffer_va;
 
     if (service != 1) {
-        fprintf(stderr, "[GUEST] DebugService %u (arg 0x%08X), ignored\n",
+        NFS_LOG_TRACE("runtime", "[GUEST] DebugService %u (arg 0x%08X), ignored\n",
                 (unsigned)service, arg_va);
         fflush(stderr);
         return;
@@ -264,8 +265,8 @@ void recomp_debug_service(uint32_t service, uint32_t arg_va)
     if (!buffer_va || !length)
         return;
 
-    fprintf(stderr, "[GUEST] %.*s", (int)length, (const char *)(mem + buffer_va));
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "[GUEST] %.*s", (int)length, (const char *)(mem + buffer_va));
     if (length && ((const char *)(mem + buffer_va))[length - 1] != '\n')
-        fputc('\n', stderr);
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_TRACE, "\n");
     fflush(stderr);
 }

@@ -15,6 +15,7 @@
  *   crashes   libnx's CPU exception hook prints the host and guest state
  */
 #ifdef __SWITCH__
+#include "../xboxrecomp/include/nfsu_log.h"
 #include <switch.h>
 
 #include <fcntl.h>
@@ -199,7 +200,7 @@ int __wrap_SDL_SYS_SetThreadPriority(int prio)
     const char *e = getenv("RECOMP_NX_AUDIO_PRIO");
     if (prio == 3 /* SDL_THREAD_PRIORITY_TIME_CRITICAL */ && !(e && *e == '0')) {
         Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2B);
-        fprintf(stderr, "  [AUDIO] SDL audio thread at priority 0x2B (rc 0x%X)\n", rc);
+        NFS_LOG_INFO("audio", "  [AUDIO] SDL audio thread at priority 0x2B (rc 0x%X)\n", rc);
         if (R_SUCCEEDED(rc))
             return 0;
     }
@@ -249,7 +250,7 @@ static void perf_report(void)
     uint32_t f = nv2a_gl_frame_count();
     char vb[128];
     xbox_vblank_report(10.0, vb, sizeof vb);
-    fprintf(stderr, "[perf] %.1f fps, textures %llu MB, %u shader programs, %s\n",
+    NFS_LOG_INFO("system", "[perf] %.1f fps, textures %llu MB, %u shader programs, %s\n",
             (f - last_frames) / 10.0,
             (unsigned long long)(nv2a_gl_texture_bytes() >> 20), nv2a_gl_program_count(), vb);
     {
@@ -257,18 +258,18 @@ static void perf_report(void)
          * heavy stutter after ~30 min until the game is restarted) would
          * show here as a heap that keeps growing. */
         struct mallinfo mi = mallinfo();
-        fprintf(stderr, "[perf] heap %u MB in use, %u MB free in the arena\n",
+        NFS_LOG_INFO("system", "[perf] heap %u MB in use, %u MB free in the arena\n",
                 (unsigned)(mi.uordblks >> 20), (unsigned)(mi.fordblks >> 20));
     }
     /* 1500 frames/s is real time; below it, movies (clocked by DirectSound's
      * play cursor) run slow. */
-    fprintf(stderr, "[perf] APU %d frames/s (1500 = real time), frame thread %.0f%% busy\n",
+    NFS_LOG_INFO("system", "[perf] APU %d frames/s (1500 = real time), frame thread %.0f%% busy\n",
             mcpx_apu_frames_per_second(), mcpx_apu_utilization() * 100.0f);
     {
         int mcpx_apu_pacing_stats(char *buf, int cap);
         char pb[256];
         mcpx_apu_pacing_stats(pb, sizeof pb);
-        fprintf(stderr, "[perf] APU pacing: %s\n", pb);
+        NFS_LOG_INFO("system", "[perf] APU pacing: %s\n", pb);
     }
     {
         /* Output health: device gaps (audren ran dry: SDL's thread late),
@@ -277,7 +278,7 @@ static void perf_report(void)
         static uint64_t last_under, last_drop;
         Xa2Stats st;
         xa2_get_stats(&st);
-        fprintf(stderr, "[perf] audio out: %u buffers, %u device gaps, worst %u.%u ms between"
+        NFS_LOG_INFO("system", "[perf] audio out: %u buffers, %u device gaps, worst %u.%u ms between"
                         " buffers, %llu queue underruns, %llu dropped, peak %d\n",
                 s_aout_bufs, s_aout_gaps, s_aout_worst_us / 1000, s_aout_worst_us / 100 % 10,
                 (unsigned long long)(st.underruns - last_under),
@@ -292,7 +293,7 @@ static void perf_report(void)
         void mcpx_apu_ring_stats(uint32_t *stale, uint32_t *total);
         uint32_t st, tot;
         mcpx_apu_ring_stats(&st, &tot);
-        fprintf(stderr, "[perf] APU ring voices: %u of %u samples stale (%u.%02u%%)\n",
+        NFS_LOG_INFO("system", "[perf] APU ring voices: %u of %u samples stale (%u.%02u%%)\n",
                 st, tot, tot ? (unsigned)(100ull * st / tot) : 0,
                 tot ? (unsigned)(10000ull * st / tot % 100) : 0);
     }
@@ -304,7 +305,7 @@ static void perf_report(void)
         int idle, held;
         nv2a_gl_queue_stats(10.0, &idle, &held);
         if (idle >= 0)
-            fprintf(stderr, "[perf] GL thread idle %d%% (queue empty), executor held back %d%% "
+            NFS_LOG_INFO("system", "[perf] GL thread idle %d%% (queue empty), executor held back %d%% "
                     "(queue full / two frames queued)\n", idle, held);
     }
     {
@@ -382,7 +383,7 @@ static void load_env(void)
             continue;
         *eq = 0;
         setenv(line, eq + 1, 1);
-        printf("[switch] env %s=%s\n", line, eq + 1);
+        NFS_LOG_INFO("system", "[switch] env %s=%s\n", line, eq + 1);
     }
     fclose(f);
 }
@@ -552,7 +553,7 @@ static void logo_upload(void)
         gl.LinkProgram(s_logo_prog);
         gl.GetProgramiv(s_logo_prog, GL_LINK_STATUS_, &ok);
         if (!ok) {
-            fprintf(stderr, "[switch] loading screen: logo shader did not link\n");
+            NFS_LOG_INFO("system", "[switch] loading screen: logo shader did not link\n");
             s_logo_prog = 0;
         } else {
             gl.UseProgram(s_logo_prog);
@@ -715,7 +716,7 @@ static void *loader_main(void *arg)
     unsigned frame = 0;
     (void)arg;
     if (!loader_gl_up()) {
-        fprintf(stderr, "[switch] loading screen: no GL window (%s)\n", SDL_GetError());
+        NFS_LOG_INFO("system", "[switch] loading screen: no GL window (%s)\n", SDL_GetError());
         s_loader_ready = -1;
         return NULL;
     }
@@ -751,7 +752,7 @@ int nv2a_gl_adopt_window(void **win, void **ctx)
     s_loader_running = 0;
     if (s_loader_ready < 0 || !s_win || !s_ctx)
         return 0;
-    printf("[switch] loading screen handed over after %.1f s\n", since_boot());
+    NFS_LOG_INFO("system", "[switch] loading screen handed over after %.1f s\n", since_boot());
     *win = s_win;
     *ctx = s_ctx;
     return 1;
@@ -805,7 +806,7 @@ static void prof_flush(void)
         fwrite(s_prof, sizeof s_prof[0], s_prof_n, f);
         fclose(f);
     }
-    fprintf(stderr, "[prof] %u samples written\n", s_prof_n);
+    NFS_LOG_INFO("system", "[prof] %u samples written\n", s_prof_n);
     s_prof_n = 0;
 }
 
@@ -887,7 +888,7 @@ static void prof_thread(void *arg)
             for (i = 0; i < MAXT && xbox_nx_thread_at(i, &hh, &entry) && len < 1000; i++)
                 len += snprintf(line + len, sizeof line - len, " %d=%x", i,
                                 entry ? prof_off(entry) : 0u);
-            fprintf(stderr, "%s\n", line);
+            NFS_LOG_INFO("system", "%s\n", line);
             prof_flush();
             t_flush = armGetSystemTick();
         }
@@ -908,10 +909,10 @@ static void prof_start(void)
     /* 0x2A: above every game and host thread, so it runs on time. */
     if (R_FAILED(threadCreate(&t, prof_thread, NULL, NULL, 0x4000, 0x2A, -2))
         || R_FAILED(threadStart(&t))) {
-        fprintf(stderr, "[prof] could not start the profiler thread\n");
+        NFS_LOG_ERROR("system", "[prof] could not start the profiler thread\n");
         return;
     }
-    fprintf(stderr, "[prof] sampling busy threads at 1 kHz into prof.bin (NRO base %p)\n",
+    NFS_LOG_INFO("system", "[prof] sampling busy threads at 1 kHz into prof.bin (NRO base %p)\n",
             (void *)&_start);
 }
 
@@ -1041,7 +1042,7 @@ static void clk_keeper(void *arg)
             clk_set(i, want);
             s_clk[i].touched = 1;
             if (logged++ < 16)
-                printf("[clock] %s %s: was %u MHz, set %u MHz\n", s_clk[i].name,
+                NFS_LOG_INFO("system", "[clock] %s %s: was %u MHz, set %u MHz\n", s_clk[i].name,
                        m ? "docked" : "handheld", hz / 1000000u, want / 1000000u);
         }
     }
@@ -1072,7 +1073,7 @@ static void clk_apply(void)
     else if (R_SUCCEEDED(pcvInitialize()))
         s_clk_rst = 0;
     else {
-        printf("[clock] neither clkrst nor pcv is available: clocks unchanged\n");
+        NFS_LOG_INFO("system", "[clock] neither clkrst nor pcv is available: clocks unchanged\n");
         return;
     }
     int mode = clk_docked();
@@ -1083,7 +1084,7 @@ static void clk_apply(void)
             continue;
         if (s_clk_rst) {
             if (R_FAILED(rc = clkrstOpenSession(&s_clk[i].s, s_clk[i].id, 3))) {
-                printf("[clock] %s: no clkrst session (0x%X)\n", s_clk[i].name, rc);
+                NFS_LOG_INFO("system", "[clock] %s: no clkrst session (0x%X)\n", s_clk[i].name, rc);
                 continue;
             }
             s_clk[i].open = 1;
@@ -1091,7 +1092,7 @@ static void clk_apply(void)
         clk_get(i, &s_clk[i].old_hz);
         s_clk[i].set_hz[0] = s_clk[i].want_hz[0] ? clk_pick(i, s_clk[i].want_hz[0]) : 0;
         s_clk[i].set_hz[1] = s_clk[i].want_hz[1] ? clk_pick(i, s_clk[i].want_hz[1]) : 0;
-        printf("[clock] %s: handheld %u MHz, docked %u MHz (0 = system's)\n", s_clk[i].name,
+        NFS_LOG_INFO("system", "[clock] %s: handheld %u MHz, docked %u MHz (0 = system's)\n", s_clk[i].name,
                s_clk[i].set_hz[0] / 1000000u, s_clk[i].set_hz[1] / 1000000u);
         hz = s_clk[i].set_hz[mode];
         if (!hz)
@@ -1099,7 +1100,7 @@ static void clk_apply(void)
         rc = clk_set(i, hz);
         clk_get(i, &now);
         s_clk[i].touched = 1;
-        printf("[clock] %s %u -> %u MHz (%s)%s\n", s_clk[i].name,
+        NFS_LOG_INFO("system", "[clock] %s %u -> %u MHz (%s)%s\n", s_clk[i].name,
                s_clk[i].old_hz / 1000000u, now / 1000000u, mode ? "docked" : "handheld",
                R_FAILED(rc) ? " -- refused" : "");
     }
@@ -1117,13 +1118,13 @@ void switch_boot(void)
     socketInitializeDefault();
     s_nxlink = nxlinkStdio();
     if (s_nxlink < 0 && !log_open())
-        fprintf(stderr, "[switch] log device unavailable\n");
+        NFS_LOG_WARN("system", "[switch] log device unavailable\n");
     load_env();
     s_log_sync = getenv("NFSU2_LOG_SYNC") && strcmp(getenv("NFSU2_LOG_SYNC"), "1") == 0;
     {
         const char *a = getenv("NFSU2_NO_LOG"), *b = getenv("NFSU2_LOG");
         if ((a && *a == '1') || (b && *b == '0')) {
-            printf("[switch] logging off (NFSU2_NO_LOG): no log, [perf] or profiler\n");
+            NFS_LOG_INFO("system", "[switch] logging off (NFSU2_NO_LOG): no log, [perf] or profiler\n");
             setenv("RECOMP_NO_LOG", "1", 1);     /* the kernel's own log file */
             setenv("RECOMP_QUIET", "1", 1);
             unsetenv("RECOMP_NX_PROFILE");
@@ -1138,7 +1139,7 @@ void switch_boot(void)
         AppletType at = appletGetAppletType();
         svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
         svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
-        printf("[switch] applet type %d (%s), memory %lu MB total / %lu MB used\n",
+        NFS_LOG_INFO("system", "[switch] applet type %d (%s), memory %lu MB total / %lu MB used\n",
                (int)at, (at == AppletType_Application || at == AppletType_SystemApplication)
                         ? "title override, full memory"
                         : "applet mode: launch via a game title (hold R) for full memory",
@@ -1166,7 +1167,7 @@ void switch_error_dialog(const char *msg, const char *details)
             rc = errorSystemShow(&c);
     }
     if (R_FAILED(rc))
-        fprintf(stderr, "[switch] error applet failed (0x%X)\n", rc);
+        NFS_LOG_ERROR("system", "[switch] error applet failed (0x%X)\n", rc);
 }
 
 void switch_shutdown(void)
@@ -1183,10 +1184,10 @@ u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx)
 {
-    fprintf(stderr, "[CRASH] exception %u at PC=0x%lx far=0x%lx (guest VA 0x%08X)\n",
+    NFS_LOG_FATAL("system", "[CRASH] exception %u at PC=0x%lx far=0x%lx (guest VA 0x%08X)\n",
             ctx->error_desc, (unsigned long)ctx->pc.x, (unsigned long)ctx->far.x,
             (uint32_t)(ctx->far.x - (uintptr_t)g_xbox_mem_offset));
-    fprintf(stderr, "  lr=0x%lx sp=0x%lx  (switch_boot at %p: subtract to get an ELF address)\n",
+    NFS_LOG_INFO("system", "  lr=0x%lx sp=0x%lx  (switch_boot at %p: subtract to get an ELF address)\n",
             (unsigned long)ctx->lr.x, (unsigned long)ctx->sp.x, (void *)switch_boot);
     print_guest_state();
     log_flush(0);
