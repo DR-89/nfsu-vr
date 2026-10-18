@@ -6,9 +6,10 @@
 #include "touch_geometry.h"
 typedef struct {
     uint32_t package, target, message, screen;
-    uint32_t palette_entry, list_entry;
+    uint32_t palette_entry, palette_channel, palette_part, list_entry;
     uint32_t magazine_slot, magazine_page;
     unsigned back, screen_control, carousel;
+    unsigned vinyl_layer, carousel_sync;
     unsigned swipe_only, magazine_swipe, focus_only;
     TouchSwipeAxis swipe_axis;
     float swipe_distance;

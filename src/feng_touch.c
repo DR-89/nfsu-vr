@@ -370,6 +370,71 @@ static int touch_screen_control(uint32_t screen, uint32_t objects, uint32_t coun
                                 TouchTarget *target)
 {
     if (screen != touch_active_screen()) return 0;
+    uint32_t type = MEM32(screen);
+    if (type == 0x001FE45Cu || type == 0x00200A68u) {
+        /* Color Vinyl and decal Black/White footers invoke native X.
+         * F5600 toggles the decal color and refreshes its label/preview. */
+        for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+            uint32_t object = s_touch_bounds[i].object;
+            if (MEM32(object + 0x18) != 2) continue;
+            uint32_t language = MEM32(object + 0x5C);
+            int vinyl = type == 0x001FE45Cu &&
+                (language == touch_name_hash("GARAGE_COLOR_VINYL") ||
+                 language == touch_name_hash("COLORVINYL") ||
+                 language == touch_name_hash("PC_VINYL_COLOR"));
+            int decal = type == 0x00200A68u &&
+                (language == 0x3CC939B4u || language == 0xA39F11F8u);
+            if (!vinyl && !decal) continue;
+            TouchBounds area = s_touch_bounds[i];
+            if (vinyl || decal) {
+                uint32_t icon = touch_rendered_object(0xAAB7EE36u);
+                TouchBounds bounds;
+                if (icon && touch_object_bounds(icon, &bounds, 0))
+                    touch_bounds_include(&area, &bounds);
+            }
+            float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+            if (x < area.left - 16 || x >= area.right + 16 ||
+                y < area.top - 16 || y >= area.bottom + 16) continue;
+            target->target = object;
+            target->message = 0xC519BFC0u;
+            return 1;
+        }
+    }
+    if (type == 0x001FDD74u) {
+        /* Reuse the paint palette's native Select for each vinyl channel,
+         * then its purchase/confirmation dialog. No touch-specific commit. */
+        for (unsigned i = 0; i < s_touch_bounds_count; i++) {
+            uint32_t object = s_touch_bounds[i].object;
+            if (MEM32(object + 0x18) != 2) continue;
+            uint32_t language = MEM32(object + 0x5C);
+            if (language != touch_name_hash("ACCEPT") &&
+                language != touch_name_hash("PC_ACCEPT") &&
+                language != touch_name_hash("PC_ACCEPT_LC")) continue;
+            TouchBounds area = s_touch_bounds[i];
+            float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
+            if (x < area.left - 16 || x >= area.right + 16 ||
+                y < area.top - 16 || y >= area.bottom + 16) continue;
+            target->target = object;
+            target->message = 0x406415E3u;
+            return 1;
+        }
+    }
+    if (type == 0x001FC2BCu || type == 0x00200208u) {
+        /* BA3D0: introductory magazine panel. EF300/EBDD0: native
+         * magazine front/back confirmation. These captions need not have
+         * the FEng interactive flag; dispatch Select through their screen. */
+        const uint32_t captions[] = { 0x3E3934ADu, 0xE65A5489u,
+            0x532BDF3Bu, 0xF980693Du };
+        unsigned first = type == 0x001FC2BCu ? 0 : 3;
+        unsigned end = type == 0x001FC2BCu ? 3 : 4;
+        for (unsigned i = first; i < end; i++) {
+            uint32_t object = touch_rendered_named_hit(captions[i]);
+            if (!object) continue;
+            target->target = object;
+            target->message = 0x406415E3u;
+            return 1;
+        }
+    }
     if (MEM32(screen) == 0x001FC078u) { /* UndergroundBriefScreen, B8F60 */
         uint32_t package = MEM32(screen + 0xC);
         for (unsigned i = 0; i < count; i++) {
@@ -544,7 +609,10 @@ uint32_t touch_preview_screen(void)
         uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
         if (vtable == 0x001FDD74u || vtable == 0x001FB8F4u ||
             vtable == 0x001FC1ACu || vtable == 0x001FBFCCu ||
-            vtable == 0x001FC26Cu || vtable == 0x001FC278u)
+            vtable == 0x001FC26Cu || vtable == 0x001FC278u ||
+            vtable == 0x001FC2BCu || vtable == 0x001FE45Cu ||
+            vtable == 0x001FE630u || vtable == 0x001FE790u ||
+            vtable == 0x001FE7BCu)
             return screen; /* ColorPicker, QuickRaceCarSelect, MainMenuCarCustomize,
                             * ChooseCareerCarScreen */
         return handler >= 0x000EB000u && handler < 0x000F7000u &&
@@ -619,11 +687,13 @@ void feng_touch_hit(void)
 /* All paint categories use ColorPicker; B14 remains owned by the native
  * controller, including availability, price and confirmation dialogs. */
 static uint32_t s_paint_screen, s_paint_entry, s_paint_color;
+static uint32_t s_paint_channel, s_paint_part;
 static uint64_t s_paint_tap_ms;
 
 static void touch_paint_reset(void)
 {
     s_paint_screen = s_paint_entry = s_paint_color = 0;
+    s_paint_channel = s_paint_part = 0;
 }
 
 static int touch_paint_capture(uint32_t screen, TouchTarget *target, float x, float y)
@@ -640,6 +710,8 @@ static int touch_paint_capture(uint32_t screen, TouchTarget *target, float x, fl
         target->target = object;
         target->message = 1; /* palette selection, no purchase/accept */
         target->palette_entry = entry;
+        target->palette_channel = MEM32(screen + 0xB20);
+        target->palette_part = MEM32(screen + 0xB14);
         touch_target_begin(target, screen, s_touch_x, s_touch_y);
         return 1;
     }
@@ -651,16 +723,21 @@ static void touch_paint_select(const TouchTarget *target)
     uint32_t entry = target->palette_entry, screen = target->screen;
     uint32_t row = MEM32(entry + 0x24), column = MEM32(entry + 0x28);
     if (row >= 6 || column >= 10 || !MEM32(entry + 0x10) ||
-        MEM32(entry + 0xC) != target->target) { touch_paint_reset(); return; }
+        MEM32(entry + 0xC) != target->target ||
+        MEM32(screen + 0xB20) != target->palette_channel ||
+        MEM32(screen + 0xB14) != target->palette_part) { touch_paint_reset(); return; }
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t ms = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
     uint32_t color = MEM32(entry + 0x10);
     int accept = s_paint_screen == screen && s_paint_entry == entry &&
-        s_paint_color == color && ms - s_paint_tap_ms <= 350 &&
+        s_paint_color == color && s_paint_channel == target->palette_channel &&
+        s_paint_part == target->palette_part && ms - s_paint_tap_ms <= 350 &&
         MEM32(screen + 0xB08) == row && MEM32(screen + 0xB0C) == column;
     s_paint_screen = screen; s_paint_entry = entry; s_paint_color = color;
     s_paint_tap_ms = ms;
+    s_paint_channel = target->palette_channel;
+    s_paint_part = target->palette_part;
     MEM32(screen + 0xB08) = row;
     MEM32(screen + 0xB0C) = column;
     PUSH32(esp, 0); ecx = screen; sub_000C74C0();
@@ -781,7 +858,8 @@ void feng_touch_dispatch(void)
                 int valid = 1;
                 if (target->magazine_slot && message == 0x406415E3u)
                     valid = touch_magazine_select(target);
-                if (valid && target->list_entry && message == target->message)
+                if (valid && (target->list_entry || target->carousel_sync || target->vinyl_layer) &&
+                    message == target->message)
                     valid = touch_carousel_select(target);
                 if (!valid) {
                     eax = saved_eax; edx = saved_edx; ecx = feng; esp = saved_esp + 8;

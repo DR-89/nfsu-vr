@@ -626,3 +626,75 @@ Synthetic coverage includes both reward screens, captions, hidden captions,
 arrows, both swipe directions, gap taps and camera boundary crossings.
 Physical-device acceptance after winning the corresponding time trials remains
 pending.
+
+### Magazine reward and confirmation touch
+
+UndergroundMagazineGiveth (1FC2BC, BB9B0/BAC80) now uses the shared
+horizontal carousel: inline browser +3C, selected rendered node +48.
+Left/Right go through BAC00, which owns reward cursor +78 and refreshes BA590;
+touch does not overwrite that cursor with a browser node. Rendered magazine
+captions B6640DCC/8212CD62 activate Select. Introductory panel objects
+3E3934AD/E65A5489/532BDF3B also dispatch Select, allowing BAC80 to dismiss
+the introduction before opening DummyMagazine.fng. On MagazineScreen
+(200208), caption F980693D dispatches Select to EF300, preserving native
+front/back confirmation and completion behavior.
+
+The synthetic fixture covers reward arrows, tap, gap swipes, camera ownership,
+introductory and confirmation captions, absent geometry and cancelled drags.
+Host regression and Android assembleDebug passed; physical-device acceptance
+of the reward-to-magazine sequence is pending (no ADB device connected).
+
+### Vinyl layers, type, group and drawing selection
+
+GarageNewVinylScreen (1FE45C, CDB60/CEDA0) owns four fixed rendered images
+at +3C..+48 rather than a garage browser. The shared carousel adapter binds
+these images to layer taps, strip swipes and exclusive preview orbit. A layer
+tap synchronizes native cursor 2BBBF0, refreshes CE590/CDC20, then dispatches
+Select. Left/Right remain owned by CED50. The localized GARAGE_COLOR_VINYL
+or COLORVINYL footer dispatches the native X message C519BFC0, preserving
+availability checks and the existing native color workflow.
+
+GarageVinylTypeScreen (1FE630), GarageVinylGroupScreen (1FE790) and
+GarageVinylBrowserScreen (1FE7BC) inherit CF880's inline browser at +48.
+Their data list at +40 and cursor +3C are separate from rendered browser nodes.
+Touch synchronizes the tapped data ID through CEC90 before MouseClick;
+CECF0 accepts MouseClick but does not accept the generic Select message.
+Zero is a valid vinyl ID and must not disable synchronization. Shared gesture
+handling keeps gap taps inert and gives strip swipes priority over camera orbit.
+
+Synthetic coverage checks all four layer targets, the Color Vinyl caption,
+all three browser types, stale cursor synchronization with ID zero, arrows,
+gap taps and strip swipes without camera rotation. Physical-device validation
+of the vinyl workflow is still required.
+The updated APK assembled successfully and installed on Poco X7 (24095PCADG)
+with adb install -r. LauncherActivity start was requested, but keyguard was
+showing and the screenshot was black; this does not confirm a game launch
+or physical touch behavior.
+
+### Black/White Decal footer
+
+GarageDecalsBrand (200A68, handler F5600) now binds the rendered localized
+BLACK_DECAL/WHITE_DECAL caption to native X (C519BFC0). ED0E0 supplies the
+caption object 5B32EE7C and adjacent X glyph AAB7EE36; their combined rendered
+bounds include the gap and finger tolerance. The native handler owns the color
+bit and preview refresh, so touch does not write decal state directly.
+Synthetic coverage checks release-only dispatch, both caption states, the X
+glyph, drag cancellation and absent rendered footer geometry. In-game color
+and preview behavior still require physical-device validation.
+
+### Vinyl color workflow through the shared paint palette
+
+The Color Vinyl footer also recognizes PC_VINYL_COLOR and includes the rendered
+X glyph in the caption hit bounds. ColorPicker (1FDD74) reuses the same populated
+swatch selection, preview and double-tap Select behavior as body paint. Its
+localized ACCEPT/PC_ACCEPT/PC_ACCEPT_LC caption now dispatches Select directly,
+letting C8A10 advance native vinyl color channels and handle purchase dialogs.
+No separate color application path is introduced.
+
+Palette gestures retain the native channel (+B20) and part (+B14). A release
+after either changes is cancelled; double-tap matching also includes both,
+so a reused swatch cannot accidentally confirm the next channel. Synthetic
+coverage models four sequential native channel transitions, checks preview
+without automatic confirmation on each, explicit Accept and dragged Accept,
+stale-channel release, and PC_VINYL_COLOR/X activation. Device acceptance of
+the complete workflow remains pending.
