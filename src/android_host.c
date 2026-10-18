@@ -9,6 +9,7 @@
 #include <sys/system_properties.h>
 #include "android_diagnostics.h"
 #include "../xboxrecomp/include/nfsu_perf.h"
+#include "../xboxrecomp/src/kernel/guest_executor.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -238,12 +239,21 @@ int android_host_run(void)
     }
 }
 
-/* SDL attaches this guest thread to the VM; Java posts dialog work to UI. */
-void android_show_port_credits(void)
+/* ART must run on the original pthread stack, never a guest fiber stack.
+ * Java then posts the actual window work to the Android UI thread. */
+static void show_port_credits_native(void *argument)
 {
+    (void)argument;
     JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    if (!env) return;
     jobject activity = SDL_AndroidGetActivity();
-    if (!env || !activity) return;
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        if (activity) (*env)->DeleteLocalRef(env, activity);
+        return;
+    }
+    if (!activity) return;
     jclass cls = (*env)->GetObjectClass(env, activity);
     jmethodID method = cls ? (*env)->GetMethodID(env, cls, "showPortCredits", "()V") : NULL;
     if (method) (*env)->CallVoidMethod(env, activity, method);
@@ -253,4 +263,10 @@ void android_show_port_credits(void)
     }
     if (cls) (*env)->DeleteLocalRef(env, cls);
     (*env)->DeleteLocalRef(env, activity);
+}
+
+void android_show_port_credits(void)
+{
+    if (xbox_guest_executor_native_call(show_port_credits_native, NULL)) return;
+    show_port_credits_native(NULL);
 }
