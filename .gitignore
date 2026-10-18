@@ -71,3 +71,6 @@ xboxrecomp/tools/*/output/
 local.properties
 **/build/
 *.apk
+
+
+performance-results

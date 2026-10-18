@@ -40,7 +40,7 @@ struct XgfExecutor {
     uintptr_t owner;
     unsigned fibers;
     uint64_t sequence;
-    int reschedule;
+    uint64_t ready_generation;
     void (*native_call)(void *);
     void *native_argument;
     int on_native_callback;
@@ -63,6 +63,8 @@ struct XgfFiber {
     unsigned suspended;
     uint64_t ready_order;
     uint64_t slice_start;
+    uint64_t preempt_generation;
+    int preempt_valid, preempt_higher, preempt_equal;
     HANDLE thread_handle;
     DWORD exit_code;
     LPTHREAD_START_ROUTINE thread_entry;
@@ -160,7 +162,7 @@ XgfFiber *xgf_create(XgfExecutor *e, XgfEntry entry, void *argument,
     f->executor = e; f->entry = entry; f->argument = argument;
     f->mapping = mapping; f->mapping_size = mapping_size; f->state = XGF_NEW;
     f->ready_order = next_order(e);
-    __atomic_store_n(&e->reschedule, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&e->ready_generation, 1, __ATOMIC_RELEASE);
     uintptr_t top = ((uintptr_t)mapping + page + stack_size) & ~(uintptr_t)15;
 #if defined(__aarch64__)
     f->native.x[0] = (uintptr_t)f; /* x19: bootstrap argument */
@@ -192,7 +194,7 @@ XgfState xgf_resume(XgfExecutor *e, XgfFiber *f)
     __atomic_store_n(&f->notified, 0, __ATOMIC_RELEASE);
     f->state = XGF_RUNNING;
     f->slice_start = monotonic_ms();
-    __atomic_store_n(&e->reschedule, 0, __ATOMIC_RELEASE);
+    f->preempt_valid = 0;
     __atomic_store_n(&f->ready_order, 0, __ATOMIC_RELEASE);
     e->active = f;
     running = e;
@@ -280,6 +282,7 @@ int xgf_destroy(XgfFiber *f)
     while (*link != f) link = &(*link)->next;
     *link = f->next;
     f->executor->fibers--;
+    __atomic_add_fetch(&f->executor->ready_generation, 1, __ATOMIC_RELEASE);
     free(f);
     return 1;
 }
@@ -298,7 +301,7 @@ int xgf_set_priority(XgfFiber *f, int priority)
 {
     if (!f || !on_owner(f->executor)) return 0;
     __atomic_store_n(&f->priority, priority, __ATOMIC_RELAXED);
-    __atomic_store_n(&f->executor->reschedule, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&f->executor->ready_generation, 1, __ATOMIC_RELEASE);
     return 1;
 }
 int xgf_prepare_wait(XgfFiber *f)
@@ -320,8 +323,8 @@ void xgf_notify(XgfFiber *f)
     XgfExecutor *e = f->executor;
     pthread_mutex_lock(&e->wake_lock);
     mark_ready(f);
-    __atomic_store_n(&e->reschedule, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&f->notified, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&e->ready_generation, 1, __ATOMIC_RELEASE);
     pthread_cond_signal(&e->wake);
     pthread_mutex_unlock(&e->wake_lock);
 }
@@ -380,7 +383,7 @@ int xgf_invoke(XgfExecutor *e, LPTHREAD_START_ROUTINE callback,
     e->submitters++;
     *e->submission_tail = &s;
     e->submission_tail = &s.next;
-    __atomic_store_n(&e->reschedule, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&e->ready_generation, 1, __ATOMIC_RELEASE);
     pthread_cond_signal(&e->wake);
     while (!s.done) pthread_cond_wait(&s.completed, &e->wake_lock);
     e->submitters--;
@@ -421,22 +424,33 @@ int xgf_should_preempt(void)
     if (!self || running->on_native_callback) return 0;
     if (__atomic_load_n(&self->suspended, __ATOMIC_ACQUIRE)) return 1;
     XgfExecutor *e = self->executor;
-    int expired = monotonic_ms() > self->slice_start;
-    if (!expired && !__atomic_load_n(&e->reschedule, __ATOMIC_ACQUIRE)) return 0;
-    pthread_mutex_lock(&e->wake_lock);
-    int submissions = e->submissions != NULL;
-    pthread_mutex_unlock(&e->wake_lock);
-    if (submissions) return 1;
-    int priority = xgf_priority(self);
-    for (XgfFiber *f = e->list; f; f = f->next) {
-        if (f == self || __atomic_load_n(&f->suspended, __ATOMIC_ACQUIRE)) continue;
-        XgfState state = xgf_state(f);
-        if ((state == XGF_NEW || state == XGF_SUSPENDED) &&
-            (xgf_priority(f) > priority || (expired && xgf_priority(f) == priority))) return 1;
+    /* Only the owner changes the list. Native notifications, priority changes
+     * and suspend/resume publish a generation after updating their metadata.
+     * Cache the competitor classification until that generation changes; a
+     * quiet safe point needs neither a mutex/list walk nor a clock read when
+     * there is no equal-priority competitor. Never clear a native notification.
+     */
+    uint64_t generation = __atomic_load_n(&e->ready_generation, __ATOMIC_ACQUIRE);
+    if (!self->preempt_valid || self->preempt_generation != generation) {
+        pthread_mutex_lock(&e->wake_lock);
+        int higher = e->submissions != NULL;
+        pthread_mutex_unlock(&e->wake_lock);
+        int equal = 0, priority = xgf_priority(self);
+        for (XgfFiber *f = e->list; f; f = f->next) {
+            if (f == self || __atomic_load_n(&f->suspended, __ATOMIC_ACQUIRE)) continue;
+            XgfState state = xgf_state(f);
+            if (state != XGF_NEW && state != XGF_SUSPENDED) continue;
+            int other_priority = xgf_priority(f);
+            if (other_priority > priority) higher = 1;
+            if (other_priority == priority) equal = 1;
+        }
+        self->preempt_higher = higher;
+        self->preempt_equal = equal;
+        self->preempt_generation = generation;
+        self->preempt_valid = 1;
     }
-    /* Clearing reschedule here could erase a simultaneous native notification;
-     * leave it latched until the next resume instead. */
-    return 0;
+    return self->preempt_higher ||
+        (self->preempt_equal && monotonic_ms() > self->slice_start);
 }
 
 XgfRunResult xgf_executor_run(XgfExecutor *e, uint32_t budget_ms, XgfPoll poll)
@@ -491,13 +505,14 @@ static void thread_priority(void *thread, int priority)
 {
     XgfFiber *f = thread;
     __atomic_store_n(&f->priority, priority, __ATOMIC_RELAXED);
-    __atomic_store_n(&f->executor->reschedule, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&f->executor->ready_generation, 1, __ATOMIC_RELEASE);
     thread_wake(f);
 }
 static void thread_suspend(void *thread, unsigned count)
 {
     XgfFiber *f = thread;
     __atomic_store_n(&f->suspended, count, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&f->executor->ready_generation, 1, __ATOMIC_RELEASE);
     thread_wake(f);
 }
 static void thread_exit(void *thread, DWORD code)
