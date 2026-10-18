@@ -555,14 +555,17 @@ void usb_gamepad_output(int dev, const uint8_t *data, int len)
     vib.wLeftMotorSpeed  = (uint16_t)(data[2] | (data[3] << 8));
     vib.wRightMotorSpeed = (uint16_t)(data[4] | (data[5] << 8));
     /* The title resends the same speeds every frame or so; the host call
-     * can be an IPC (Switch hid), so only changes go out. */
-    if (vib.wLeftMotorSpeed == last_l[dev] && vib.wRightMotorSpeed == last_r[dev])
-        return;
+     * can be an IPC (Switch hid), so only changes go out. Android must
+     * refresh SDL's timed effects, and retry routing after pad hotplug. */
+    int changed = vib.wLeftMotorSpeed != last_l[dev] || vib.wRightMotorSpeed != last_r[dev];
+#ifndef __ANDROID__
+    if (!changed) return;
+#endif
     last_l[dev] = vib.wLeftMotorSpeed;
     last_r[dev] = vib.wRightMotorSpeed;
     if (trace < 0)
         trace = getenv("RECOMP_RUMBLE_TRACE") != NULL;
-    if (trace) {
+    if (trace && changed) {
         NFS_LOG_INFO("input", "  PAD%d: rumble %04X %04X\n", dev + 1,
                 vib.wLeftMotorSpeed, vib.wRightMotorSpeed);
         fflush(stderr);
