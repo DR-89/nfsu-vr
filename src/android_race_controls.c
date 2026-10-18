@@ -1,7 +1,9 @@
+#include "input_mode.h"
 /* Publish UI mode and prepare the virtual SDL controller before the guest
  * samples a USB report. Both physical and touch input use guest port zero. */
 #include <jni.h>
 #include "race_touch.h"
+#include "menu_touch.h"
 #include "feng_touch.h"
 #include "android_input.h"
 #include "../xboxrecomp/src/usb/usb_gamepad.h"
@@ -9,16 +11,22 @@
 
 int __real_usb_gamepad_report(int dev, uint8_t *out, int max);
 
-static int touch_enabled(void)
+static int screen_hold_enabled(void)
 {
-    return !android_input_has_controller() && !feng_touch_race_menu_active() &&
+    return input_mode_sensor_enabled() && !feng_touch_race_menu_active() &&
         xbox_GetMemoryBase() &&
         *(volatile uint32_t *)(uintptr_t)(xbox_GetMemoryOffset() + 0x00283434u) == 6;
+}
+
+static int touch_enabled(void)
+{
+    return input_mode_get().overlay_enabled && screen_hold_enabled();
 }
 
 void android_race_controls_poll(void)
 {
     android_input_poll();
+    race_touch_enable_hold(screen_hold_enabled());
     int enabled = touch_enabled();
     race_touch_enable(enabled);
     if (!enabled) android_input_set_touch(0);
@@ -28,6 +36,7 @@ static void prepare_report(int dev)
 {
     if (dev != 0) return;
     android_input_poll();
+    race_touch_enable_hold(screen_hold_enabled());
     android_input_set_touch(race_touch_consume(touch_enabled()));
 }
 
@@ -67,4 +76,40 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeCancel(
     (void)env; (void)cls;
     race_touch_cancel();
     android_input_set_touch(0);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_nfsu_android_RaceControlsView_nativeTakeEditorRequest(
+        JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return race_touch_take_editor_request();
+}
+
+JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeSetEditing(
+        JNIEnv *env, jclass cls, jboolean editing)
+{
+    (void)env; (void)cls;
+    race_touch_set_editing(editing);
+    menu_touch_cancel();
+    android_input_set_touch(0);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_nfsu_android_RaceControlsView_nativeHoldEnabled(
+        JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return race_touch_hold_enabled();
+}
+JNIEXPORT void JNICALL Java_org_nfsu_android_RaceControlsView_nativeSetHold(
+        JNIEnv *env, jclass cls, jboolean down)
+{
+    (void)env; (void)cls;
+    race_touch_set_hold(down);
+}
+
+JNIEXPORT jint JNICALL Java_org_nfsu_android_RaceControlsView_nativeButtonMask(
+        JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return (jint)race_touch_button_mask();
 }

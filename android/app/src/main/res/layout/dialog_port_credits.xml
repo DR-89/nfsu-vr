@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:background="@drawable/launcher_card" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="24dp">
+        <ImageView android:layout_width="match_parent" android:layout_height="56dp"
+            android:src="@drawable/launcher_logo" android:scaleType="fitCenter"
+            android:contentDescription="@string/launcher_logo" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:text="@string/port_credits_title"
+            android:textColor="#F3F6F7" android:textSize="22sp" android:textStyle="bold"
+            android:fontFamily="sans-serif-condensed" />
+        <TextView android:id="@+id/port_credits_text"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:textColor="#ABB4BC"
+            android:textColorLink="#A5DCEB" android:textSize="16sp"
+            android:lineSpacingExtra="5dp" android:linksClickable="true" />
+        <Button android:id="@+id/port_credits_close"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:minHeight="48dp"
+            android:background="@drawable/launcher_button" android:backgroundTint="@null"
+            android:textColor="#10242C" android:text="@string/port_credits_close"
+            android:textAllCaps="false" />
+    </LinearLayout>
+</ScrollView>

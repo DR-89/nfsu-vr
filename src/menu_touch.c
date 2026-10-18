@@ -2,6 +2,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <string.h>
+#include "input_mode.h"
 
 /* Preserve short taps between guest frames. FEng resolves hover AFTER button
  * edges, so each down must first spend one update selecting its real object. */
@@ -25,10 +26,21 @@ void menu_touch_cancel(void)
     pthread_mutex_unlock(&mutex);
 }
 
+static unsigned mode_revision;
+static void sync_mode_locked(void)
+{
+    InputMode mode = input_mode_get();
+    if (mode.revision != mode_revision) {
+        cancel_locked();
+        mode_revision = mode.revision;
+    }
+}
+
 void menu_touch_event(enum MenuTouchEvent event, float x, float y, int width, int height)
 {
     pthread_mutex_lock(&mutex);
-    if (event != MENU_TOUCH_DOWN && !producer_down) {
+    sync_mode_locked();
+    if (!input_mode_sensor_enabled() || (event != MENU_TOUCH_DOWN && !producer_down)) {
         pthread_mutex_unlock(&mutex);
         return;
     }
@@ -53,6 +65,7 @@ void menu_touch_event(enum MenuTouchEvent event, float x, float y, int width, in
 MenuTouchSample menu_touch_sample(void)
 {
     pthread_mutex_lock(&mutex);
+    sync_mode_locked();
     current.prepare = 0;
     if (release_pending) {
         current.active = 0;

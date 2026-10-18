@@ -1,3 +1,4 @@
+#include "input_mode.h"
 /* Exercise actual draw/hit/input hooks with synthetic cached quads and a
  * focus adapter. See docs/native-menu-touch.md. */
 #include <assert.h>
@@ -117,11 +118,29 @@ void sub_000DE540(void)
     assert(g_ecx == 0x28000);
     assert(MEM32(g_esp + 4) == expected_message);
     assert(MEM32(g_esp + 8) == expected);
+    if (MEM32(g_ecx) == 0x1FC078 && expected_message == 0x0C407210) {
+        /* B88C0 calls B8880 with the button object. B8880 reads its +10
+         * hash before mapping EASY/MEDIUM/HARD to the race difficulty. */
+        uint32_t object = MEM32(g_esp + 8);
+        uint32_t hash = MEM32(object + 0x10);
+        assert(hash == 0x14DD31 || hash == 0x6BAA2200 || hash == 0x16821E);
+        MEM32(0x29C460) = hash == 0x16821E ? 2 : hash == 0x6BAA2200 ? 1 : 0;
+    }
     assert(MEM32(g_esp + 12) == 1 && MEM32(g_esp + 16) == package);
     controller_selects++; presses++;
     g_eax = 0xBAD; g_ecx = 0xDEAD; g_edx = 0xBEEF;
     g_esp += 20;
 }
+uint32_t xbox_ContiguousAlloc(uint32_t size, uint32_t alignment)
+{
+    (void)size; (void)alignment;
+    assert(!"unexpected options text allocation");
+    return 0;
+}
+void sub_000DD490(void) { assert(!"unexpected options text refresh"); }
+void sub_000DC340(void) { assert(!"unexpected option object lookup"); }
+void sub_000DC220(void) { assert(!"unexpected option state change"); }
+void sub_000DCD30(void) { assert(!"unexpected option color change"); }
 void sub_000D7A00(void) { focus_flushes++; g_esp += 4; }
 void sub_000D6D30(void)
 {
@@ -561,6 +580,8 @@ int main(void)
     MEM32(screen) = 0x1FC12C;
     uint32_t list = 0x2E000, event = 0x2E100;
     MEM32(screen + 0x3C) = list;
+    MEM32(list) = 0x1FF870;
+    MEM32(list + 0xC) = event;
     MEM32(list + 4) = event;
     MEM32(event) = list + 4;
     MEM32(event + 8) = 0x2E200;
@@ -602,10 +623,12 @@ int main(void)
     expected_message = 0xB5971BF1; tap(.7f, no);
     assert(controller_selects == before_actions + 2);
     expected = yes;
+    expected_message = 0x9120409E;
     menu_touch_event(MENU_TOUCH_DOWN, .3f, .6f, 1280, 720); update(); update();
     menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
     menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
-    assert(controller_selects == before_actions + 2); /* car-arrow drag cancels */
+    assert(controller_selects == before_actions + 3); /* arrow drag uses shared swipe */
+    before_actions++;
     memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
     menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
     menu_touch_event(MENU_TOUCH_MOVE, .07f, .5f, 1280, 720); update();
@@ -622,67 +645,143 @@ int main(void)
     expected_message = 0x406415E3;
     tap(.7f, no);
     assert(controller_selects == before_actions + 3);
-    /* SELECT LOCATION has a separate controller and no preview camera.
-     * Its native browser lives at +48, selected node at +54. */
-    MEM32(screen) = 0x1FB848;
-    MEM32(0x1FB848 + 4) = 0xB1880;
-    MEM32(screen + 0x48) = 0x1FF870;
-    MEM32(screen + 0x54) = 0x2E400;
-    MEM32(0x2E40C) = no;
-    MEM32(yes + 0x10) = 0x543398D3;
-    MEM32(no + 0x10) = 0xDB157AC6;
+    /* Underground difficulty: a new choice only focuses; tapping the
+     * selected choice starts the race. Decide before hover, even when native
+     * code changes focus while the finger is held. */
+    MEM32(package + 0x88) = 2;
+    MEM32(0x22000) = yes; MEM32(0x22004) = no;
+    MEM32(screen) = 0x1FC078;
+    MEM32(screen + 0xC) = package;
+    MEM32(0x1FC078 + 4) = 0xB8F60;
+    MEM32(yes + 0x10) = 0x14DD31; /* EASY */
+    MEM32(no + 0x10) = 0x16821E; /* HARD */
+    MEM32(package + 0x80) = no;
     draw_bounds();
     before_actions = controller_selects;
-    expected_message = 0x9120409E; tap(.3f, yes);
-    expected_message = 0xB5971BF1; tap(.7f, no);
+    int before_flushes = focus_flushes;
+    expected_message = 0x0C407210;
+    tap(.3f, yes);
+    assert(controller_selects == before_actions);
+    assert(MEM32(package + 0x80) == yes && focus_flushes > before_flushes);
+    MEM32(package + 0x80) = no; /* transient native focus must not lose the touch choice */
+    tap(.3f, yes);
+    assert(controller_selects == before_actions + 1);
+    assert(MEM32(0x29C460) == 0); /* EASY */
+    tap(.7f, no);
+    assert(controller_selects == before_actions + 1);
+    assert(MEM32(package + 0x80) == no);
+    tap(.7f, no);
     assert(controller_selects == before_actions + 2);
-    MEM32(no + 0x10) = 0x12345678; /* selected track thumbnail */
+    assert(MEM32(0x29C460) == 2); /* HARD */
+    MEM32(yes + 0x10) = 0x6BAA2200; /* MEDIUM uses the same rule */
     draw_bounds();
-    expected_message = 0x406415E3; tap(.7f, no);
+    tap(.3f, yes);
+    assert(controller_selects == before_actions + 2);
+    tap(.3f, yes);
     assert(controller_selects == before_actions + 3);
-    /* The location caption also accepts Select, independently of thumbnail. */
-    MEM32(yes + 0x10) = 0x03C8F634;
+    assert(MEM32(0x29C460) == 1); /* MEDIUM */
+    /* Realistic separate label/reward quads: the amount and intervening
+     * gap belong to the same difficulty, beyond the text glyphs. */
+    const uint32_t difficulties[] = { 0x14DD31, 0x6BAA2200, 0x16821E };
+    const uint32_t rewards[] = { 0x64DDFDFF, 0x22AD620E, 0x3434E0AC };
+    for (unsigned d = 0; d < 3; d++) {
+        MEM32(yes + 0x10) = difficulties[d];
+        MEM32(no + 0x10) = difficulties[(d + 1) % 3];
+        MEM32(0x2F010) = rewards[d];
+        MEM32(0x2F110) = rewards[(d + 1) % 3];
+        feng_touch_frame_begin();
+        add_quad(yes, 100, 330, 220, 350);
+        add_quad(no, 400, 330, 520, 350);
+        add_quad(0x2F000, 140, 370, 180, 390);
+        add_quad(0x2F100, 440, 370, 480, 390);
+        MEM32(package + 0x80) = no;
+        int actions = controller_selects;
+        tap_at(160.0f / 640, 380.0f / 480, yes); /* amount selects */
+        assert(controller_selects == actions && MEM32(package + 0x80) == yes);
+        tap_at(160.0f / 640, 360.0f / 480, yes); /* gap confirms */
+        assert(controller_selects == actions + 1 && MEM32(0x29C460) == d);
+        tap_at(95.0f / 640, 380.0f / 480, yes); /* beside the digits */
+        assert(controller_selects == actions + 2);
+    }
     draw_bounds();
-    expected_message = 0x406415E3; tap(.3f, yes);
-    assert(controller_selects == before_actions + 4);
-    /* Swipe either way is release-only; a stationary gap tap is inert. */
-    carousel_layout = 1; draw_bounds();
+    before_actions = controller_selects - 3;
+    /* A drag cannot select or start; leaving the screen cancels release. */
     expected = no;
-    expected_message = 0xB5971BF1;
-    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
-    menu_touch_event(MENU_TOUCH_MOVE, .6f, .08f, 1280, 720); update();
-    assert(controller_selects == before_actions + 4);
-    menu_touch_event(MENU_TOUCH_UP, .6f, .08f, 1280, 720); update(); update();
-    assert(controller_selects == before_actions + 5);
-    expected_message = 0x9120409E;
-    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
-    menu_touch_event(MENU_TOUCH_UP, .8f, .08f, 1280, 720); update(); update();
-    assert(controller_selects == before_actions + 6);
-    menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
-    menu_touch_event(MENU_TOUCH_UP, .7f, .08f, 1280, 720); update(); update();
-    assert(controller_selects == before_actions + 6);
-    /* An empty map drag must not rotate a hidden garage camera. */
-    memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
-    menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
-    menu_touch_event(MENU_TOUCH_MOVE, .1f, .5f, 1280, 720); update();
-    memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
-    assert(after == yaw);
-    menu_touch_cancel(); update();
-    carousel_layout = 0; draw_bounds();
-    /* Back also dispatches on this screen, even with no selectable rows. */
-    MEM32(package + 0x88) = 0;
-    MEM32(yes + 0x18) = 2;
-    MEM32(yes + 0x5C) = 0x001335F0;
-    expected_message = 0x911AB364; tap(.3f, yes);
-    assert(controller_selects == before_actions + 7);
-    MEM32(yes + 0x18) = MEM32(yes + 0x5C) = 0;
-    MEM32(package + 0x88) = 2;
-    /* Leaving this typed screen while a thumbnail is held cancels Select. */
-    expected = no;
-    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
-    MEM32(screen) = 0x1FC384;
-    menu_touch_event(MENU_TOUCH_UP, .7f, .5f, 1280, 720); update(); update();
-    assert(controller_selects == before_actions + 7);
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .6f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .8f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 3);
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .6f, 1280, 720); update(); update();
+    MEM32(screen) = 0x1FC12C;
+    menu_touch_event(MENU_TOUCH_UP, .7f, .6f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 3);
+    /* Both track browsers share gestures and never orbit a preview car. */
+    for (unsigned career_map = 0; career_map < 2; career_map++) {
+        /* SELECT LOCATION has a separate controller and no preview camera.
+         * Its native browser lives at +48, selected node at +54. */
+        MEM32(screen) = career_map ? 0x1FC12C : 0x1FB848;
+        MEM32(0x1FC12C + 4) = 0xB95D0;
+        MEM32(screen + 0x3C) = 0x2E600;
+        MEM32(0x2E600) = 0x1FF870;
+        MEM32(0x2E60C) = 0x2E400;
+        MEM32(0x1FB848 + 4) = 0xB1880;
+        MEM32(screen + 0x48) = 0x1FF870;
+        MEM32(screen + 0x54) = 0x2E400;
+        MEM32(0x2E40C) = no;
+        MEM32(yes + 0x10) = 0x543398D3;
+        MEM32(no + 0x10) = 0xDB157AC6;
+        draw_bounds();
+        before_actions = controller_selects;
+        expected_message = 0x9120409E; tap(.3f, yes);
+        expected_message = 0xB5971BF1; tap(.7f, no);
+        assert(controller_selects == before_actions + 2);
+        MEM32(no + 0x10) = 0x12345678; /* selected track thumbnail */
+        draw_bounds();
+        expected_message = 0x406415E3; tap(.7f, no);
+        assert(controller_selects == before_actions + 3);
+        /* The location caption also accepts Select, independently of thumbnail. */
+        MEM32(yes + 0x10) = career_map ? 0x007CFAB7 : 0x03C8F634;
+        draw_bounds();
+        expected_message = 0x406415E3; tap(.3f, yes);
+        assert(controller_selects == before_actions + 4);
+        /* Swipe either way is release-only; a stationary gap tap is inert. */
+        carousel_layout = 1; draw_bounds();
+        expected = no;
+        expected_message = 0xB5971BF1;
+        menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .6f, .08f, 1280, 720); update();
+        assert(controller_selects == before_actions + 4);
+        menu_touch_event(MENU_TOUCH_UP, .6f, .08f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 5);
+        expected_message = 0x9120409E;
+        menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_UP, .8f, .08f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 6);
+        menu_touch_event(MENU_TOUCH_DOWN, .7f, .08f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_UP, .7f, .08f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 6);
+        /* An empty map drag must not rotate a hidden garage camera. */
+        memcpy(&yaw, (void *)XBOX_PTR(0x2C044), 4);
+        menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .1f, .5f, 1280, 720); update();
+        memcpy(&after, (void *)XBOX_PTR(0x2C044), 4);
+        assert(after == yaw);
+        menu_touch_cancel(); update();
+        carousel_layout = 0; draw_bounds();
+        /* Back also dispatches on this screen, even with no selectable rows. */
+        MEM32(package + 0x88) = 0;
+        MEM32(yes + 0x18) = 2;
+        MEM32(yes + 0x5C) = 0x001335F0;
+        expected_message = 0x911AB364; tap(.3f, yes);
+        assert(controller_selects == before_actions + 7);
+        MEM32(yes + 0x18) = MEM32(yes + 0x5C) = 0;
+        MEM32(package + 0x88) = 2;
+        /* Leaving this typed screen while a thumbnail is held cancels Select. */
+        expected = no;
+        menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+        MEM32(screen) = 0x1FC384;
+        menu_touch_event(MENU_TOUCH_UP, .7f, .5f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 7);
+    }
     /* MainMenuCarCustomize has a controller outside the tuning range,
      * but constructs the horizontal browser at +48 (selected node +54). */
     MEM32(screen) = 0x1FC1AC;
@@ -724,9 +823,24 @@ int main(void)
     /* Gaps beside small carousel logos capture immediately, with no hold.
      * Include the top edge, above the logo and its former 16-pixel margin.
      * A tap in a gap does nothing; its swipe cannot orbit the camera. */
-    for (unsigned browser = 0; browser < 2; browser++) {
-        MEM32(screen) = browser ? 0x1FC384 : 0x1FC1AC;
+    for (unsigned browser = 0; browser < 4; browser++) {
+        /* Both garages, Quick Race and the first Underground car selection
+         * share swipe capture and camera boundaries despite native offsets. */
+        MEM32(screen) = browser == 3 ? 0x1FBFCC :
+            browser == 2 ? 0x1FB8F4 : browser ? 0x1FC384 : 0x1FC1AC;
+        MEM32(screen + (browser == 2 ? 0x58 : 0x54)) = 0x2E400;
+        MEM32(0x1FBFCC + 4) = 0xB7DD0; /* ChooseCareerCarScreen */
         MEM32(0x1FC384 + 4) = 0xEEB80; /* Underground garage controller */
+        before_actions = controller_selects;
+        MEM32(no + 0x10) = 0xDB157AC6;
+        draw_bounds();
+        expected_message = 0x9120409E; tap(.3f, yes);
+        expected_message = 0xB5971BF1; tap(.7f, no);
+        MEM32(no + 0x10) = 0x12345678;
+        draw_bounds();
+        expected_message = browser == 2 ? 0x406415E3 : 0x0C407210;
+        tap(.7f, no);
+        assert(controller_selects == before_actions + 3);
         carousel_layout = 1; draw_bounds();
         before_actions = controller_selects;
         tap(.1f, no);
@@ -817,6 +931,30 @@ int main(void)
     MEM32(screen + 0x40) = 10; /* scrolled while held: do not open a new item */
     menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
     assert(controller_selects == before_actions + 2);
+    /* Magazine swipes own the gesture: scroll once on release, never open
+     * the cover or change its cursor; the grid gap is swipe-only as well. */
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 300, 100, 400, 180);
+    add_quad(no, 420, 100, 520, 180);
+    MEM32(screen + 0x3C) = 6;
+    before_actions = controller_selects;
+    expected = yes; expected_message = 0x911C0A4B;
+    menu_touch_event(MENU_TOUCH_DOWN, 350.0f/640, 160.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_MOVE, 350.0f/640, 110.0f/480, 1280, 720); update();
+    assert(controller_selects == before_actions);
+    menu_touch_event(MENU_TOUCH_UP, 350.0f/640, 110.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 1 && MEM32(screen + 0x3C) == 6);
+    tap_at(410.0f/640, 130.0f/480, no); /* empty space between columns */
+    assert(controller_selects == before_actions + 1);
+    expected = no; expected_message = 0x72619778;
+    menu_touch_event(MENU_TOUCH_DOWN, 410.0f/640, 110.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, 410.0f/640, 165.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2 && MEM32(screen + 0x3C) == 6);
+    /* A horizontal drag cannot open a cover either. */
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, 350.0f/640, 130.0f/480, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, 390.0f/640, 130.0f/480, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2);
     /* Pause stays in GameFlow 6. C0040 consumes numeric row identities
      * through MouseClick; using Select silently does nothing. */
     MEM32(0x283434) = 6;
@@ -887,6 +1025,20 @@ int main(void)
     before_actions = controller_selects;
     tap_at(350.0f / 640, 160.0f / 480, yes);
     assert(controller_selects == before_actions + 1);
+    /* Actual pause layout: row container has no rendered quad; only its
+     * OptionText child is drawn. Dispatch must still target OptionName_2. */
+    MEM32(package + 0x84) = 0x22000;
+    MEM32(package + 0x88) = 2;
+    MEM32(0x22000) = yes; MEM32(0x22004) = no;
+    MEM32(yes + 0x10) = 0x1AEC7D0A; /* OptionName_2 */
+    MEM32(no + 0x10) = 0x293A1ACEu /* OptionText_2 */;
+    draw_mask = 0; draw_bounds();
+    add_quad(no, 80, 200, 350, 220);
+    expected_message = 0xB5971BF1;
+    before_actions = controller_selects;
+    tap_at(220.0f / 640, 210.0f / 480, yes);
+    assert(controller_selects == before_actions + 1);
+    MEM32(package + 0x88) = 0;
     MEM32(screen) = 0x1F9404; /* countdown screen must not hide race controls */
     update();
     assert(!feng_touch_race_menu_active());
@@ -896,5 +1048,62 @@ int main(void)
     MEM32(package + 0x1C) = 0; /* unpaused: no active FEng menu */
     update();
     assert(!feng_touch_race_menu_active());
+    /* Dialog answers and profile rows accept taps beside their text. */
+    stale_mouse_edge = 0;
+    MEM32(screen + 0x48) = 0;
+    MEM32(0x1FC384 + 4) = 0;
+    MEM32(package + 0x84) = 0x22000;
+    MEM32(registry - 4 + 0x14) = screen;
+    MEM32(registry - 4 + 0x18) = package;
+    MEM32(screen + 0x24) = MEM32(screen + 0x28) = 0;
+    MEM32(screen + 0x2C) = MEM32(screen + 0x30) = 0;
+    MEM32(yes + 0x5C) = MEM32(no + 0x5C) = 0;
+    MEM32(0x283434) = 3;
+    MEM32(package + 0x1C) = 1;
+    MEM32(package + 0x88) = 2;
+    MEM32(0x22000) = yes; MEM32(0x22004) = no;
+    MEM32(0x2BCB9C) = registry;
+    MEM32(registry) = 0x2BCB9C;
+    MEM32(screen) = 0x1FC384;
+    MEM32(screen + 0x3C) = 0;
+    MEM32(yes + 0x18) = MEM32(no + 0x18) = 2;
+    MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+    MEM32(yes + 0x3C) = MEM32(no + 0x3C) = MEM32(package + 0x50) = 0;
+    MEM32(yes + 0x10) = 0xB8A7C6CC;
+    MEM32(no + 0x10) = 0xB8A7C6CD;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 100, 200, 200, 220);
+    add_quad(no, 400, 200, 500, 220);
+    expected_message = 0x406415E3;
+    before_actions = controller_selects;
+    tap_at(90.0f / 640, 210.0f / 480, yes);
+    tap_at(510.0f / 640, 210.0f / 480, no);
+    assert(controller_selects == before_actions + 2);
+    /* Same expansion is used when a profile list starts with no focus. */
+    MEM32(screen + 0x3C) = 0xBD7E0;
+    MEM32(screen + 0x88) = row; MEM32(screen + 0x9C) = data;
+    MEM32(row) = screen + 0x88; MEM32(row + 8) = cell;
+    MEM32(cell) = row + 8; MEM32(cell + 8) = yes;
+    MEM32(data) = screen + 0x90;
+    MEM32(package + 0x80) = 0;
+    tap_at(90.0f / 640, 210.0f / 480, yes);
+    assert(controller_selects == before_actions + 3);
+    assert(MEM32(screen + 0x98) == data && MEM32(screen + 0xA0) == row);
+    /* Physical-controller mode restores touch captions and leaves native
+     * drawing unchanged. Switch back only after the previous edits are gone. */
+    MEM32(yes + 0x10) = 0xA87927BE;
+    MEM32(yes + 0x5C) = 0x169268; /* native Help */
+    feng_touch_frame_begin();
+    uint32_t previous = feng_touch_draw_begin(yes);
+    assert(MEM32(yes + 0x5C) == 0x1335F0);
+    feng_touch_draw_end(previous);
+    input_mode_set_controller_present(1);
+    feng_touch_frame_begin();
+    assert(MEM32(yes + 0x5C) == 0x169268);
+    previous = feng_touch_draw_begin(yes);
+    assert(MEM32(yes + 0x5C) == 0x169268);
+    assert(!feng_touch_draw_cache(0x35000));
+    feng_touch_draw_end(previous);
+    input_mode_set_controller_present(0);
     puts("rendered touch bounds, keyboard rows, stale focus and misses: OK");
 }
