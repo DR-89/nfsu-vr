@@ -21,6 +21,7 @@ static uint32_t expected;
 static uint32_t expected_message = 0x406415E3u;
 static int presses, focus_changes, steal_focus, controller_selects;
 static int palette_updates, palette_previews, focus_flushes;
+static int vinyl_color_workflow;
 static unsigned draw_mask = 3;
 static int keyboard_layout, stale_mouse_edge, carousel_layout;
 void sub_000D8B10(void);
@@ -105,6 +106,15 @@ void sub_000C7A80(void)
     palette_previews++;
     g_esp += 8;
 }
+void sub_000CE590(void) { assert(g_ecx == 0x28000); g_esp += 4; }
+void sub_000CDC20(void) { assert(g_ecx == 0x28000); g_esp += 4; }
+void sub_000CEC90(void)
+{
+    assert(g_ecx == 0x28000);
+    assert(MEM32(g_esp + 4) == 0); /* zero is a valid vinyl data ID */
+    MEM32(g_ecx + 0x3C) = 0x2E800;
+    g_esp += 8;
+}
 void sub_000DF160(void)
 {
     assert(g_ecx == 0x2E000 && MEM32(g_esp + 4) == 0x2E200);
@@ -125,6 +135,16 @@ void sub_000DE540(void)
         uint32_t hash = MEM32(object + 0x10);
         assert(hash == 0x14DD31 || hash == 0x6BAA2200 || hash == 0x16821E);
         MEM32(0x29C460) = hash == 0x16821E ? 2 : hash == 0x6BAA2200 ? 1 : 0;
+    }
+    if (MEM32(g_ecx) == 0x200A68 && expected_message == 0xC519BFC0) {
+        uint32_t entry = MEM32(g_ecx + 0x3C);
+        uint32_t decal = MEM32(entry + 0x10);
+        assert(decal == 0x2ED00);
+        MEM8(decal + 0xC) = !MEM8(decal + 0xC);
+    }
+    if (vinyl_color_workflow && MEM32(g_ecx) == 0x1FDD74 &&
+        expected_message == 0x406415E3) {
+        MEM32(g_ecx + 0xB20)++; /* model native next-channel transition */
     }
     assert(MEM32(g_esp + 12) == 1 && MEM32(g_esp + 16) == package);
     controller_selects++; presses++;
@@ -452,6 +472,38 @@ int main(void)
     assert(controller_selects == paint_actions + 1);
     tap(.3f, yes); /* third tap starts a fresh pair */
     assert(controller_selects == paint_actions + 1);
+    /* Vinyl uses the same swatches and preview path for each color channel.
+     * Explicit Accept forwards Select; it must never auto-accept a new channel
+     * merely because its swatch address and color match the previous one. */
+    MEM32(screen + 0xB14) = 0x36;
+    MEM32(screen + 0xB20) = 0;
+    MEM32(no + 0x18) = 2;
+    MEM32(no + 0x5C) = 0x4F876B6F; /* ACCEPT */
+    draw_bounds();
+    vinyl_color_workflow = 1;
+    paint_actions = controller_selects;
+    for (unsigned channel = 0; channel < 4; channel++) {
+        int previews = palette_previews;
+        tap(.3f, yes);
+        assert(palette_previews == previews + 1);
+        assert(controller_selects == paint_actions + channel);
+        tap(.7f, no);
+        assert(MEM32(screen + 0xB20) == channel + 1);
+        assert(controller_selects == paint_actions + channel + 1);
+    }
+    vinyl_color_workflow = 0;
+    int previews = palette_previews;
+    expected = yes;
+    menu_touch_event(MENU_TOUCH_DOWN, .3f, .5f, 1280, 720); update(); update();
+    MEM32(screen + 0xB20)++; /* stale release after native channel change */
+    menu_touch_event(MENU_TOUCH_UP, .3f, .5f, 1280, 720); update(); update();
+    assert(palette_previews == previews);
+    expected = no;
+    paint_actions = controller_selects;
+    menu_touch_event(MENU_TOUCH_DOWN, .7f, .5f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .8f, .5f, 1280, 720); update(); update();
+    assert(controller_selects == paint_actions); /* dragged Accept */
+    MEM32(no + 0x5C) = 0;
     float paint_yaw;
     memcpy(&paint_yaw, (void *)XBOX_PTR(0x2C044), 4);
     menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720);
@@ -831,10 +883,10 @@ int main(void)
     /* Gaps beside small carousel logos capture immediately, with no hold.
      * Include the top edge, above the logo and its former 16-pixel margin.
      * A tap in a gap does nothing; its swipe cannot orbit the camera. */
-    for (unsigned browser = 0; browser < 6; browser++) {
+    for (unsigned browser = 0; browser < 7; browser++) {
         /* Both garages, Quick Race and the first Underground car selection
          * share swipe capture and camera boundaries despite native offsets. */
-        MEM32(screen) = browser == 5 ? 0x1FC278 : browser == 4 ? 0x1FC26C :
+        MEM32(screen) = browser == 6 ? 0x1FC2BC : browser == 5 ? 0x1FC278 : browser == 4 ? 0x1FC26C :
             browser == 3 ? 0x1FBFCC :
             browser == 2 ? 0x1FB8F4 : browser ? 0x1FC384 : 0x1FC1AC;
         MEM32(screen + (browser >= 5 ? 0x3C : 0x48)) = 0x1FF870;
@@ -855,7 +907,7 @@ int main(void)
         if (browser >= 4) {
             /* Reward captions activate the native selection even when the
              * asset marks them noninteractive. Hidden captions cannot fire. */
-            MEM32(yes + 0x10) = browser == 4 ? 0x0B7F2D7C :
+            MEM32(yes + 0x10) = browser == 6 ? 0xB6640DCC : browser == 4 ? 0x0B7F2D7C :
                 0xD5598378;
             MEM32(yes + 0x1C) = 0x04000000;
             draw_bounds();
@@ -908,6 +960,143 @@ int main(void)
         menu_touch_cancel(); update();
         carousel_layout = 0; draw_bounds();
     }
+    /* Magazine introduction and subsequent front/back confirmation captions
+     * activate through the native controller even without interactive flags. */
+    const uint32_t magazine_captions[] = {
+        0x3E3934AD, 0xE65A5489, 0x532BDF3B, 0xF980693D
+    };
+    for (unsigned i = 0; i < 4; i++) {
+        MEM32(screen) = i < 3 ? 0x1FC2BC : 0x200208;
+        MEM32(screen + 0x3C) = 0; /* introduction has no usable carousel yet */
+        MEM32(yes + 0x10) = magazine_captions[i];
+        MEM32(yes + 0x1C) = 0x04000000;
+        draw_mask = 3; draw_bounds();
+        expected_message = 0x406415E3;
+        before_actions = controller_selects;
+        tap(.3f, yes);
+        assert(controller_selects == before_actions + 1);
+        draw_mask = 2; draw_bounds();
+        tap(.3f, yes);
+        assert(controller_selects == before_actions + 1);
+        draw_mask = 3; draw_bounds();
+        menu_touch_event(MENU_TOUCH_DOWN, .3f, .5f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_UP, .5f, .5f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 1);
+    }
+    /* Vinyl type, group and drawing browsers must synchronize the native
+     * cursor, including ID zero, and send MouseClick rather than Select. */
+    const uint32_t vinyl_types[] = { 0x1FE630, 0x1FE790, 0x1FE7BC };
+    for (unsigned i = 0; i < 3; i++) {
+        MEM32(screen) = vinyl_types[i];
+        MEM32(screen + 0x48) = 0x1FF870;
+        MEM32(screen + 0x54) = 0x2E400;
+        MEM32(screen + 0x4C) = 0x2E400;
+        MEM32(0x2E400) = screen + 0x4C;
+        MEM32(0x2E408) = 0;
+        MEM32(0x2E40C) = no;
+        MEM32(screen + 0x40) = 0x2E800;
+        MEM32(0x2E800) = screen + 0x40;
+        MEM32(0x2E808) = 0;
+        MEM32(screen + 0x3C) = 0x2E900; /* stale native selection */
+        MEM32(yes + 0x10) = 0x543398D3;
+        MEM32(no + 0x10) = 0x12345678;
+        MEM32(yes + 0x1C) = MEM32(no + 0x1C) = 0;
+        MEM32(yes + 0x5C) = 0;
+        draw_bounds();
+        expected_message = 0x0C407210;
+        before_actions = controller_selects;
+        tap(.7f, no);
+        assert(controller_selects == before_actions + 1);
+        assert(MEM32(screen + 0x3C) == 0x2E800);
+        expected_message = 0x9120409E; tap(.3f, yes);
+        assert(controller_selects == before_actions + 2);
+        carousel_layout = 1; draw_bounds();
+        before_actions = controller_selects;
+        /* Gap taps stay inert; gap swipes own the gesture and leave the
+         * native data cursor to the controller without synchronizing a tap. */
+        tap_at(.1f, .08f, no);
+        assert(controller_selects == before_actions);
+        float vinyl_yaw = MEMF(0x2C044);
+        expected = no; expected_message = 0xB5971BF1;
+        menu_touch_event(MENU_TOUCH_DOWN, .2f, .08f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_MOVE, .1f, .08f, 1280, 720); update();
+        assert(MEMF(0x2C044) == vinyl_yaw);
+        menu_touch_event(MENU_TOUCH_UP, .1f, .08f, 1280, 720); update(); update();
+        assert(controller_selects == before_actions + 1);
+        carousel_layout = 0; draw_bounds();
+    }
+    /* All four fixed layer images are actual targets, independent of focus.
+     * A swipe changes layers through the controller, without opening one. */
+    MEM32(screen) = 0x1FE45C;
+    MEM32(yes + 0x10) = 0x12340000;
+    draw_bounds();
+    for (unsigned layer = 0; layer < 4; layer++) {
+        uint32_t object = 0x36000 + layer * 0x100;
+        MEM32(object + 0x18) = 1;
+        MEM32(screen + 0x3C + layer * 4) = object;
+        add_quad(object, 60 + layer * 130, 25, 170 + layer * 130, 65);
+    }
+    before_actions = controller_selects;
+    expected_message = 0x406415E3;
+    for (unsigned layer = 0; layer < 4; layer++) {
+        MEM32(0x2BBBF0) = (layer + 2) % 4;
+        expected = 0x36000 + layer * 0x100;
+        float x = (110 + layer * 130) / 640.0f;
+        menu_touch_event(MENU_TOUCH_DOWN, x, .08f, 1280, 720); update(); update();
+        menu_touch_event(MENU_TOUCH_UP, x, .08f, 1280, 720); update(); update();
+        assert(MEM32(0x2BBBF0) == layer);
+    }
+    assert(controller_selects == before_actions + 4);
+    expected = MEM32(screen + 0x3C + 3 * 4);
+    expected_message = 0xB5971BF1;
+    menu_touch_event(MENU_TOUCH_DOWN, .8f, .08f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .65f, .08f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 5);
+    /* Localized Color Vinyl caption opens the original X workflow. */
+    MEM32(yes + 0x18) = 2;
+    MEM32(yes + 0x5C) = 0x2c4940b5; /* GARAGE_COLOR_VINYL */
+    draw_bounds();
+    expected_message = 0xC519BFC0; tap(.3f, yes);
+    assert(controller_selects == before_actions + 6);
+    /* Alternate FNG caption and the X glyph share the same action. */
+    MEM32(yes + 0x5C) = 0x22BC95A1; /* PC_VINYL_COLOR */
+    MEM32(no + 0x10) = 0xAAB7EE36;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 170, 440, 300, 460);
+    add_quad(no, 140, 440, 160, 460);
+    tap_at(150.0f / 640, .94f, yes);
+    assert(controller_selects == before_actions + 7);
+    MEM32(yes + 0x5C) = 0;
+    /* Black/White Decal and the adjacent X glyph invoke native X, once
+     * on release. Label changes do not break the reverse color toggle. */
+    MEM32(screen) = 0x200A68;
+    MEM32(screen + 0x3C) = 0x2EC00;
+    MEM32(0x2EC10) = 0x2ED00;
+    MEM8(0x2ED0C) = 0;
+    MEM32(yes + 0x10) = 0x5B32EE7C;
+    MEM32(yes + 0x18) = 2;
+    MEM32(yes + 0x5C) = 0x3CC939B4;
+    MEM32(no + 0x10) = 0xAAB7EE36;
+    MEM32(no + 0x18) = 1;
+    draw_mask = 0; draw_bounds();
+    add_quad(yes, 170, 440, 300, 460);
+    add_quad(no, 140, 440, 160, 460);
+    before_actions = controller_selects;
+    expected = yes; expected_message = 0xC519BFC0;
+    menu_touch_event(MENU_TOUCH_DOWN, .35f, .94f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions && !MEM8(0x2ED0C));
+    menu_touch_event(MENU_TOUCH_UP, .35f, .94f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 1 && MEM8(0x2ED0C));
+    MEM32(yes + 0x5C) = 0xA39F11F8; /* White Decal after the native refresh */
+    tap_at(150.0f / 640, .94f, yes); /* X glyph */
+    assert(controller_selects == before_actions + 2 && !MEM8(0x2ED0C));
+    menu_touch_event(MENU_TOUCH_DOWN, .35f, .94f, 1280, 720); update(); update();
+    menu_touch_event(MENU_TOUCH_UP, .5f, .94f, 1280, 720); update(); update();
+    assert(controller_selects == before_actions + 2);
+    draw_bounds(); /* footer absent from the next rendered frame */
+    tap_at(.35f, .94f, yes);
+    assert(controller_selects == before_actions + 2);
+    MEM32(yes + 0x5C) = 0;
     /* Vertical base arrows: native Up/Down, release only, hidden/disabled
      * geometry and dragged gestures cannot scroll. */
     MEM32(screen) = 0x1FC384;
