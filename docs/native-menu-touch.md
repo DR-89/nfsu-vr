@@ -611,3 +611,18 @@ cancellation and leaving the screen clear the pending pair. Confirmation
 consumes the pair, so a third tap cannot confirm again. Synthetic coverage
 checks preview, empty cells, drag cancellation, double tap and third tap.
 Device validation across paint categories remains pending.
+
+### TJ and Samantha unique rewards
+
+TJ's category screen (1FC26C, BAF60/BA740) uses the garage browser at +48,
+with its selected rendered node at +54. Samantha's reward selector (1FC278,
+BB190/BAA40) embeds the same browser at +3C, selected rendered node +48.
+Both now opt into the shared carousel and preview gesture path. Taps on the
+selected icon or the native caption (0B7F2D7C / D5598378) dispatch Select;
+arrows and swipes dispatch native Left/Right, preserving the controllers'
+separate reward cursors and confirmation flow. Gap taps remain inert and the
+rendered strip excludes camera orbit. No reward is granted directly by touch.
+Synthetic coverage includes both reward screens, captions, hidden captions,
+arrows, both swipe directions, gap taps and camera boundary crossings.
+Physical-device acceptance after winning the corresponding time trials remains
+pending.

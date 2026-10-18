@@ -543,7 +543,8 @@ uint32_t touch_preview_screen(void)
         uint32_t vtable = MEM32(screen);
         uint32_t handler = vtable ? MEM32(vtable + 4) : 0;
         if (vtable == 0x001FDD74u || vtable == 0x001FB8F4u ||
-            vtable == 0x001FC1ACu || vtable == 0x001FBFCCu)
+            vtable == 0x001FC1ACu || vtable == 0x001FBFCCu ||
+            vtable == 0x001FC26Cu || vtable == 0x001FC278u)
             return screen; /* ColorPicker, QuickRaceCarSelect, MainMenuCarCustomize,
                             * ChooseCareerCarScreen */
         return handler >= 0x000EB000u && handler < 0x000F7000u &&

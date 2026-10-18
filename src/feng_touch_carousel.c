@@ -25,6 +25,23 @@ typedef struct {
 static int touch_carousel_binding(uint32_t screen, TouchCarousel *binding)
 {
     if (screen != touch_carousel_screen() || MEM32(screen) == 0x001FDD74u) return 0;
+    uint32_t type = MEM32(screen);
+    if (type == 0x001FC26Cu || type == 0x001FC278u) {
+        /* BAF60: TJ category browser +48, selected rendered node +54.
+         * BB190: Samantha reward browser +3C, node +48.
+         * BA740/BAA40 accept Select; native Left/Right handlers
+         * own their separate reward cursors. Never use the map tap-sync. */
+        uint32_t offset = type == 0x001FC26Cu ? 0x48 : 0x3C;
+        if (MEM32(screen + offset) != 0x001FF870u) return 0;
+        *binding = (TouchCarousel){
+            .selected_node = MEM32(screen + offset + 0xC),
+            .activate_message = 0x406415E3u,
+            .label_hashes = { type == 0x001FC26Cu ? 0x0B7F2D7Cu :
+                              0xD5598378u, 0 },
+            .allow_swipe = 1
+        };
+        return 1;
+    }
     if (MEM32(screen) == 0x001FC12Cu) {
         /* UndergroundMapScreen: B9460 allocates the shared browser at +3C.
          * Its selected rendered node is browser +0C, not screen +48 (the
