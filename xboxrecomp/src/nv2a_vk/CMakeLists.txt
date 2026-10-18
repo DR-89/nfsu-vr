@@ -5,11 +5,12 @@ project(nv2a_vk C)
 # the Switch's NVK from mesa-switch, linked statically (NVK_SDK), or any
 # Vulkan driver on Linux. Shares the shader generators with nv2a_gl, in
 # their Vulkan dialect, and compiles them with glslang at run time.
-add_library(xbox_nv2a_vk STATIC
-    nv2a_vk.c
-    ../nv2a_gl/gl_vsh.c
-    ../nv2a_gl/gl_psh.c
-)
+if(NFSU2_OPENXR OR NFSU2_PCVR)
+    set(vk_sources nv2a_vk_vr.c ../nv2a_gl/gl_vsh_vr.c ../nv2a_gl/gl_psh_vr.c)
+else()
+    set(vk_sources nv2a_vk.c ../nv2a_gl/gl_vsh.c ../nv2a_gl/gl_psh.c)
+endif()
+add_library(xbox_nv2a_vk STATIC ${vk_sources})
 target_include_directories(xbox_nv2a_vk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(NOT TARGET glslang::glslang)
@@ -30,6 +31,14 @@ elseif(NINTENDO_SWITCH)
     target_link_libraries(xbox_nv2a_vk PUBLIC
         "${NVK_SDK}/lib/libvulkan.a" expat z nx
         "${NVK_SDK}/lib/libvulkan.a" expat z nx stdc++ m)
+elseif(WIN32)
+    find_package(Vulkan REQUIRED)
+    target_link_libraries(xbox_nv2a_vk PUBLIC Vulkan::Vulkan SDL2::SDL2 glslang::SPIRV)
+elseif(ANDROID)
+    find_package(SDL2 REQUIRED)
+    find_library(ANDROID_VULKAN_LIB vulkan REQUIRED)
+    target_link_libraries(xbox_nv2a_vk PUBLIC ${ANDROID_VULKAN_LIB}
+        SDL2::SDL2 glslang::SPIRV)
 else()
     find_package(Vulkan REQUIRED)
     find_package(PkgConfig REQUIRED)

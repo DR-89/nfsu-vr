@@ -1785,6 +1785,11 @@ SIZE_T HeapSize(HANDLE heap, DWORD flags, LPCVOID mem)
 
 void view_register(void *addr, size_t len);
 size_t view_take(const void *addr);
+#ifdef __ANDROID__
+static void view_mark_reserved(void *addr);
+static void *view_replace_reserved(void *addr, size_t len, int prot, int flags, int fd, off_t off);
+static BOOL view_release_range(void *addr, size_t len);
+#endif
 #if defined(__SWITCH__)
 /* Virtual memory on Horizon.
  *
@@ -2124,6 +2129,14 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
 {
     int prot  = prot_from_page(protect);
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+    void *p;
+#ifdef __ANDROID__
+    if (address && (p = view_replace_reserved(address, size, prot, flags, -1, 0))) {
+        if (p == MAP_FAILED) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+        if (!(allocationType & MEM_COMMIT)) view_mark_reserved(p);
+        return p;
+    }
+#endif
 
     /* MEM_COMMIT on a region already reserved by a prior VirtualAlloc:
      * just adjust protection. */
@@ -2137,7 +2150,6 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     if (address) flags |= MAP_FIXED_NOREPLACE;
 #endif
 
-    void *p;
 #if defined(__APPLE__)
     if (address) {
         p = mach_map_fixed(address, size, prot);
@@ -2151,6 +2163,9 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     /* Remember the length: VirtualFree(MEM_RELEASE) is passed size 0 by every
      * Win32 caller, and munmap cannot be called without one. */
     view_register(p, size);
+#ifdef __ANDROID__
+    if (!(allocationType & MEM_COMMIT)) view_mark_reserved(p);
+#endif
 #if !defined(__APPLE__)
     /* Older kernels without MAP_FIXED_NOREPLACE: plain MAP_FIXED would silently
      * unmap whatever already lives there, so we pass the address as a hint and
@@ -2168,6 +2183,11 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
 BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
 {
     if (freeType & MEM_RELEASE) {
+#ifdef __ANDROID__
+        /* A span shutdown releases only mappings still owned by this shim,
+         * including its unused reservation slices, never holes reused by libc. */
+        if (size) return view_release_range(address, size);
+#endif
         /* Win32 MEM_RELEASE passes size 0 and frees the whole allocation, so
          * the length comes from the registry VirtualAlloc filled in. Returning
          * TRUE without unmapping -- as this used to -- made every release a
@@ -2549,7 +2569,7 @@ int WideCharToMultiByte(UINT cp, DWORD flags, LPCWSTR wide, int wideCount,
 
 /* Registry of active views: UnmapViewOfFile takes no length, so we must
  * recover the mapping length here for munmap. */
-typedef struct { void *addr; size_t len; } w32_view;
+typedef struct { void *addr; size_t len; int reserved; } w32_view;
 static w32_view        s_views[512];
 static pthread_mutex_t s_views_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -2557,7 +2577,7 @@ void view_register(void *addr, size_t len)
 {
     pthread_mutex_lock(&s_views_lock);
     for (int i = 0; i < 512; i++)
-        if (!s_views[i].addr) { s_views[i].addr = addr; s_views[i].len = len; break; }
+        if (!s_views[i].addr) { s_views[i] = (w32_view){addr, len, 0}; break; }
     pthread_mutex_unlock(&s_views_lock);
 }
 
@@ -2577,7 +2597,7 @@ int view_lookup(const void *addr, void **base_out, size_t *len_out)
         if ((uintptr_t)addr >= lo && (uintptr_t)addr < hi) {
             if (base_out) *base_out = s_views[i].addr;
             if (len_out)  *len_out  = s_views[i].len;
-            found = 1;
+            found = s_views[i].reserved ? 2 : 1;
             break;
         }
     }
@@ -2594,6 +2614,79 @@ size_t view_take(const void *addr)
     pthread_mutex_unlock(&s_views_lock);
     return len;
 }
+
+#ifdef __ANDROID__
+static void view_mark_reserved(void *addr)
+{
+    pthread_mutex_lock(&s_views_lock);
+    for (int i = 0; i < 512; ++i)
+        if (s_views[i].addr == addr) s_views[i].reserved = 1;
+    pthread_mutex_unlock(&s_views_lock);
+}
+
+/* Replace only a still-unused slice of OUR reservation. MAP_FIXED is safe
+ * here because the registry lock covers both ownership and the mmap call.
+ * Unmapping then remapping is not safe on Android: a concurrent malloc can
+ * claim that hole between the two syscalls. */
+static void *view_replace_reserved(void *addr, size_t len, int prot, int flags, int fd, off_t off)
+{
+    void *result = NULL;
+    uintptr_t lo = (uintptr_t)addr;
+    pthread_mutex_lock(&s_views_lock);
+    for (int i = 0; i < 512; ++i) {
+        w32_view old = s_views[i];
+        uintptr_t start = (uintptr_t)old.addr;
+        if (!old.addr || !old.reserved || lo < start || len > old.len ||
+            lo - start > old.len - len) continue;
+        size_t left = lo - start, right = old.len - left - len;
+        int slots[2], found = 0, needed = !!left + !!right;
+        for (int j = 0; j < 512 && found < needed; ++j)
+            if (!s_views[j].addr) slots[found++] = j;
+        if (found < needed) { result = MAP_FAILED; break; }
+        flags = (flags & ~MAP_FIXED_NOREPLACE) | MAP_FIXED;
+        result = mmap(addr, len, prot, flags, fd, off);
+        if (result == MAP_FAILED) break;
+        s_views[i] = (w32_view){addr, len, 0};
+        int k = 0;
+        if (left) s_views[slots[k++]] = (w32_view){old.addr, left, 1};
+        if (right) s_views[slots[k]] = (w32_view){(void *)(lo + len), right, 1};
+        break;
+    }
+    pthread_mutex_unlock(&s_views_lock);
+    return result;
+}
+
+static BOOL view_release_range(void *addr, size_t len)
+{
+    uintptr_t lo = (uintptr_t)addr;
+    if (!len || lo + len < lo) return FALSE;
+    uintptr_t hi = lo + len;
+    BOOL ok = TRUE;
+    pthread_mutex_lock(&s_views_lock);
+    for (int i = 0; i < 512; ++i) {
+        w32_view *v = &s_views[i];
+        uintptr_t start = (uintptr_t)v->addr;
+        uintptr_t end = start + v->len;
+        if (!v->addr || start >= hi || end <= lo) continue;
+        uintptr_t cut_lo = start > lo ? start : lo, cut_hi = end < hi ? end : hi;
+        size_t left = cut_lo - start, right = end - cut_hi;
+        int spare = -1;
+        if (left && right) {
+            for (int j = 0; j < 512; ++j) if (!s_views[j].addr) { spare = j; break; }
+            if (spare < 0) { ok = FALSE; continue; }
+        }
+        if (munmap((void *)cut_lo, cut_hi - cut_lo) != 0) { ok = FALSE; continue; }
+        int reserved = v->reserved;
+        if (left) {
+            v->len = left;
+            if (right) s_views[spare] = (w32_view){(void *)cut_hi, right, reserved};
+        } else if (right) *v = (w32_view){(void *)cut_hi, right, reserved};
+        else *v = (w32_view){0};
+    }
+    pthread_mutex_unlock(&s_views_lock);
+    return ok;
+}
+#endif
 
 #if defined(__SWITCH__)
 /* File mappings on Horizon: a shared-memory object per mapping, mapped
@@ -2776,6 +2869,13 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
     SIZE_T len = count ? count : (o->map_size - (SIZE_T)off);
     int prot   = PROT_READ | ((access != FILE_MAP_READ) ? PROT_WRITE : 0);
     int flags  = MAP_SHARED;
+#ifdef __ANDROID__
+    void *reserved = baseAddr ? view_replace_reserved(baseAddr, len, prot, flags, o->fd, off) : NULL;
+    if (reserved) {
+        if (reserved == MAP_FAILED) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+        return reserved;
+    }
+#endif
 
     /* Win32 MapViewOfFileEx *fails* when the requested address is unavailable.
      * Plain MAP_FIXED does the opposite: it silently unmaps whatever is there
@@ -2858,7 +2958,8 @@ SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer, SIZE_T le
     void  *base = NULL;
     size_t len  = 0;
 
-    if (!view_lookup(address, &base, &len)) {
+    int mapped = view_lookup(address, &base, &len);
+    if (!mapped) {
         /* Not ours. Report it free rather than inventing a committed page. */
         buffer->BaseAddress    = (PVOID)address;
         buffer->AllocationBase = NULL;
@@ -2875,8 +2976,8 @@ SIZE_T VirtualQuery(LPCVOID address, PMEMORY_BASIC_INFORMATION buffer, SIZE_T le
     /* From the queried address to the end of the region, which is what Win32
      * reports and what callers sizing a copy out of it depend on. */
     buffer->RegionSize       = len - (size_t)((uintptr_t)address - (uintptr_t)base);
-    buffer->State            = MEM_COMMIT;
-    buffer->Protect          = PAGE_READWRITE;
+    buffer->State            = mapped == 2 ? MEM_RESERVE : MEM_COMMIT;
+    buffer->Protect          = mapped == 2 ? PAGE_NOACCESS : PAGE_READWRITE;
     buffer->Type             = MEM_PRIVATE;
     return sizeof(*buffer);
 }

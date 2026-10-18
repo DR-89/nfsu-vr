@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(nfsu2_recomp C)
 
-if(ANDROID)
+if(ANDROID AND NOT NFSU2_OPENXR)
     enable_language(CXX)
     add_compile_definitions(NFSU_USE_ZLOG=1)
     set(ZLOG_WERROR OFF CACHE BOOL "" FORCE)
@@ -63,7 +63,7 @@ set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
-if(ANDROID)
+if(ANDROID AND NOT NFSU2_OPENXR)
     # Keep Android hotplug and persistent touch-controller policy project-local.
     set_property(TARGET xbox_input PROPERTY SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/android_input.c")
 endif()
@@ -74,9 +74,10 @@ set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
     src/switch_nx.c
+    src/input_mode.c
 )
 
-if(ANDROID)
+if(ANDROID AND NOT NFSU2_OPENXR)
     add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} ${RECOMP_GEN_SOURCES}
         src/android_host.c src/android_env.c src/android_logs.c src/android_saf.c src/android_diagnostics.c src/android_perf.c src/menu_touch.c src/input_mode.c src/feng_touch.c
         src/touch_gesture.c src/touch_orbit.c src/feng_touch_carousel.c src/feng_touch_camera.c src/feng_touch_magazines.c

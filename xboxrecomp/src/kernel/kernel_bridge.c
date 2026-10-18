@@ -280,7 +280,7 @@ static void kernel_data_init(void)
 
     /* KeTickCount (ordinal 156) - initialized to current tick count.
      * A background thread in main.c updates this every ~1ms. */
-    BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT) = GetTickCount();
+    BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT) = xbox_GuestTickCount();
 
     /* LaunchDataPage (ordinal 164).
      *
@@ -643,6 +643,20 @@ static uint64_t gil_quantum_now(void)
     return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
 }
 #endif
+#ifdef NFSU2_PCVR
+static int s_pcvr_gil_profile;
+static int s_pcvr_irq_profile;
+static LARGE_INTEGER s_pcvr_gil_frequency;
+static volatile LONG64 s_pcvr_main_wait_ticks;
+static RECOMP_TLS LARGE_INTEGER t_pcvr_gil_start;
+static RECOMP_TLS uint32_t t_pcvr_gil_return;
+uint64_t xbox_pcvr_main_wait_ns(void)
+{
+    LONG64 ticks=InterlockedCompareExchange64(&s_pcvr_main_wait_ticks,0,0);
+    return s_pcvr_gil_frequency.QuadPart ?
+        (uint64_t)(ticks*(1000000000.0/s_pcvr_gil_frequency.QuadPart)) : 0;
+}
+#endif
 
 static int gil_enabled(void)
 {
@@ -675,6 +689,11 @@ static int gil_enabled(void)
         InitializeCriticalSection(&s_gil_cs);
 #if !defined(__ANDROID__) && !defined(NFSU_GIL_HANDOFF_TEST)
         InitializeConditionVariable(&s_gil_cv);
+#endif
+#ifdef NFSU2_PCVR
+        s_pcvr_gil_profile=getenv("NFSU2_PCVR_HEALTH")!=NULL;
+        s_pcvr_irq_profile=getenv("NFSU2_PCVR_IRQ_PROFILE")!=NULL;
+        QueryPerformanceFrequency(&s_pcvr_gil_frequency);
 #endif
         s_gil_on = !(e && *e == '0');
         if (s_gil_on)
@@ -799,6 +818,11 @@ static void gil_lock(void)
     int queued = me != s_gil_serving;
     if (queued) gil_waiter_enqueue(&s_gil_queue, &waiter);
 #endif
+#ifdef NFSU2_PCVR
+    LARGE_INTEGER pcvr_wait_start={0};
+    if(s_pcvr_gil_profile && t_gil_main && me!=s_gil_serving)
+        QueryPerformanceCounter(&pcvr_wait_start);
+#endif
     if (me != s_gil_serving && eager) {
         s_gil_waiting[prio]++;
         counted = 1;
@@ -831,6 +855,12 @@ static void gil_lock(void)
     uint64_t perf_granted = queued ? waiter.granted_ns : 0;
     if (queued) gil_waiter_remove_head(&s_gil_queue, &waiter);
 #endif
+#ifdef NFSU2_PCVR
+    if(pcvr_wait_start.QuadPart) {
+        LARGE_INTEGER end; QueryPerformanceCounter(&end);
+        InterlockedExchangeAdd64(&s_pcvr_main_wait_ticks,end.QuadPart-pcvr_wait_start.QuadPart);
+    }
+#endif
     if (eager) {
         if (counted)
             s_gil_waiting[prio]--;
@@ -847,6 +877,12 @@ static void gil_lock(void)
     } else if (s_gil_next - s_gil_serving <= 1) {
         InterlockedExchange((volatile LONG *)&g_gil_contended, 0);               /* nobody behind us */
     }
+#ifdef NFSU2_PCVR
+    if(s_pcvr_irq_profile) {
+        QueryPerformanceCounter(&t_pcvr_gil_start);
+        t_pcvr_gil_return=g_esp>=0x10000 && g_esp<0x4000000 ? BRIDGE_MEM32(g_esp) : 0;
+    }
+#endif
     LeaveCriticalSection(&s_gil_cs);
     if (perf_wait && perf_enqueued >= perf_wait)
         nfsu_perf_add(NFSU_PERF_GIL_CS, perf_enqueued - perf_wait);
@@ -880,6 +916,14 @@ static void gil_unlock(void)
         return;
     }
 #endif
+#ifdef NFSU2_PCVR
+    double pcvr_hold=0;
+    if(t_pcvr_gil_start.QuadPart) {
+        LARGE_INTEGER now; QueryPerformanceCounter(&now);
+        pcvr_hold=(now.QuadPart-t_pcvr_gil_start.QuadPart)*1000.0/s_pcvr_gil_frequency.QuadPart;
+        t_pcvr_gil_start.QuadPart=0;
+    }
+#endif
     EnterCriticalSection(&s_gil_cs);
     s_gil_serving++;
 #if defined(__ANDROID__) || defined(NFSU_GIL_HANDOFF_TEST)
@@ -893,6 +937,16 @@ static void gil_unlock(void)
     nfsu_perf_end(NFSU_PERF_GIL_HELD, t_gil_perf_held);
     t_gil_perf_held = 0;
     nfsu_perf_poll();
+#ifdef NFSU2_PCVR
+    if(pcvr_hold>=8.0) {
+        static RECOMP_TLS ULONGLONG window; static RECOMP_TLS unsigned lines;
+        ULONGLONG now=GetTickCount64();
+        if(now-window>5000) { window=now; lines=0; }
+        if(lines++<8) fprintf(stderr,"[PCVR guest hold] tid=%lu main=%d dispatch=%d hold=%.3f ms from=%08x to=%08x\n",
+            GetCurrentThreadId(),t_gil_main,xbox_thread_holds_dispatch(),pcvr_hold,t_pcvr_gil_return,
+            g_esp>=0x10000 && g_esp<0x4000000 ? BRIDGE_MEM32(g_esp) : 0);
+    }
+#endif
 }
 
 void xbox_gil_enter(void)
@@ -2956,13 +3010,34 @@ static int kernel_run_dpc(uint32_t dpc_va, uint32_t arg1, uint32_t arg2)
     g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
     /* GUEST_CALL_ATOMIC, with the vblank bits let go once the lock is ours:
      * the routine reads them first thing. */
+#ifdef NFSU2_PCVR
+    LARGE_INTEGER pcvr_start={0},pcvr_enter={0},pcvr_end;
+    if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_start);
+#endif
     xbox_gil_enter();
+#ifdef NFSU2_PCVR
+    if(pcvr_start.QuadPart) QueryPerformanceCounter(&pcvr_enter);
+#endif
     t_gil_nopreempt++;
     if (dpc_va == g_vblank_dpc)
         xbox_Nv2aVblankRelease();
     fn();
     t_gil_nopreempt--;
     xbox_gil_leave();
+#ifdef NFSU2_PCVR
+    if(pcvr_start.QuadPart) {
+        QueryPerformanceCounter(&pcvr_end);
+        double scale=1000.0/s_pcvr_gil_frequency.QuadPart;
+        if((pcvr_end.QuadPart-pcvr_start.QuadPart)*scale>=8.0) {
+            static ULONGLONG window; static unsigned lines;
+            ULONGLONG now=GetTickCount64();
+            if(now-window>5000) { window=now; lines=0; }
+            if(lines++<8) fprintf(stderr,"[PCVR DPC] routine=%08x guest-wait=%.3f body=%.3f ms\n",
+                routine,(pcvr_enter.QuadPart-pcvr_start.QuadPart)*scale,
+                (pcvr_end.QuadPart-pcvr_enter.QuadPart)*scale);
+        }
+    }
+#endif
     return 1;
 }
 
@@ -3154,7 +3229,27 @@ static int kernel_raise_interrupt(uint32_t vector)
     g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
     g_esp -= 4; BRIDGE_MEM32(g_esp) = kint;
     g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;
+#ifdef NFSU2_PCVR
+    LARGE_INTEGER pcvr_start={0},pcvr_enter={0},pcvr_end;
+    if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_start);
+    xbox_gil_enter();
+    if(pcvr_start.QuadPart) QueryPerformanceCounter(&pcvr_enter);
+    t_gil_nopreempt++; fn(); t_gil_nopreempt--; xbox_gil_leave();
+    if(pcvr_start.QuadPart) {
+        QueryPerformanceCounter(&pcvr_end);
+        double scale=1000.0/s_pcvr_gil_frequency.QuadPart;
+        if((pcvr_end.QuadPart-pcvr_start.QuadPart)*scale>=8.0) {
+            static ULONGLONG window; static unsigned lines;
+            ULONGLONG now=GetTickCount64();
+            if(now-window>5000) { window=now; lines=0; }
+            if(lines++<8) fprintf(stderr,"[PCVR ISR] vector=%u routine=%08x guest-wait=%.3f body=%.3f ms\n",
+                vector,routine,(pcvr_enter.QuadPart-pcvr_start.QuadPart)*scale,
+                (pcvr_end.QuadPart-pcvr_enter.QuadPart)*scale);
+        }
+    }
+#else
     GUEST_CALL_ATOMIC(fn);
+#endif
     return (int)(g_eax & 1u);
 }
 
@@ -3272,11 +3367,18 @@ static void kernel_vblank_tick(void)
         dpc_unlock();
         if (claimed < 0 || !queued)
             xbox_Nv2aVblankDrop();
-        if (n++ < 3)
+        if (n++ < 3) {
             NFS_LOG_INFO("runtime", "  [NV2A] vblank -> ISR %s\n",
                     claimed < 0 ? "not callable" :
                     claimed ? "claimed it" : "declined it");
-        fflush(stderr);
+            fflush(stderr);
+        }
+#ifndef NFSU2_PCVR
+        else fflush(stderr);
+#endif
+        /* PCVR's host service flushes logs off the frame path. Flushing other
+         * threads' buffered output here held DISPATCH while the GPU waited
+         * for its DPC; the Windows redirected stream can block for >100 ms. */
     }
 }
 
@@ -3624,10 +3726,26 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          * lock (kernel_hal.c), so none of them runs while a game thread is in
          * a raised section. */
         pending_start_flush(0); /* threads whose creator made no further call */
+#ifdef NFSU2_PCVR
+        LARGE_INTEGER pcvr_phase[6]={{0}};
+        if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_phase[0]);
+#endif
         xbox_KfRaiseIrql(DISPATCH_LEVEL);
+#ifdef NFSU2_PCVR
+        if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_phase[1]);
+#endif
         kernel_vblank_tick();  /* the GPU's frame clock */
+#ifdef NFSU2_PCVR
+        if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_phase[2]);
+#endif
         kernel_service_irqs(); /* device interrupts; their DPCs drain below */
+#ifdef NFSU2_PCVR
+        if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_phase[3]);
+#endif
         kernel_drain_dpcs();   /* deferred work, before due timers */
+#ifdef NFSU2_PCVR
+        if(s_pcvr_irq_profile) QueryPerformanceCounter(&pcvr_phase[4]);
+#endif
         now = (long long)GetTickCount64();
 
         for (i = 0; i < XBOX_MAX_TIMERS; i++) {
@@ -3640,6 +3758,23 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
 
         }
         xbox_KfLowerIrql(PASSIVE_LEVEL);
+#ifdef NFSU2_PCVR
+        if(pcvr_phase[0].QuadPart) {
+            QueryPerformanceCounter(&pcvr_phase[5]);
+            double scale=1000.0/s_pcvr_gil_frequency.QuadPart;
+            if((pcvr_phase[5].QuadPart-pcvr_phase[0].QuadPart)*scale>=8.0) {
+                static ULONGLONG window; static unsigned lines;
+                ULONGLONG tick=GetTickCount64();
+                if(tick-window>5000) { window=tick; lines=0; }
+                if(lines++<8) fprintf(stderr,"[PCVR IRQ service] dispatch-wait=%.3f vblank=%.3f IRQ=%.3f DPC=%.3f timers=%.3f ms\n",
+                    (pcvr_phase[1].QuadPart-pcvr_phase[0].QuadPart)*scale,
+                    (pcvr_phase[2].QuadPart-pcvr_phase[1].QuadPart)*scale,
+                    (pcvr_phase[3].QuadPart-pcvr_phase[2].QuadPart)*scale,
+                    (pcvr_phase[4].QuadPart-pcvr_phase[3].QuadPart)*scale,
+                    (pcvr_phase[5].QuadPart-pcvr_phase[4].QuadPart)*scale);
+            }
+        }
+#endif
     }
 }
 

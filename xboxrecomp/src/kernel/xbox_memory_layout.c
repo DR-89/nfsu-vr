@@ -17,6 +17,9 @@
 #include "kernel.h"
 #include "../../include/nfsu_perf.h"
 #include <stdio.h>
+#ifdef NFSU2_PCVR
+#include "pcvr_platform.h"
+#endif
 #if !defined(_WIN32)
 #include <sched.h>
 #include <time.h>
@@ -48,6 +51,17 @@
 static void *g_memory_base = NULL;
 static size_t g_memory_size = 0;
 static ptrdiff_t g_memory_offset = 0;  /* actual_base - XBOX_BASE_ADDRESS */
+
+DWORD xbox_GuestTickCount(void)
+{
+#ifdef NFSU2_PCVR
+    /* The EA mixer schedules ten milliseconds ahead. GetTickCount advances in
+     * 15/16-ms steps on Windows; QPC preserves the guest's millisecond clock. */
+    return pcvr_counter_milliseconds();
+#else
+    return GetTickCount();
+#endif
+}
 
 /* Actual mapped RAM for this run; see the header. Default retail 64 MB. */
 size_t g_xbox_total_ram = XBOX_TOTAL_RAM;
@@ -98,6 +112,7 @@ static void android_release_span_window(uintptr_t address, size_t size)
 #endif
 }
 static void *g_tiled_view = NULL;
+
 
 /* Contiguous / physical memory window (see MemoryLayoutInit).
  * XBOX_CONTIG_BASE / XBOX_CONTIG_SIZE come from kernel.h - the bridges need
@@ -1197,20 +1212,39 @@ void recomp_spin_wake(void)
     pthread_mutex_unlock(&s_hw_lock);
 }
 #else
+#ifdef NFSU2_PCVR
+static volatile LONG s_pcvr_hw_epoch, s_pcvr_hw_sleepers;
+#endif
 void recomp_spin_wake(void)
 {
     volatile uint32_t *pfb = (volatile uint32_t *)
         ((uint8_t *)xbox_GetMemoryOffset() + 0xFD000000u + 0x100410u);
     if (*pfb & 0x00010000u)
         *pfb &= ~0x00010000u;
+#ifdef NFSU2_PCVR
+    if(InterlockedCompareExchange(&s_pcvr_hw_sleepers,0,0)) {
+        InterlockedIncrement(&s_pcvr_hw_epoch);
+        WakeByAddressAll((PVOID)&s_pcvr_hw_epoch);
+    }
+#endif
 }
 #endif
 
 static void nv2a_thread_pause(int busy)
 {
 #if defined(_WIN32)
+#ifdef NFSU2_PCVR
+    if(busy) SwitchToThread();
+    else {
+        LONG seen=InterlockedCompareExchange(&s_pcvr_hw_epoch,0,0);
+        InterlockedIncrement(&s_pcvr_hw_sleepers);
+        WaitOnAddress(&s_pcvr_hw_epoch,&seen,sizeof seen,1);
+        InterlockedDecrement(&s_pcvr_hw_sleepers);
+    }
+#else
     (void)busy;
     Sleep(0);
+#endif
 #else
     if (busy) {
         sched_yield();
@@ -1412,7 +1446,7 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
          * hardware whether or not anyone is asleep. GetTickCount() shares the
          * millisecond unit, so the rate matches. */
         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
-                               + g_memory_offset) = GetTickCount();
+                               + g_memory_offset) = xbox_GuestTickCount();
 
         {
             /* Busy while the pushbuffer moves or has unread commands. */
@@ -1436,7 +1470,7 @@ static DWORD WINAPI tick_count_thread(LPVOID unused)
     (void)unused;
     while (!InterlockedCompareExchange(&g_nv2a_ack_stop, 0, 0)) {
         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
-                               + g_memory_offset) = GetTickCount();
+                               + g_memory_offset) = xbox_GuestTickCount();
         Sleep(1);
     }
     return 0;
@@ -2193,7 +2227,9 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 #endif
         g_span_base = VirtualAlloc(NULL, g_span_size, MEM_RESERVE, PAGE_NOACCESS);
         if (g_span_base) {
+#ifndef __ANDROID__
             VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
+#endif
             g_memory_base = MapViewOfFileEx(g_mapping_handle,
                                             FILE_MAP_ALL_ACCESS, 0, 0,
                                             g_memory_size, g_span_base);
@@ -2975,8 +3011,10 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             /* Inside the reservation this hands back the slice we are about
              * to use; outside it (no reservation) this is a no-op on an
              * address we never held. */
+#ifndef __ANDROID__
             if (g_span_base)
                 VirtualFree((LPVOID)mirror_base, g_memory_size, MEM_RELEASE);
+#endif
             g_mirror_views[m] = MapViewOfFileEx(
                 g_mapping_handle,
                 FILE_MAP_ALL_ACCESS,

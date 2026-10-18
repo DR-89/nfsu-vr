@@ -1393,7 +1393,7 @@ void xbox_OhciInit(void)
     ohci_reset(&s_hc[0], XBOX_OHCI0_BASE, 0);
     ohci_reset(&s_hc[1], XBOX_OHCI1_BASE, 1);
 
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(NFSU2_PCVR)
     /* The registers have to fault to be answered. The MCPX aperture is mapped
      * as plain committed memory, so both blocks are made inaccessible here and
      * the title's VEH routes the faults back to xbox_OhciHandleMmio.
@@ -1424,7 +1424,7 @@ void xbox_OhciInit(void)
     }
 #endif
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) || defined(NFSU2_PCVR)
     /* No fault handling on this host: the registers stay plain memory and the
      * title's XPP code, lifted with --mmio-sections XPP, reaches the model
      * through the runtime's MMIO accessors instead. */

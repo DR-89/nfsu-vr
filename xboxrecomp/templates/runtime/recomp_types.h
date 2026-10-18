@@ -284,7 +284,19 @@ static inline uint32_t recomp_atomic_cas32(volatile void *p, uint32_t cmp, uint3
  * 16, a host yield every 64 -- which also hands the guest lock (kernel_bridge.c)
  * to whichever guest thread, ISR or DPC the loop is waiting for. */
 #if defined(_MSC_VER)
+#ifdef NFSU2_PCVR
+void recomp_spin_wake(void);
+void recomp_spin_yield(void);
+static inline void recomp_pcvr_spin_hint(void) {
+    static RECOMP_TLS unsigned turns;
+    _mm_pause();
+    if((++turns & 15u)==0) recomp_spin_wake();
+    if((turns & 63u)==0) recomp_spin_yield();
+}
+#define RECOMP_SPIN_HINT() recomp_pcvr_spin_hint()
+#else
 #define RECOMP_SPIN_HINT() _mm_pause()
+#endif
 extern volatile int g_gil_contended;
 void recomp_preempt(void);
 #define RECOMP_PREEMPT() do { if (g_gil_contended) recomp_preempt(); } while (0)

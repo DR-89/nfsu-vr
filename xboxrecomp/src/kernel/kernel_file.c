@@ -19,6 +19,7 @@
 #include "kernel.h"
 #include <string.h>
 #include <stdio.h>
+void (*xbox_file_read_hook)(void *buf, size_t len, int64_t offset);
 
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -189,6 +190,10 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     } else {
         if (CreateOptions & XBOX_FILE_NO_INTERMEDIATE_BUFFERING)
             flags_and_attrs |= FILE_FLAG_NO_BUFFERING;
+#ifdef NFSU2_PCVR
+        if(getenv("NFSU2_PCVR_HEALTH") && (CreateOptions & XBOX_FILE_NO_INTERMEDIATE_BUFFERING))
+            fprintf(stderr,"[PCVR IO] uncached host file: %S\n",win_path);
+#endif
         if (FileAttributes & XBOX_FILE_ATTRIBUTE_READONLY)
             flags_and_attrs |= FILE_ATTRIBUTE_READONLY;
         h = CreateFileW(win_path, xbox_access_to_win32(DesiredAccess),
@@ -239,11 +244,19 @@ NTSTATUS __stdcall xbox_NtReadFile(
     DWORD bytes_read = 0;
     BOOL result;
     OVERLAPPED ov;
+    int64_t hook_offset=-1;
     (void)ApcRoutine; (void)ApcContext;
 
     if (!IoStatusBlock)
         return STATUS_INVALID_PARAMETER;
 
+    if(xbox_file_read_hook) {
+        if(ByteOffset && ByteOffset->QuadPart>=0) hook_offset=ByteOffset->QuadPart;
+        else {
+            LARGE_INTEGER zero={0}, position;
+            if(SetFilePointerEx(FileHandle,zero,&position,FILE_CURRENT)) hook_offset=position.QuadPart;
+        }
+    }
     if (ByteOffset && ByteOffset->QuadPart >= 0) {
         memset(&ov, 0, sizeof(ov));
         ov.Offset = ByteOffset->LowPart;
@@ -254,6 +267,7 @@ NTSTATUS __stdcall xbox_NtReadFile(
     }
 
     if (result || GetLastError() == ERROR_HANDLE_EOF) {
+        if(bytes_read && xbox_file_read_hook) xbox_file_read_hook(Buffer,bytes_read,hook_offset);
         IoStatusBlock->Information = bytes_read;
         if (bytes_read == 0 && Length > 0) {
             IoStatusBlock->Status = STATUS_END_OF_FILE;
@@ -266,6 +280,15 @@ NTSTATUS __stdcall xbox_NtReadFile(
 
     XBOX_TRACE(XBOX_LOG_FILE, "NtReadFile(handle=%p, len=%u) failed err=%u",
                FileHandle, Length, GetLastError());
+#ifdef NFSU2_PCVR
+    {
+        static LONG failures;
+        DWORD error=GetLastError();
+        if(InterlockedIncrement(&failures)<=20)
+            fprintf(stderr,"[PCVR IO] read failed: error=%lu length=%lu offset=%lld buffer=%p\n",
+                error,Length,ByteOffset?(long long)ByteOffset->QuadPart:-1LL,Buffer);
+    }
+#endif
     IoStatusBlock->Status = STATUS_UNSUCCESSFUL;
     IoStatusBlock->Information = 0;
     return STATUS_UNSUCCESSFUL;
@@ -934,8 +957,6 @@ NTSTATUS __stdcall xbox_NtCreateFile(
     XBOX_TRACE(XBOX_LOG_FILE, "NtCreateFile: %s -> handle=%p", host_path, *FileHandle);
     return STATUS_SUCCESS;
 }
-
-void (*xbox_file_read_hook)(void *buf, size_t len, int64_t offset);
 
 NTSTATUS __stdcall xbox_NtReadFile(
     HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,

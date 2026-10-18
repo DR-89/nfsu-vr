@@ -95,6 +95,47 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
 
+#ifdef __ANDROID__
+    /* Exercise an owned arena, two shared aliases, collision refusal and
+     * release of only the middle of a reservation on the actual device. */
+    {
+        size_t page = (size_t)sysconf(_SC_PAGESIZE);
+        unsigned char *arena = VirtualAlloc(NULL, 8 * page, MEM_RESERVE, PAGE_NOACCESS);
+        HANDLE backing = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL,
+                                            PAGE_READWRITE, 0, (DWORD)page, NULL);
+        check(arena && backing, "Android reserved arena and backing created", NULL);
+        if (arena && backing) {
+            MEMORY_BASIC_INFORMATION info;
+            VirtualQuery(arena, &info, sizeof info);
+            check(info.State == MEM_RESERVE, "untouched arena is reported reserved", NULL);
+            unsigned char *a = MapViewOfFileEx(backing, FILE_MAP_ALL_ACCESS, 0, 0, page, arena + page);
+            unsigned char *b = MapViewOfFileEx(backing, FILE_MAP_ALL_ACCESS, 0, 0, page, arena + 3 * page);
+            check(a == arena + page && b == arena + 3 * page, "views replace only owned reservation slices", NULL);
+            if (a && b) {
+                *a = 0x5A;
+                check(*(volatile unsigned char *)b == 0x5A, "reserved views share physical bytes", NULL);
+                check(MapViewOfFileEx(backing, FILE_MAP_ALL_ACCESS, 0, 0, page, a) == NULL,
+                      "mapping refuses to overwrite a live view", NULL);
+                check(VirtualAlloc(a, page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == NULL,
+                      "allocation refuses to overwrite a live view", NULL);
+            }
+            void *committed = VirtualAlloc(arena + 5 * page, page, MEM_COMMIT, PAGE_READWRITE);
+            check(committed == arena + 5 * page, "commit consumes an owned reservation slice", NULL);
+            VirtualQuery(committed, &info, sizeof info);
+            check(info.State == MEM_COMMIT, "committed slice is reported committed", NULL);
+            check(VirtualFree(arena + 6 * page, page, MEM_RELEASE), "partial reservation release succeeds", NULL);
+            VirtualQuery(arena + 6 * page, &info, sizeof info);
+            check(info.State == MEM_FREE, "released slice is no longer owned", NULL);
+            void *other = VirtualAlloc(arena + 6 * page, page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            check(other == arena + 6 * page, "released address can be allocated again", NULL);
+            check(VirtualFree(arena, 8 * page, MEM_RELEASE), "whole arena releases all remaining slices", NULL);
+            VirtualQuery(arena + page, &info, sizeof info);
+            check(info.State == MEM_FREE, "arena shutdown removes mapped views", NULL);
+        }
+        if (backing) CloseHandle(backing);
+    }
+#endif
+
     /* 1. The alloc/free pair must not kill the process. */
     {
         char how[160] = "";

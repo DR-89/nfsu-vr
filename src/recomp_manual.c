@@ -32,7 +32,94 @@
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
 
-#ifdef __ANDROID__
+/* The recompiler protects wrappers before C preprocessing. Phone-only touch
+ * hooks must still forward to retail code on the other hosts. */
+#if !defined(__ANDROID__) || defined(NFSU2_OPENXR)
+extern void sub_000A0140_gen(void);
+extern void sub_000B5B00_gen(void);
+extern void sub_000C0F50_gen(void);
+extern void sub_000C2B80_gen(void);
+extern void sub_000CBE90_gen(void);
+extern void sub_00130A70_gen(void);
+extern void sub_00131050_gen(void);
+void sub_000A0140(void) { sub_000A0140_gen(); }
+void sub_000B5B00(void) { sub_000B5B00_gen(); }
+void sub_000C0F50(void) { sub_000C0F50_gen(); }
+void sub_000C2B80(void) { sub_000C2B80_gen(); }
+void sub_000CBE90(void) { sub_000CBE90_gen(); }
+void sub_00130A70(void) { sub_00130A70_gen(); }
+void sub_00131050(void) { sub_00131050_gen(); }
+#endif
+
+#ifdef NFSU2_OPENXR
+extern void sub_0003B8C0(void);
+extern void sub_00080850_gen(void);
+#include "nfsu1_vr_hooks.inc"
+#endif
+
+extern void sub_00080850_gen(void);
+void sub_00080850(void)
+{
+#ifdef NFSU2_OPENXR
+    uint32_t target = MEM32(esp + 4);
+    float saved[16];
+    int changed = nfsu1_vr_camera_begin(ecx, edi, target, saved);
+#endif
+    sub_00080850_gen();
+#ifdef NFSU2_OPENXR
+    if (changed) memcpy((void *)XBOX_PTR(target), saved, sizeof saved);
+#endif
+}
+
+extern void sub_0003BB10_gen(void);
+/* NFSU1 CarRenderInfo::Render, main-view inside-body rejection. The player
+ * owns its render-info at +0x4d4 (12C54F), bounds at +0x10/+0x20 (129BD6).
+ * Preserve the original routine's register and floating-point side effects. */
+extern void sub_00126A90_gen(void);
+void sub_00126A90(void)
+{
+#ifdef NFSU2_OPENXR
+    int keep_body = 0;
+    if (MEM32(esp) == 0x00129f22u && nfsu1_cockpit_car &&
+        MEM32(NFSU1_FLOW) == 6 && quest_xr_cockpit_active() &&
+        nfsu1_address(nfsu1_cockpit_car, 0x4d8)) {
+        uint32_t info = MEM32(nfsu1_cockpit_car + 0x4d4);
+        keep_body = nfsu1_address(info, 0x30) &&
+                    MEM32(esp + 4) == info + 0x10 && MEM32(esp + 8) == info + 0x20;
+    }
+#endif
+    sub_00126A90_gen();
+#ifdef NFSU2_OPENXR
+    if (keep_body && eax) eax = 0;
+#endif
+}
+
+void sub_0003BB10(void)
+{
+#ifdef NFSU2_OPENXR
+    if (nfsu1_vr_cycle()) return;
+#endif
+    sub_0003BB10_gen();
+}
+
+extern void sub_00015AB0_gen(void);
+void sub_00015AB0(void)
+{
+    sub_00015AB0_gen();
+#ifdef NFSU2_OPENXR
+    nfsu1_vr_publish_ui();
+    nfsu1_vr_prepare_rear();
+    if (quest_xr_cockpit_requested() && nfsu1_cockpit_car) {
+        uint32_t view = NFSU1_VIEW(3), surface = MEM32(view + 0x58);
+        if (nfsu1_address(surface, 0x24)) {
+            MEM8(view + 8) = 1;
+            MEM32(surface + 0x10) = 1;
+        }
+    }
+#endif
+}
+
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 #include <pthread.h>
 #include <time.h>
 #include <sys/syscall.h>
@@ -137,13 +224,13 @@ void nfsu_audio_diag_poll(void)
 extern void sub_001A5C60_gen(void);
 void sub_001A5C60(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     int previous = audio_diag_lane;
     audio_diag_lane = 0;
     audio_diag_boundary(0x001A5C60u, 1, 0);
 #endif
     sub_001A5C60_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     audio_diag_boundary(0x001A5C60u, 0, 0);
     audio_diag_lane = previous;
 #endif
@@ -152,11 +239,11 @@ void sub_001A5C60(void)
 extern void sub_001A2760_gen(void);
 void sub_001A2760(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     audio_diag_boundary(0x001A2760u, 1, 1);
 #endif
     sub_001A2760_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     audio_diag_boundary(0x001A5C60u, 1, 0);
 #endif
 }
@@ -164,21 +251,21 @@ void sub_001A2760(void)
 extern void sub_001A6110_gen(void);
 void sub_001A6110(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     int previous = audio_diag_lane;
     audio_diag_lane = 1;
     audio_diag_boundary(0x001A6110u, 1, 0);
     if (nfsu_diagnostics_enabled) NFS_LOG_TRACE("audio", "[AUDTRACE] shutdown entered\n");
 #endif
     sub_001A6110_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     audio_diag_boundary(0x001A6110u, 0, 0);
     if (nfsu_diagnostics_enabled) NFS_LOG_TRACE("audio", "[AUDTRACE] shutdown returned\n");
     audio_diag_lane = previous;
 #endif
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 extern void nfsu_diag_voice(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern void nfsu_diag_dump(void);
 
@@ -219,13 +306,13 @@ static void audio_list_sample(uint32_t operation, uint32_t node, uint32_t parent
 extern void sub_001E6921_gen(void);
 void sub_001E6921(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     uint32_t object = ecx;
     uint32_t parent = audio_pointer_ok(object, 12) ? MEM32(object + 8) : 0;
     audio_list_sample(0x001E6921u, object + 0x4Cu, parent);
 #endif
     sub_001E6921_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     uint32_t node = object + 0x4Cu;
     if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E6921u, 0, node,
         audio_pointer_ok(node, 8) ? MEM32(node) : 0,
@@ -236,12 +323,12 @@ void sub_001E6921(void)
 extern void sub_001E2880_gen(void);
 void sub_001E2880(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     uint32_t node = audio_pointer_ok(esp, 8) ? MEM32(esp + 4) : 0;
     audio_list_sample(0x001E2880u, node, 0);
 #endif
     sub_001E2880_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     /* Removed nodes need not have reciprocal links after unlink. Record the
      * bytes without applying the linked-node invariant to the removed node. */
     if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E2880u, 0, node,
@@ -595,8 +682,15 @@ static int horplus_on(void)
 
 void sub_00018E60(void)
 {
+    uint32_t root = ecx;
     s_proj_view = MEM32(esp + 4);
+#ifdef NFSU2_OPENXR
+    nfsu1_vr_render_view(s_proj_view);
+#endif
     sub_00018E60_gen();
+#ifdef NFSU2_OPENXR
+    nfsu1_vr_cull(root, s_proj_view);
+#endif
     s_proj_view = 0;
 }
 
@@ -606,7 +700,7 @@ void sub_00018E60(void)
 
 /* Keep guest overrides here so the recompilation scanner protects their
  * original generated bodies. Gesture policy lives in the shared module. */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 #include "feng_touch.h"
 #include "menu_touch.h"
 #endif
@@ -627,7 +721,7 @@ extern void sub_000DF160(void);
 extern void sub_000E53C0(void);
 void nfsu_touch_hit(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     feng_touch_hit();
 #else
     sub_000DDB60();
@@ -635,7 +729,7 @@ void nfsu_touch_hit(void)
 }
 void sub_000D8730(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     feng_touch_dispatch();
 #else
     sub_000D8730_gen();
@@ -643,15 +737,18 @@ void sub_000D8730(void)
 }
 void sub_000D8B10(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     feng_touch_update();
 #else
     sub_000D8B10_gen();
+#ifdef NFSU2_OPENXR
+    nfsu1_vr_publish_ui();
+#endif
 #endif
 }
 void sub_000DB860(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     feng_touch_poll();
 #else
     sub_000DB860_gen();
@@ -745,11 +842,11 @@ void sub_0014B510(void)
 extern void sub_000D9D00_gen(void);
 void sub_000D9D00(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     uint32_t previous = feng_touch_draw_begin(MEM32(esp + 4));
 #endif
     sub_000D9D00_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     feng_touch_draw_end(previous);
 #endif
 }
@@ -771,21 +868,21 @@ static int s_feng_menu_draw;
  * glyphs, so menus retain their original stretched presentation. */
 extern void sub_000DC090_gen(void);
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 void nfsu_controller_settings_refresh(void);
 #endif
 void sub_000DC090(void)
 {
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (!previous) {
         nfsu_controller_settings_refresh();
         feng_touch_frame_begin();
     }
 #endif
     sub_000DC090_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (!previous) feng_touch_frame_end();
 #endif
     s_feng_menu_draw = previous;
@@ -800,7 +897,7 @@ void sub_000F8B80(void)
     int previous_draw = s_feng_draw;
     unsigned count = 0;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (s_feng_menu_draw && feng_touch_draw_cache(ecx)) {
         esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
         return;
@@ -908,7 +1005,7 @@ void sub_000192C0(void)
 #define ROW_FIRST       3               /* rows 1-2 are the game's */
 #define ENVMAP_VIEW(id) (0x002C5F20u + (uint32_t)(id) * 0x60u)
 
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
 extern volatile int nv2a_vk_cube_maps;
 extern volatile int nv2a_vk_scale_pct;
 extern volatile int nv2a_vk_fxaa;
@@ -941,12 +1038,12 @@ typedef struct {
 
 static void refl_changed(void)
 {
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
     nv2a_vk_cube_maps = s_refl;
 #endif
 }
 
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
 static void scale_changed(void)
 {
     nv2a_vk_scale_pct = s_scale_pct[s_scale_idx];
@@ -962,7 +1059,7 @@ static void picture_changed(void)
 #endif
 
 static const char *const s_onoff[] = { "Off", "On" };
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
 static const char *const s_scale_texts[] = { "1x", "1.5x", "2x", "2.5x" };
 static const char *const s_aniso_texts[] = { "Off", "2x", "4x", "8x", "16x" };
 #endif
@@ -975,7 +1072,7 @@ static void frame_rate_changed(void)
 
 static const OptRow s_rows[] = {
     { "Car Reflections:", s_onoff, 2, &s_refl, refl_changed },
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
     { "Resolution Scale:", s_scale_texts, 4, &s_scale_idx, scale_changed },
     { "Anti-Aliasing:", s_onoff, 2, &s_fxaa, picture_changed },
     { "Anisotropic:", s_aniso_texts, 5, &s_aniso_idx, picture_changed },
@@ -991,7 +1088,7 @@ static void options_log(void)
     NFS_LOG_INFO("system", "[options] blur %s\n", s_blur ? "on" : "off");
     NFS_LOG_INFO("system", "[options] race frame rate %d FPS (experimental 60 FPS)\n",
             s_fps60 ? 60 : 30);
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
     NFS_LOG_INFO("system", "[options] car reflections %s, resolution scale %d%%%s, anti-aliasing %s,"
             " anisotropic %dx, square pixels %s\n",
             s_refl ? "on" : "off", s_scale_pct[s_scale_idx],
@@ -1004,7 +1101,7 @@ static void options_log(void)
 
 void nfsu1_options_load(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     InputMode saved_mode = input_mode_get();
     int sensor_preference = saved_mode.preference;
     int race_overlay = saved_mode.overlay_requested;
@@ -1015,7 +1112,7 @@ void nfsu1_options_load(void)
 
     if (f) {
         while (fgets(line, sizeof line, f)) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
             if (!strncmp(line, "sensor_mode=", 12)) {
                 int mode = atoi(line + 12);
                 sensor_preference = mode >= -1 && mode <= 1 ? mode : -1;
@@ -1053,11 +1150,11 @@ void nfsu1_options_load(void)
         }
         fclose(f);
     }
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     input_mode_configure(sensor_preference, race_overlay);
 #endif
     refl_changed();
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
     {
         const char *e = getenv("RECOMP_GL_SCALE");
         if (!s_scale_saved && e && *e) {
@@ -1087,10 +1184,10 @@ static void options_save(void)
     fprintf(f, "reflections=%d\nfps=%d\nblur=%d\n", s_refl, s_fps60 ? 60 : 30, s_blur);
     if (s_scale_saved)
         fprintf(f, "scale=%d\n", s_scale_pct[s_scale_idx]);
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
     fprintf(f, "fxaa=%d\naniso=%d\nsquare=%d\n", s_fxaa, s_aniso_lvl[s_aniso_idx], s_square);
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     InputMode mode = input_mode_get();
     fprintf(f, "sensor_mode=%d\nrace_overlay=%d\n", mode.preference, mode.overlay_requested);
 #endif
@@ -1143,7 +1240,7 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
 /* Android replaces the retail trailers action, preserving the selector and
  * its native touch/controller activation event. Retail handler: ret 16. */
 extern void sub_000C1FD0_gen(void);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 extern void android_show_port_credits(void);
 extern void sub_000DC410(void);
 static void port_credits_caption(uint32_t object, unsigned depth)
@@ -1163,7 +1260,7 @@ static void port_credits_caption(uint32_t object, unsigned depth)
 #endif
 void sub_000C1FD0(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     uint32_t message = MEM32(esp + 4), screen = ecx;
     uint32_t object = MEM32(esp + 8);
     if (message == 0x0C407210u && object && MEM32(object + 0x10) == 0x8816789Fu) {
@@ -1173,7 +1270,7 @@ void sub_000C1FD0(void)
     }
 #endif
     sub_000C1FD0_gen();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (message == 0x35F8620Bu) { /* selector initialization */
         uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx;
         PUSH32(esp, 0x8816789Fu); PUSH32(esp, MEM32(screen + 0xC));
@@ -1223,7 +1320,7 @@ void sub_000C2A70(void)
     }
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 extern void sub_000C2B80_gen(void);
 #include "race_touch.h"
 /* Native HUD availability update: (player, primary flags, secondary flags).
@@ -1505,7 +1602,7 @@ static void opt_row_input(int i)
 }
 
 static void opt_row_input_0(void) { opt_row_input(0); }
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
 static void opt_row_input_1(void) { opt_row_input(1); }
 static void opt_row_input_2(void) { opt_row_input(2); }
 static void opt_row_input_3(void) { opt_row_input(3); }
@@ -1588,6 +1685,10 @@ static uint32_t s_menu_size_user;       /* bits the slider last stored */
 
 void sub_00016460(void)
 {
+#ifdef NFSU2_OPENXR
+    /* FEng keeps rendering while the racing/view update can be paused. */
+    nfsu1_vr_publish_ui();
+#endif
     uint32_t v = MEM32(NFSU1_MENU_SIZE);
     int previous = s_ui_aspect_active;
     float f;
@@ -1702,7 +1803,7 @@ void sub_0011BC20(void)
  */
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
     if (xbox_va == 0x00131050u) return sub_00131050;
     if (xbox_va == 0x00130A70u) return sub_00130A70;
@@ -1725,7 +1826,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va - ROW_HANDLER_VA < (uint32_t)N_ROWS) {
         static const recomp_func_t row_input[] = {
             opt_row_input_0,
-#ifdef NFSU2_VULKAN
+#if defined(NFSU2_VULKAN) && !defined(NFSU2_OPENXR)
             opt_row_input_1, opt_row_input_2, opt_row_input_3, opt_row_input_4,
             opt_row_input_5, opt_row_input_6,
 #else

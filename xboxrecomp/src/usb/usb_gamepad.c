@@ -13,6 +13,9 @@
  */
 #include "../../include/nfsu_log.h"
 #include "usb_gamepad.h"
+#ifdef NFSU2_OPENXR
+#include "quest_xr.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -550,7 +553,7 @@ void usb_gamepad_output(int dev, const uint8_t *data, int len)
     static uint16_t last_r[USB_GAMEPADS] = { 0xFFFF, 0xFFFF };
     XBOX_VIBRATION vib;
 
-    if (len < 6 || data[0] != 0x00 || data[1] < 6)
+    if (dev<0 || dev>=USB_GAMEPADS || len < 6 || data[0] != 0x00 || data[1] < 6)
         return;
     vib.wLeftMotorSpeed  = (uint16_t)(data[2] | (data[3] << 8));
     vib.wRightMotorSpeed = (uint16_t)(data[4] | (data[5] << 8));
@@ -558,7 +561,7 @@ void usb_gamepad_output(int dev, const uint8_t *data, int len)
      * can be an IPC (Switch hid), so only changes go out. Android must
      * refresh SDL's timed effects, and retry routing after pad hotplug. */
     int changed = vib.wLeftMotorSpeed != last_l[dev] || vib.wRightMotorSpeed != last_r[dev];
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (!changed) return;
 #endif
     last_l[dev] = vib.wLeftMotorSpeed;

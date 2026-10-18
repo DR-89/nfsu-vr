@@ -24,9 +24,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#ifdef NFSU2_OPENXR
+#include "nfsu1_host_image.h"
+#endif
+#if defined(NFSU2_OPENXR) && defined(__ANDROID__)
+#include <SDL.h>
+#endif
 #include <string.h>
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 #include <SDL.h>
 #include <pthread.h>
 #include <ucontext.h>
@@ -184,7 +190,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
     NFS_LOG_FATAL("system", "[CRASH] signal %d, fault addr %p (guest VA 0x%08X)\n",
             sig, si->si_addr,
             (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)g_xbox_mem_offset));
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(__ANDROID__) && defined(__aarch64__) && !defined(NFSU2_OPENXR)
     ucontext_t *context = (ucontext_t *)uc;
     if (context) {
         NFS_LOG_INFO("system", "[NATIVE] pc=%016llX pc_offset=%llX lr=%016llX"
@@ -218,7 +224,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
 
 static void install_crash_reporter(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     Dl_info info;
     if (dladdr((void *)crash_signal, &info)) {
         diagnostic_library_base = (uintptr_t)info.dli_fbase;
@@ -329,7 +335,7 @@ int main(int argc, char **argv)
     return rc;
 }
 #else
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
 static DWORD WINAPI android_game_thread(void *arg)
 {
     *(int *)arg = game_main();
@@ -339,7 +345,14 @@ static DWORD WINAPI android_game_thread(void *arg)
 #endif
 int main(int argc, char **argv)
 {
-#ifdef __ANDROID__
+#if defined(NFSU2_PCVR)
+    extern int pcvr_run_game(int (*entry)(void));
+    return pcvr_run_game(game_main);
+#elif defined(NFSU2_OPENXR)
+    extern int quest_run_game(int (*entry)(void));
+    if (argc > 1 && !strcmp(argv[1], "--quest-setup")) return 1;
+    return quest_run_game(game_main);
+#elif defined(__ANDROID__) && !defined(NFSU2_OPENXR)
     if (!android_host_boot(argc, argv))
         return 1;
     if (!android_host_video_init()) return 1;
@@ -372,8 +385,10 @@ static int game_main(void)
     void *xbe_data;
     size_t xbe_size = 0;
 
+#ifndef NFSU2_PCVR
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+#endif
 
     /* Install managed device events before APU/OHCI can create or signal them. */
     xbox_guest_executor_prepare();
@@ -390,6 +405,7 @@ static int game_main(void)
 #ifdef _WIN32
     if (!getenv("RECOMP_VBLANK"))     _putenv("RECOMP_VBLANK=1");
     if (!getenv("RECOMP_AC97_READY")) _putenv("RECOMP_AC97_READY=plain");
+    if (!getenv("RECOMP_PB_EXEC")) _putenv("RECOMP_PB_EXEC=1");
     if (!getenv("RECOMP_USB"))        _putenv("RECOMP_USB=1");
 #else
     setenv("RECOMP_VBLANK", "1", 0);
@@ -416,6 +432,15 @@ static int game_main(void)
         return 1;
     }
     NFS_LOG_INFO("system", "XBE %s: %zu bytes\n", xbe_path, xbe_size);
+
+#ifdef NFSU2_OPENXR
+    if (!nfsu1_host_image(xbe_data, xbe_size)) {
+        free(xbe_data);
+        fatal("Unsupported NFSU1 executable certificate.");
+        return 1;
+    }
+    NFS_LOG_INFO("system", "[BOOT] XAPI media: extracted host folder (in-memory header only)\n");
+#endif
 
     if (!xbox_MemoryLayoutInit(xbe_data, xbe_size)) {
         fatal("Failed to initialise the Xbox memory layout "
@@ -469,7 +494,7 @@ static int game_main(void)
      * gamepad (RECOMP_USB). On hosts without fault handling their registers
      * are reached through the MMIO accessors the XPP section is lifted with. */
     {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(NFSU2_OPENXR)
         /* Unlike libnx, SDL controllers must be initialised/opened before
          * OHCI starts asking xbox_InputGetState for USB input reports. */
         xbox_InputInit();
@@ -484,7 +509,7 @@ static int game_main(void)
         /* nic: NFSU2 only */
     }
 
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(NFSU2_PCVR)
     /* The GPU renderer (NFSU2_GL=0 falls back to the executor's CPU one). */
     {
         const char *gl = getenv("NFSU2_GL");

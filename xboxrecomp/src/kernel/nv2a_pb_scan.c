@@ -47,7 +47,22 @@ extern void nv2a_pb_exec_report(void);
 extern uint32_t nv2a_pb_exec_run(uint32_t subch, uint32_t method, int noninc,
                                  const uint32_t *p, uint32_t count);
 static int s_exec_enabled = -1;
-static int s_survey;                  /* RECOMP_PB_SCAN: count every method */
+static int s_survey_enabled = -1, s_survey_requested;
+static int s_bulk_enabled=-1;
+extern uint32_t nv2a_pb_exec_data(uint32_t subch, uint32_t method, int noninc,
+                                const uint32_t *data, uint32_t count);
+void nv2a_pb_scan_bulk(int enabled) { s_bulk_enabled=enabled; }
+
+/* Diagnostic inventory is independent of execution. Keep the historical
+ * default for other hosts; the Quest trial opts out with RECOMP_PB_SURVEY=0.
+ * An explicit RECOMP_PB_SCAN request always wins. Called only on the executor
+ * thread, including by the renderer's between-frame timing comparison. */
+int nv2a_pb_scan_survey(int enabled)
+{
+    if(s_survey_enabled<0) s_survey_requested=getenv("RECOMP_PB_SCAN")!=NULL;
+    s_survey_enabled=enabled || s_survey_requested;
+    return s_survey_enabled;
+}
 
 /* Slot + 1 of each (subchannel, method) in s_seen. note() runs for every
  * pushbuffer word, so a linear search here was the executor's largest cost
@@ -181,6 +196,33 @@ void nv2a_pb_scan_report(void)
 #define PB_HIST 8
 static struct { uint32_t at, w; } s_hist[PB_HIST];
 static unsigned s_hist_n;
+#ifdef NFSU2_PCVR
+/* Bounded diagnostic history, saved only after a decoder fault. No per-packet
+ * file I/O. Keep the submitted PUT as well as the current producer position:
+ * a stale submission boundary and overwritten ring data are different bugs. */
+static int s_pcvr_trace;
+static struct { uint32_t at, word, put, live_put; } s_pcvr_headers[512];
+static unsigned s_pcvr_header_count;
+static void pcvr_pb_fault_capture(void)
+{
+    static int saved;
+    if (!s_pcvr_trace || saved++) return;
+    const uint8_t *mem=(const uint8_t *)xbox_GetMemoryOffset();
+    FILE *f=fopen("pcvr-pb-fault.txt","wb");
+    if (!f) return;
+    unsigned n=s_pcvr_header_count<512?s_pcvr_header_count:512;
+    fprintf(f,"address decoded_word submitted_put live_put word_at_fault\n");
+    for (unsigned k=0;k<n;++k) {
+        unsigned i=(s_pcvr_header_count-n+k)%512;
+        uint32_t at=s_pcvr_headers[i].at;
+        fprintf(f,"%08x %08x %08x %08x %08x\n",at,s_pcvr_headers[i].word,
+            s_pcvr_headers[i].put,s_pcvr_headers[i].live_put,
+            *(const volatile uint32_t *)(mem+(0x80000000u|at)));
+    }
+    fclose(f);
+    fprintf(stderr,"[PCVR PB] decoder history saved to pcvr-pb-fault.txt\n");
+}
+#endif
 /* The last jumps/calls/returns taken, and resyncs (w = 0xFFFFFFFF). */
 static struct { uint32_t at, w, to; } s_flow[PB_HIST];
 static unsigned s_flow_n;
@@ -198,6 +240,9 @@ static int pb_bad_target(uint32_t w, uint32_t at, uint32_t target, uint32_t put)
     unsigned k;
     if (target < PB_RAM_BYTES)
         return 0;
+#ifdef NFSU2_PCVR
+    pcvr_pb_fault_capture();
+#endif
     if (++total <= 16 || total % 100 == 0) {
         NFS_LOG_DEBUG("graphics", "  [PB] bad target #%u 0x%08X from word 0x%08X at 0x%08X"
                         " (PUT 0x%08X); resync\n", total, target, w, at, put);
@@ -218,6 +263,10 @@ static int pb_bad_target(uint32_t w, uint32_t at, uint32_t target, uint32_t put)
 }
 static uint32_t s_get = 0xFFFFFFFFu, s_ret;
 static int      s_in_call;
+#ifdef NFSU2_PCVR
+static uint32_t s_pending_count, s_pending_method, s_pending_subch;
+static int s_pending_noninc;
+#endif
 
 /* The title moved GET itself: XDK D3D resets the ring by writing DMA_PUT and
  * DMA_GET together (CDevice::KickOff's restart path). Walking on from the old
@@ -227,6 +276,9 @@ void nv2a_pb_resync(uint32_t get_phys)
     pb_flow(s_get, 0xFFFFFFFFu, get_phys & PB_PHYS_MASK);
     s_get = get_phys & PB_PHYS_MASK;
     s_in_call = 0;
+#ifdef NFSU2_PCVR
+    s_pending_count=0;
+#endif
 }
 
 void nv2a_pb_scan(uint32_t put_phys)
@@ -237,9 +289,19 @@ void nv2a_pb_scan(uint32_t put_phys)
 
     if (s_exec_enabled < 0) {
         s_exec_enabled = getenv("RECOMP_PB_EXEC") != NULL;
-        s_survey = getenv("RECOMP_PB_SCAN") != NULL;
+#ifdef NFSU2_PCVR
+        s_pcvr_trace=getenv("NFSU2_PCVR_HEALTH")!=NULL;
+#endif
     }
-    if (!(s_exec_enabled || s_survey))
+    if(s_survey_enabled<0) {
+        const char *e=getenv("RECOMP_PB_SURVEY");
+        nv2a_pb_scan_survey(!(e && *e=='0'));
+    }
+    if(s_bulk_enabled<0) {
+        const char *e=getenv("RECOMP_PB_BULK");
+        s_bulk_enabled=e && *e=='1';
+    }
+    if (!(s_exec_enabled || getenv("RECOMP_PB_SCAN")))
         return;
     if (s_get == 0xFFFFFFFFu) {               /* never resynced: start at PUT */
         s_get = put;
@@ -265,10 +327,33 @@ void nv2a_pb_scan(uint32_t put_phys)
             s_get = put;
             break;
         }
+#ifdef NFSU2_PCVR
+        /* A producer can publish a packet in several submissions. Preserve
+         * its method/count across PUT boundaries instead of executing stale
+         * payload or interpreting the remaining payload as new headers. */
+        if (s_pending_count) {
+            uint32_t param=*(const volatile uint32_t *)(mem+(0x80000000u|s_get));
+            if(s_survey_enabled) note(s_pending_subch,s_pending_method);
+            if(s_exec_enabled) nv2a_pb_exec_method(s_pending_subch,s_pending_method,param);
+            if(!s_pending_noninc) s_pending_method+=4;
+            --s_pending_count;
+            s_get=(s_get+4)&PB_PHYS_MASK;
+            ++words;
+            continue;
+        }
+#endif
         w = *(const uint32_t *)(mem + (0x80000000u | s_get));
         s_hist[s_hist_n % PB_HIST].at = at;
         s_hist[s_hist_n % PB_HIST].w = w;
         s_hist_n++;
+#ifdef NFSU2_PCVR
+        if (s_pcvr_trace) {
+            unsigned i=s_pcvr_header_count++%512;
+            s_pcvr_headers[i].at=at; s_pcvr_headers[i].word=w;
+            s_pcvr_headers[i].put=put;
+            s_pcvr_headers[i].live_put=*(const volatile uint32_t *)(mem+0xFD800040u);
+        }
+#endif
 
         if (++words > 0x400000u || unknown > 64) {
             s_get = put;                      /* lost sync, or runaway */
@@ -314,9 +399,33 @@ void nv2a_pb_scan(uint32_t put_phys)
             uint32_t subch  = (w >> 13) & 7u;
             uint32_t method =  w & 0x1FFCu;
             int noninc = (w & 0xE0000000u) == 0x40000000u;
+#ifdef NFSU2_PCVR
+            if (s_pcvr_trace && put>=s_get && put-s_get<count*4) {
+                static unsigned partial;
+                if (++partial<=8)
+                    fprintf(stderr,"[PCVR PB] packet crosses submitted PUT: header=%08x at=%08x put=%08x live=%08x\n",
+                        w,at,put,*(const volatile uint32_t *)(mem+0xFD800040u));
+            }
+#endif
 
-            if (s_exec_enabled && !s_survey && count > 1
+            /* Pure upload packets cannot draw, trap, release a semaphore or
+             * change control flow. GET stays at this header exactly as in the
+             * scalar loop. Leave surveying and truncated packets scalar. */
+            if(s_exec_enabled && s_bulk_enabled && !s_survey_enabled && count &&
+               count <= (PB_RAM_BYTES-s_get)/4 &&
+#ifdef NFSU2_PCVR
+               !(put>=s_get && put-s_get<count*4) &&
+#endif
+               nv2a_pb_exec_data(subch,method,noninc,
+                   (const uint32_t *)(mem+(0x80000000u|s_get)),count)==count) {
+                s_get=(s_get+count*4)&PB_PHYS_MASK;
+                words+=count; unknown=0;
+                continue;
+            }
+
+            if (s_exec_enabled && !s_survey_enabled && count > 1
                 && s_get + count * 4 <= PB_RAM_BYTES
+                && !(put >= s_get && put - s_get < count * 4)
                 && nv2a_pb_exec_run(subch, method, noninc,
                                     (const uint32_t *)(mem + (0x80000000u | s_get)), count)) {
                 s_get = (s_get + count * 4) & PB_PHYS_MASK;
@@ -326,9 +435,15 @@ void nv2a_pb_scan(uint32_t put_phys)
             }
             for (uint32_t i = 0; i < count && s_get < PB_RAM_BYTES; i++) {
                 uint32_t m = noninc ? method : method + i * 4;
+#ifdef NFSU2_PCVR
+                if (s_get==put) {
+                    s_pending_count=count-i; s_pending_method=m;
+                    s_pending_subch=subch; s_pending_noninc=noninc;
+                    break;
+                }
+#endif
                 uint32_t param = *(const uint32_t *)(mem + (0x80000000u | s_get));
-                if (s_survey)
-                    note(subch, m);
+                if(s_survey_enabled) note(subch, m);
                 /* Same walk, two consumers: the survey counts, the executor
                  * acts. Keeping them on one decode means they can never
                  * disagree about what the stream said. */

@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">NFSU1 Quest Development</string>
+    <string name="data_setup_name">NFSU1 · Game data</string>
+    <string name="setup_title">NFSU1 · Import game data</string>
+    <string name="setup_intro">Set up once. Then jump straight into VR.</string>
+    <string name="setup_instructions">1. Copy your original Xbox USA (NTSC-U) ISO, XISO, ZIP or 7z to the Download folder on your Quest.
+\n2. Select the file below. Xbox ISO images inside archives are unpacked automatically.
+\n3. Wait for the import to finish, then start the game.</string>
+    <string name="setup_note">Requires the complete NFS Underground 1 Xbox USA disc: default.xbe and CARS, FRONTEND, GLOBAL, LANGUAGES, MEMCARD, MOVIES, SOUND and TRACKS. PC, European and Underground 2 editions are unsupported. Import needs temporary space for a copy of your source, any contained ISO, and about 1.9 GB of installed files. Allow about 18 GB extra for a 7z containing a full disc image, or 5 GB for an archive of extracted files. Existing saved games are kept.</string>
+    <string name="setup_footer">Open “NFSU1 · Game data” to return here later. The normal game entry starts directly in VR.</string>
+    <string name="choose_zip">Select archive</string>
+    <string name="replace_data">Reimport game data</string>
+    <string name="play">Start game</string>
+    <string name="resume_game">Return to game</string>
+    <string name="retry">Check again</string>
+    <string name="cancel_import">Cancel import</string>
+    <string name="canceling">Canceling …</string>
+    <string name="replace_title">Reimport game data?</string>
+    <string name="replace_message">The existing data will only be replaced after the new archive has been fully verified. Your saved games and settings will be kept.</string>
+    <string name="back">Back</string>
+    <string name="select_zip">Select archive</string>
+    <string name="progress_percent">%1$d %%</string>
+    <string name="please_wait">Please wait …</string>
+    <string name="picker_unavailable">File picker unavailable</string>
+    <string name="picker_unavailable_message">Could not open the Android file picker. Restart your Quest, then open “NFSU1 · Game data” again.</string>
+    <string name="cancel_title">Cancel the import?</string>
+    <string name="cancel_message">Your existing game data and saved games will be kept.</string>
+    <string name="keep_importing">Keep importing</string>
+</resources>

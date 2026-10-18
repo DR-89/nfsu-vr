@@ -18,8 +18,8 @@ if(WIN32)
     add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../tests/d3d8_smoke
                      ${CMAKE_CURRENT_BINARY_DIR}/d3d8_smoke)
 elseif(NINTENDO_SWITCH OR ANDROID)
-    # No HLE D3D8 renderer on the Switch: titles there draw through the NV2A
-    # executor and src/nv2a_gl.
+    # Switch/Android titles draw through the NV2A executor (GL or Vulkan),
+    # so no desktop OpenGL HLE D3D8 implementation is needed.
     add_library(xbox_d3d8 STATIC d3d8_null.c)
     target_link_libraries(xbox_d3d8 PUBLIC platform)
 else()

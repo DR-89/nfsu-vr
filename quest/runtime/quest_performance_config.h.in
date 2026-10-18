@@ -1,0 +1,4 @@
+#pragma once
+/* Generated from quest/performance.env. App-private options take precedence. */
+static const char *const quest_performance_defaults[][2] = {
+@QUEST_PERFORMANCE_DEFAULTS@};

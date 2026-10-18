@@ -26,6 +26,10 @@ Makefile
 *.sln
 Debug/
 Release/
+!pcvr/release/
+pcvr/release/*
+!pcvr/release/README.txt
+!pcvr/release/Start-PCVR.cmd
 x64/
 
 # Generated recompiled code (regenerate from XBE with the recomp pipeline)
@@ -74,3 +78,23 @@ local.properties
 
 
 performance-results
+# Private inputs and derived code
+*.7z
+*.zip
+reports/
+quest/local.properties
+*.pcvr-lock
+progcache.bin
+vkpipecache.bin
+vkpipes.bin
+vkspirv.bin
+xbox_kernel.log
+!quest/app/src/test/resources/solid-import.7z
+
+# Local release/signing material and diagnostics
+dist/
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.log

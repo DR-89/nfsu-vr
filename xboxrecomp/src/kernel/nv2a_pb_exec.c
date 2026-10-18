@@ -31,6 +31,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef NFSU2_PCVR
+#include "pcvr_platform.h"
+#include "pcvr_bulk_shadow.h"
+#include "pcvr_indices.h"
+#include "pcvr_index_packets.h"
+#endif
 #include "kernel.h"   /* XBOX_CONTIG_BASE / XBOX_CONTIG_SIZE */
 #include "xbox_memory_layout.h"   /* xbox_Nv2aFrameCounterFlip */
 /* The swizzle decoder the D3D8 layer already uses -- one implementation of
@@ -427,7 +433,12 @@ static void note_texture_use(void)
 static uint32_t s_reg[0x2000 / 4];
 /* 64-byte blocks of s_reg changed since a queueing back end last looked
  * (nv2a_pb_reg_dirty); starts all set. */
-static uint8_t s_reg_dirty[0x2000 / 64] = { [0 ... 0x2000 / 64 - 1] = 1 };
+#define NV2A_DIRTY16 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+static uint8_t s_reg_dirty[0x2000 / 64] = {
+    NV2A_DIRTY16,NV2A_DIRTY16,NV2A_DIRTY16,NV2A_DIRTY16,
+    NV2A_DIRTY16,NV2A_DIRTY16,NV2A_DIRTY16,NV2A_DIRTY16
+};
+#undef NV2A_DIRTY16
 uint8_t *nv2a_pb_reg_dirty(void) { return s_reg_dirty; }
 static float reg_f(uint32_t method) { float f; memcpy(&f, &s_reg[method / 4], 4); return f; }
 
@@ -3210,6 +3221,14 @@ static void attr_const_init(void);
 
 void (*nv2a_raw_batch_hook)(Nv2aRawBatch *rb, float *attrs);
 
+#ifdef NFSU2_PCVR
+static int s_pcvr_indices=-1,s_pcvr_indices_failed;
+static unsigned s_pcvr_indices_checked;
+/* Executor-only switches, at completed frame boundaries. */
+void nv2a_pb_index_mode(int enabled) { s_pcvr_indices=enabled!=0; }
+int nv2a_pb_index_verified(void) { return !s_pcvr_indices_failed && s_pcvr_indices_checked>=10000; }
+#endif
+
 static void raw_batch(void)
 {
     Nv2aRawBatch rb;
@@ -3218,10 +3237,31 @@ static void raw_batch(void)
 
     attr_const_init();
 
-    for (i = 0; i < s_gpu.idx_count; i++) {
-        if (s_gpu.idx[i] < lo) lo = s_gpu.idx[i];
-        if (s_gpu.idx[i] > hi) hi = s_gpu.idx[i];
+#ifdef NFSU2_PCVR
+    if(s_pcvr_indices<0) {
+        const char *e=getenv("NFSU2_PCVR_INDICES"); s_pcvr_indices=e && *e=='1';
+        fprintf(stderr,"[PCVR] vector index processing: %s\n",s_pcvr_indices?"on":"off (reference)");
     }
+    int fast=s_pcvr_indices && !s_pcvr_indices_failed;
+    if(fast) {
+        pcvr_index_range(s_gpu.idx,s_gpu.idx_count,&lo,&hi);
+        if(s_pcvr_indices_checked<10000) {
+            uint32_t reference_lo=UINT32_MAX,reference_hi=0;
+            for(i=0;i<s_gpu.idx_count;++i) {
+                if(s_gpu.idx[i]<reference_lo) reference_lo=s_gpu.idx[i];
+                if(s_gpu.idx[i]>reference_hi) reference_hi=s_gpu.idx[i];
+            }
+            if(lo!=reference_lo || hi!=reference_hi) {
+                fprintf(stderr,"[PCVR] index range mismatch; original path restored\n");
+                s_pcvr_indices_failed=1; fast=0; lo=reference_lo; hi=reference_hi;
+            }
+        }
+    } else
+#endif
+        for (i = 0; i < s_gpu.idx_count; i++) {
+            if (s_gpu.idx[i] < lo) lo = s_gpu.idx[i];
+            if (s_gpu.idx[i] > hi) hi = s_gpu.idx[i];
+        }
     nv = hi - lo + 1;
     if (nv > 1u << 20)
         return;                                 /* not a real batch */
@@ -3271,8 +3311,22 @@ static void raw_batch(void)
             }
         }
     }
-    for (i = 0; i < s_gpu.idx_count; i++)
-        s_raw_idx[i] = s_gpu.idx[i] - lo;
+#ifdef NFSU2_PCVR
+    if(fast) {
+        pcvr_index_rebase(s_raw_idx,s_gpu.idx,s_gpu.idx_count,lo);
+        if(s_pcvr_indices_checked<10000) {
+            for(i=0;i<s_gpu.idx_count;++i) if(s_raw_idx[i]!=s_gpu.idx[i]-lo) break;
+            if(i!=s_gpu.idx_count) {
+                fprintf(stderr,"[PCVR] index rebase mismatch; original path restored\n");
+                s_pcvr_indices_failed=1;
+                for(i=0;i<s_gpu.idx_count;++i) s_raw_idx[i]=s_gpu.idx[i]-lo;
+            } else if(++s_pcvr_indices_checked==10000)
+                fprintf(stderr,"[PCVR] index range and data verified on 10000 batches\n");
+        }
+    } else
+#endif
+        for (i = 0; i < s_gpu.idx_count; i++)
+            s_raw_idx[i] = s_gpu.idx[i] - lo;
 
     rb.prim = s_gpu.prim;
     rb.vertex_count = nv;
@@ -3968,6 +4022,10 @@ void nv2a_pb_trap_taken(void)
     SetEvent(driver_event());
 }
 
+#ifdef NFSU2_PCVR
+static uint64_t s_pcvr_trap_wait_ns;
+uint64_t nv2a_pcvr_trap_wait_ns(void) { return s_pcvr_trap_wait_ns; }
+#endif
 static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
                                 uint32_t subch, uint32_t param)
 {
@@ -3975,6 +4033,13 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
     extern void xbox_Nv2aHoldInterrupts(int on);
     ULONGLONG give_up = GetTickCount64() + 2000;
     static unsigned handled_n;
+#ifdef NFSU2_PCVR
+    static int profile=-1;
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER start={0};
+    if(profile<0) { profile=getenv("NFSU2_PCVR_HEALTH")!=NULL; QueryPerformanceFrequency(&frequency); }
+    if(profile) QueryPerformanceCounter(&start);
+#endif
 
     xbox_Nv2aHoldInterrupts(1);        /* the ack thread leaves PGRAPH alone */
     while (InterlockedCompareExchange(&s_trap_lock, 1, 0) != 0)
@@ -4011,6 +4076,19 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
     if ((++handled_n & 1023) == 0)
         NFS_LOG_DEBUG("graphics", "  [PB] NOP trap handled, %u so far\n", handled_n);
     xbox_Nv2aHoldInterrupts(0);
+#ifdef NFSU2_PCVR
+    if(profile) {
+        LARGE_INTEGER end; QueryPerformanceCounter(&end);
+        uint64_t elapsed=(uint64_t)((end.QuadPart-start.QuadPart)*(1000000000.0/frequency.QuadPart));
+        s_pcvr_trap_wait_ns+=elapsed;
+        if(elapsed>=8000000) {
+            static ULONGLONG window; static unsigned lines;
+            ULONGLONG tick=GetTickCount64();
+            if(tick-window>5000) { window=tick; lines=0; }
+            if(lines++<8) fprintf(stderr,"[PCVR trap] method=%x param=%u wait=%.3f ms\n",method,param,elapsed/1e6);
+        }
+    }
+#endif
 }
 
 /* Flips the driver has retired, reported by the project (the retire is D3D
@@ -4038,10 +4116,18 @@ static void flip_apply_retired(void)
                         : s_gpu.flip_read + 1;
 }
 
-void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+static void pb_exec_init(void)
 {
     static int inited;
+    if (!inited) {
+        inited = 1;
+        s_gpu.min_x = s_gpu.min_y = 1e30f;
+        s_gpu.max_x = s_gpu.max_y = -1e30f;
+    }
+}
 
+void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+{
     /* The shadow is the 3D class's register file: methods to the other
      * subchannels (2D surfaces, blits) share its offsets and must not land
      * in it. NV062's SET_OFFSET_SOURCE is 0x0308 = SET_CULL_FACE_ENABLE: a
@@ -4181,11 +4267,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         *(volatile uint32_t *)(mem + 0xFD400B10u) = param;
         return;
     }
-    if (!inited) {
-        inited = 1;
-        s_gpu.min_x = s_gpu.min_y = 1e30f;
-        s_gpu.max_x = s_gpu.max_y = -1e30f;
-    }
+    pb_exec_init();
     /* Bring-up: the first parameters each surface method carries. A wrong
      * pitch or clip is indistinguishable from a method never arriving unless
      * the values are visible. */
@@ -4546,6 +4628,200 @@ uint32_t nv2a_pb_exec_run(uint32_t subch, uint32_t method, int noninc,
         return count;
     }
     return 0;
+}
+
+/* Coalesce only data uploads, never commands with externally visible timing.
+ * Aligned constant/program packets are contiguous vec4 rows. Non-incrementing
+ * inline arrays are contiguous words. Shadow registers, dirty bits, load
+ * cursors and version counters retain their scalar semantics exactly. */
+static uint64_t s_bulk_packets, s_bulk_words;
+static int s_bulk_failed;
+static int s_bulk_verify=-1;
+static unsigned s_bulk_checked[2][2][4]; /* consumed first word, shadow mode, kind */
+#ifdef NFSU2_PCVR
+static int s_pcvr_direct=-1,s_pcvr_bulk_shadow=-1;
+/* Called only by the executor at completed frame boundaries. No guest,
+ * service or runtime thread may change the packet path mid-packet. */
+void nv2a_pb_data_direct(int enabled) { s_pcvr_direct=enabled!=0; }
+int nv2a_pb_data_direct_verified(void)
+{
+    unsigned *checked=s_bulk_checked[0][s_pcvr_bulk_shadow>0];
+    return !s_bulk_failed && checked[1]>=256 && checked[2]>=256 && checked[3]>=256;
+}
+void nv2a_pb_data_shadow(int enabled) { s_pcvr_bulk_shadow=enabled!=0; }
+int nv2a_pb_data_shadow_verified(void)
+{
+    unsigned *checked=s_bulk_checked[s_pcvr_direct>0?0:1][1];
+    return !s_bulk_failed && checked[1]>=256 && checked[2]>=256 && checked[3]>=256;
+}
+#endif
+void nv2a_pb_data_verify(int enabled) { s_bulk_verify=enabled; }
+void nv2a_pb_data_stats(uint64_t *packets,uint64_t *words)
+{
+    *packets=s_bulk_packets; *words=s_bulk_words;
+}
+#ifdef NFSU2_PCVR
+static int s_pcvr_index_packets=-1,s_pcvr_index_packets_failed;
+static unsigned s_pcvr_index_packets_checked;
+void nv2a_pb_index_packet_mode(int enabled) { s_pcvr_index_packets=enabled!=0; }
+int nv2a_pb_index_packet_verified(void)
+{
+    return !s_pcvr_index_packets_failed && s_pcvr_index_packets_checked>=10000;
+}
+static uint32_t pcvr_index_packet(const uint32_t *data,uint32_t count)
+{
+    if(s_pcvr_index_packets<0) {
+        const char *e=getenv("NFSU2_PCVR_INDEX_PACKETS");
+        s_pcvr_index_packets=e && *e=='1';
+        fprintf(stderr,"[PCVR] packed index packets: %s\n",s_pcvr_index_packets?"on":"off (reference)");
+    }
+    if(!s_pcvr_index_packets || s_pcvr_index_packets_failed || !s_gpu.prim ||
+       s_gpu.idx_count>NV_MAX_INDICES || count>(NV_MAX_INDICES-s_gpu.idx_count)/2) return 0;
+
+    /* Preserve initialization and all effects of the first scalar method.
+     * Only the bounded data-only remainder bypasses dispatch. The scanner
+     * has already bounded count to the published portion of this packet. */
+    nv2a_pb_exec_method(0,NV097_ARRAY_ELEMENT16,data[0]);
+    uint32_t first=s_gpu.idx_count,words=count-1,n=words*2;
+    const unsigned slot=NV097_ARRAY_ELEMENT16/4;
+    int checking=s_pcvr_index_packets_checked<10000;
+    static struct {
+        uint32_t before[4094],after[4094];
+        uint32_t regs_before[sizeof s_reg/sizeof *s_reg],regs_after[sizeof s_reg/sizeof *s_reg];
+        uint8_t dirty_before[sizeof s_reg_dirty],dirty_after[sizeof s_reg_dirty];
+    } check;
+    if(checking) {
+        memcpy(check.before,s_gpu.idx+first,n*4);
+        memcpy(check.regs_before,s_reg,sizeof s_reg);
+        memcpy(check.dirty_before,s_reg_dirty,sizeof s_reg_dirty);
+    }
+    pcvr_unpack_indices16(s_gpu.idx+first,data+1,words);
+    pcvr_bulk_shadow(s_reg,s_reg_dirty,slot,1,data+1,words);
+    s_gpu.idx_count=first+n;
+    if(checking) {
+        memcpy(check.after,s_gpu.idx+first,n*4);
+        memcpy(check.regs_after,s_reg,sizeof s_reg);
+        memcpy(check.dirty_after,s_reg_dirty,sizeof s_reg_dirty);
+        memcpy(s_gpu.idx+first,check.before,n*4);
+        memcpy(s_reg,check.regs_before,sizeof s_reg);
+        memcpy(s_reg_dirty,check.dirty_before,sizeof s_reg_dirty);
+        s_gpu.idx_count=first;
+        /* Retain the actual scalar result, including after any mismatch. */
+        for(uint32_t i=1;i<count;++i) nv2a_pb_exec_method(0,NV097_ARRAY_ELEMENT16,data[i]);
+        if(s_gpu.idx_count!=first+n || memcmp(s_gpu.idx+first,check.after,n*4) ||
+           memcmp(s_reg,check.regs_after,sizeof s_reg) ||
+           memcmp(s_reg_dirty,check.dirty_after,sizeof s_reg_dirty)) {
+            s_pcvr_index_packets_failed=1;
+            fprintf(stderr,"[PCVR] packed index packet mismatch; original path restored\n");
+        } else if(++s_pcvr_index_packets_checked==10000)
+            fprintf(stderr,"[PCVR] packed index packets verified: 10000 packets, indices/registers/dirty/count identical\n");
+    }
+    ++s_bulk_packets; s_bulk_words+=count;
+    return count;
+}
+#endif
+uint32_t nv2a_pb_exec_data(uint32_t subch,uint32_t method,int noninc,
+                          const uint32_t *data,uint32_t count)
+{
+    unsigned kind=0, regs=0;
+    uint32_t *destination=NULL, original_count=0;
+    if(s_bulk_failed || subch || count<2 || count>2047 || pb_verbose()) return 0;
+#ifdef NFSU2_PCVR
+    if(noninc && method==NV097_ARRAY_ELEMENT16) return pcvr_index_packet(data,count);
+#endif
+    if(noninc && method==NV097_INLINE_ARRAY && s_gpu.prim &&
+       count<=NV_MAX_INLINE-s_gpu.inline_count) {
+        kind=1; regs=1; original_count=s_gpu.inline_count;
+        destination=s_gpu.inline_buf+original_count;
+    } else if(!noninc && !(method&15) && !(count&3) && count<=32) {
+        if(method>=NV097_SET_TRANSFORM_PROGRAM &&
+           method+count*4<=NV097_SET_TRANSFORM_PROGRAM+0x80 &&
+           s_vp.prog_load<=VP_SLOTS && count/4<=VP_SLOTS-s_vp.prog_load) {
+            kind=2; regs=count; destination=&s_vp.prog[s_vp.prog_load][0];
+        } else if(method>=NV097_SET_TRANSFORM_CONSTANT &&
+                  method+count*4<=NV097_SET_TRANSFORM_CONSTANT+0x80 &&
+                  s_vp.const_load<=VP_CONSTS && count/4<=VP_CONSTS-s_vp.const_load) {
+            kind=3; regs=count; destination=(uint32_t *)&s_vp.c[s_vp.const_load][0];
+        }
+    }
+    if(!kind) return 0;
+
+    /* Only these bounded data packets can bypass scalar dispatch. They have
+     * no IRQ, fence, draw or surface side effects. Keep initialization and
+     * compare every component against the real scalar executor below. */
+    uint32_t consumed=1,shadow=0;
+#ifdef NFSU2_PCVR
+    if(s_pcvr_bulk_shadow<0) {
+        const char *e=getenv("NFSU2_PCVR_PB_SHADOW");
+        s_pcvr_bulk_shadow=e && *e=='1';
+        fprintf(stderr,"[PCVR] block shadow register updates: %s\n",s_pcvr_bulk_shadow?"on":"off (reference)");
+    }
+    shadow=s_pcvr_bulk_shadow;
+    if(s_pcvr_direct<0) {
+        const char *e=getenv("NFSU2_PCVR_PB_DIRECT");
+        /* Experimental until the headset comparison passes. */
+        s_pcvr_direct=e && *e=='1';
+        fprintf(stderr,"[PCVR] direct data packets: %s\n",s_pcvr_direct?"on":"off (reference)");
+    }
+    if(s_pcvr_direct) { pb_exec_init(); consumed=0; }
+    else
+#endif
+        nv2a_pb_exec_method(subch,method,data[0]);
+    unsigned *checked=s_bulk_checked[consumed][shadow];
+    if(s_bulk_verify<0) { const char *e=getenv("RECOMP_PB_BULK_VERIFY"); s_bulk_verify=e && *e=='1'; }
+    int checking=s_bulk_verify && checked[kind]<256;
+    struct BulkCheck {
+        uint32_t data[2048], result[2048], regs[32], result_regs[32];
+        uint8_t dirty[sizeof s_reg_dirty], result_dirty[sizeof s_reg_dirty];
+        uint32_t state[6], result_state[6];
+    };
+    static struct BulkCheck check; /* executor-owned, never recursively entered */
+    uint32_t first=(method&0x1ffc)/4;
+#define BULK_STATE_SAVE(dst) do { (dst)[0]=s_vp.prog_load; (dst)[1]=s_vp.const_load; \
+    (dst)[2]=s_vp.gen; (dst)[3]=s_vp.prog_gen; (dst)[4]=s_vp.const_gen; (dst)[5]=s_gpu.inline_count; } while(0)
+    if(checking) {
+        memcpy(check.data,destination,count*4);
+        memcpy(check.regs,s_reg+first,regs*4); memcpy(check.dirty,s_reg_dirty,sizeof s_reg_dirty);
+        BULK_STATE_SAVE(check.state);
+    }
+#ifdef NFSU2_PCVR
+    if(shadow) pcvr_bulk_shadow(s_reg,s_reg_dirty,first+(noninc?0:consumed),noninc,data+consumed,count-consumed);
+    else
+#endif
+        for(uint32_t i=consumed;i<count;++i) {
+            uint32_t slot=first+(noninc?0:i);
+            if(s_reg[slot]!=data[i]) { s_reg[slot]=data[i]; s_reg_dirty[slot>>4]=1; }
+        }
+    memcpy(destination,data,count*4);
+    if(kind==1) s_gpu.inline_count=original_count+count;
+    else {
+        if(kind==2) { s_vp.prog_load+=count/4; s_vp.prog_gen+=count-consumed; }
+        else { s_vp.const_load+=count/4; s_vp.const_gen+=count-consumed; }
+        s_vp.gen+=count-consumed;
+    }
+    if(checking) {
+        memcpy(check.result,destination,count*4);
+        memcpy(check.result_regs,s_reg+first,regs*4); memcpy(check.result_dirty,s_reg_dirty,sizeof s_reg_dirty);
+        BULK_STATE_SAVE(check.result_state);
+        memcpy(destination,check.data,count*4);
+        memcpy(s_reg+first,check.regs,regs*4); memcpy(s_reg_dirty,check.dirty,sizeof s_reg_dirty);
+        s_vp.prog_load=check.state[0]; s_vp.const_load=check.state[1];
+        s_vp.gen=check.state[2]; s_vp.prog_gen=check.state[3]; s_vp.const_gen=check.state[4];
+        s_gpu.inline_count=check.state[5];
+        /* Keep the real scalar result, including on a failed comparison. */
+        for(uint32_t i=consumed;i<count;++i) nv2a_pb_exec_method(subch,method+(noninc?0:i*4),data[i]);
+        uint32_t state[6]; BULK_STATE_SAVE(state);
+        if(memcmp(destination,check.result,count*4) || memcmp(s_reg+first,check.result_regs,regs*4) ||
+           memcmp(s_reg_dirty,check.result_dirty,sizeof s_reg_dirty) || memcmp(state,check.result_state,sizeof state)) {
+            s_bulk_failed=1;
+            fprintf(stderr,"[PB] bulk upload mismatch: kind %u method %x words %u; disabled\n",kind,method,count);
+        } else if(++checked[kind]==1 || checked[kind]==256) {
+            fprintf(stderr,"[PB] bulk upload verified: kind %u packets %u, direct=%u shadow=%u, data/registers/dirty/cursors/versions identical\n",kind,checked[kind],!consumed,shadow);
+        }
+    }
+#undef BULK_STATE_SAVE
+    ++s_bulk_packets; s_bulk_words+=count;
+    return count;
 }
 
 /* Find where the title actually wrote its quad.

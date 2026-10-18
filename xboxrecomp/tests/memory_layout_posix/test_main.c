@@ -197,7 +197,9 @@ int main(int argc, char **argv)
         unsigned char ignored = 0;
         if (read_byte_in_child(m1, &ignored)) {
             *m1 = 0xA5;
-            check(p[probe] == 0xA5, "a write through mirror 1 reaches the base",
+            /* mmap aliases are outside C's object model. Force a reload;
+             * optimizers may otherwise reuse the earlier literal 0x5A. */
+            check(*(volatile unsigned char *)(p + probe) == 0xA5, "a write through mirror 1 reaches the base",
                   "mirror is a separate copy, not an alias");
         } else {
             check(0, "a write through mirror 1 reaches the base",
