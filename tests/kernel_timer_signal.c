@@ -1,6 +1,7 @@
 /* Deterministically preempt arming at ResetEvent while expiry races it.
  * cc -O1 -ffunction-sections -fdata-sections -Ixboxrecomp/src
  * -Ixboxrecomp/src/kernel tests/kernel_timer_signal.c
+ * xboxrecomp/src/kernel/recomp_context.c
  * xboxrecomp/src/platform/win32_compat.c -Wl,--gc-sections -pthread -lm
  */
 #include "platform/win32_compat.h"
@@ -8,6 +9,10 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef NFSU_DISPATCHER_TIMER_TEST
+#include "kernel/guest_scheduler.h"
+#include "platform/dispatcher_backend.h"
+#endif
 static BOOL intercepted_reset(HANDLE);
 #define ResetEvent intercepted_reset
 #define CreateThread(a,b,c,d,e,f) ((HANDLE)0)
@@ -56,6 +61,10 @@ static void *expire(void *unused)
 }
 int main(void)
 {
+#ifdef NFSU_DISPATCHER_TIMER_TEST
+    static volatile LONG preempt;
+    xgs_init(&preempt);
+#endif
     void *ram = calloc(1, 0x20000);
     assert(ram);
     g_xbox_mem_offset = (ptrdiff_t)ram;
@@ -63,6 +72,9 @@ int main(void)
     g_timer_started = 1;
     event = CreateEventW(NULL, FALSE, FALSE, NULL);
     assert(event);
+#ifdef NFSU_DISPATCHER_TIMER_TEST
+    assert(host_dispatcher_manages(event));
+#endif
     ke_shadow_insert(0x10000, event);
     pthread_t thread;
     assert(!pthread_create(&thread, NULL, expire, NULL));

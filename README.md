@@ -74,6 +74,26 @@ playing; it is read directly rather than copied into the app.
 See [the Android README](android/README.md) for controls, graphics, and runtime
 details.
 
+### GitHub Actions
+
+The [Android APK workflow](.github/workflows/android.yml) builds an ARM64 debug
+APK on pushes to `main` and through **Actions → Android APK → Run workflow**.
+It uses the root Gradle build and runs `lintDebug`.
+
+Before the first run, add a repository Actions secret named `NFSU_XBE_URL`
+under **Settings → Secrets and variables → Actions**. Set it to a private HTTPS
+URL that downloads the supported NTSC-U `default.xbe` directly, without a login
+page. Supply your own game copy; keep the URL valid for subsequent builds or
+replace it when it expires. The executable is downloaded into the runner's
+temporary directory and is not uploaded as an artifact. No game assets are
+needed for CI. Pull requests do not trigger this workflow.
+
+Download the APK from the successful run's **Artifacts** section:
+`nfsu1-android-arm64-debug-<commit>`. Artifacts are retained for 14 days.
+The APK uses the runner's debug signing key, which can change between runs;
+updating an existing installation may require uninstalling it first. Back up
+saves before uninstalling. This workflow does not publish GitHub Releases.
+
 ## License
 
 Copyright (C) 2026 cherepavel.

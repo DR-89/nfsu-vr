@@ -902,8 +902,21 @@ static int ohci_run_periodic_list(OhciController *hc)
  * Returns what the routine returned: an ISR that does not claim the interrupt
  * returns FALSE, and that is worth seeing rather than assuming.
  */
+static int ohci_call_isr(OhciController *hc);
+#ifndef _WIN32
+/* Optional when the device model is linked without the title bridge. */
+extern int xbox_guest_executor_invoke(int (*callback)(void *), void *, int *)
+    __attribute__((weak));
+static int ohci_executor_isr(void *controller) { return ohci_call_isr(controller); }
+#endif
 static int ohci_call_isr(OhciController *hc)
 {
+#ifndef _WIN32
+    if (xbox_guest_executor_invoke) {
+        int result;
+        if (xbox_guest_executor_invoke(ohci_executor_isr, hc, &result)) return result;
+    }
+#endif
     uint32_t kinterrupt = xbox_GetConnectedInterrupt(OHCI_VECTOR);
     uint32_t routine, context;
     recomp_func_t fn;

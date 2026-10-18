@@ -24,6 +24,7 @@
 #include "apu_shim.h"
 #include "apu_regs.h"
 #include "apu_debug.h"
+#include "../../include/nfsu_perf.h"
 
 /* ============================================================
  * DSP CPU registers
@@ -521,8 +522,10 @@ struct MCPXAPUState {
  * off hot paths (voice_lock sets its bits atomically instead). */
 static inline void mcpx_apu_lock_guest(MCPXAPUState *d)
 {
+    uint64_t perf_wait = nfsu_perf_begin();
     InterlockedIncrement(&d->lock_waiters);
     qemu_mutex_lock(&d->lock);
+    nfsu_perf_end(NFSU_PERF_APU_WAIT, perf_wait);
     if (InterlockedDecrement(&d->lock_waiters) == 0)
         qemu_cond_signal(&d->cond);
 }

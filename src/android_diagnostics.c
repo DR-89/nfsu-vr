@@ -6,6 +6,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include "android_diagnostics.h"
+
+int nfsu_diagnostics_enabled;
 
 typedef struct {
     uint64_t start, duration, sequence;
@@ -36,6 +39,7 @@ static void retain(DiagnosticEvent event)
 void nfsu_diag_kernel(uint32_t operation, uint32_t caller,
                       const uint32_t args[4], uint32_t result, int entering)
 {
+    if (!nfsu_diagnostics_enabled) return;
     DiagnosticThread *t;
     uint64_t now = milliseconds();
     pthread_mutex_lock(&mutex);
@@ -86,6 +90,7 @@ void nfsu_diag_kernel(uint32_t operation, uint32_t caller,
 void nfsu_diag_voice(uint32_t operation, uint32_t caller, uint32_t object,
                      uint32_t next, uint32_t prev, uint32_t parent)
 {
+    if (!nfsu_diagnostics_enabled) return;
     DiagnosticEvent e = {0};
     e.start = milliseconds(); e.tid = syscall(SYS_gettid);
     e.operation = operation; e.caller = caller;
@@ -96,6 +101,7 @@ void nfsu_diag_voice(uint32_t operation, uint32_t caller, uint32_t object,
 void nfsu_diag_io(uint32_t operation, uint32_t caller, uint32_t handle,
                   int64_t offset, uint32_t bytes, uint32_t status)
 {
+    if (!nfsu_diagnostics_enabled) return;
     DiagnosticEvent e = {0};
     e.start = milliseconds(); e.tid = syscall(SYS_gettid);
     e.operation = 0x40000000u | operation; e.caller = caller;
@@ -107,6 +113,7 @@ void nfsu_diag_io(uint32_t operation, uint32_t caller, uint32_t handle,
 
 static void report(int force)
 {
+    if (!nfsu_diagnostics_enabled) return;
     static uint64_t last;
     uint64_t now = milliseconds();
     DiagnosticEvent events[128], active[32];

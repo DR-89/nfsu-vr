@@ -5,11 +5,17 @@
 #include <pthread.h>
 #include "../xboxrecomp/src/platform/android_host.h"
 #include <android/log.h>
+#include <sys/system_properties.h>
+#include "android_diagnostics.h"
+#include "../xboxrecomp/include/nfsu_perf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "menu_touch.h"
+#include "race_touch.h"
+#include "android_input.h"
 
 int android_host_boot(int argc, char **argv)
 {
@@ -35,13 +41,47 @@ int android_host_boot(int argc, char **argv)
     if (!freopen(log_path, "w", stdout) || dup2(fileno(stdout), fileno(stderr)) < 0)
         return 0;
     setenv("RECOMP_QUIET", "1", 0);
+    /* One APK supports both sides of the diagnostic-overhead comparison. */
+    char diagnostics[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.diagnostics", diagnostics);
+    nfsu_diagnostics_enabled = strcmp(diagnostics, "1") == 0;
+    fprintf(stderr, "[ANDROID] detailed diagnostics=%d\n", nfsu_diagnostics_enabled);
+    char perf_mode[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.perf", perf_mode);
+    nfsu_perf_enabled = strcmp(perf_mode, "0") != 0;
+    fprintf(stderr, "[ANDROID] performance counters=%d\n", nfsu_perf_enabled);
     setenv("NFSU2_GAME_DIR", argv[1], 1);
     setenv("NFSU2_SAVE_DIR", save, 1);
     setenv("RECOMP_PROG_CACHE", cache, 1);
-    setenv("RECOMP_GIL_EAGER", "1", 0);
+    /* Read once before guest threads start; the runtime caches this mode. */
+    char gil_eager[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.gil_eager", gil_eager);
+    if (*gil_eager && strcmp(gil_eager, "0") != 0 && strcmp(gil_eager, "1") != 0)
+        fprintf(stderr, "[ANDROID] invalid debug.nfsu.gil_eager=%s; using 1\n", gil_eager);
+    const char *gil_mode = strcmp(gil_eager, "0") == 0 ? "0" : "1";
+    setenv("RECOMP_GIL_EAGER", gil_mode, 1);
+    fprintf(stderr, "[ANDROID] GIL eager=%s (debug.nfsu.gil_eager)\n", gil_mode);
+    char gil_quantum[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.gil_quantum_us", gil_quantum);
+    setenv("RECOMP_GIL_MAIN_QUANTUM_US", *gil_quantum ? gil_quantum : "0", 1);
+    char scheduler[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.scheduler", scheduler);
+    setenv("RECOMP_GUEST_SCHEDULER", strcmp(scheduler, "0") == 0 ? "0" : "1", 1);
+    fprintf(stderr, "[ANDROID] guest scheduler=%s\n", getenv("RECOMP_GUEST_SCHEDULER"));
+    char executor[PROP_VALUE_MAX] = {0};
+    __system_property_get("debug.nfsu.executor", executor);
+    setenv("RECOMP_GUEST_EXECUTOR", strcmp(executor, "1") == 0 ? "1" : "0", 1);
+    fprintf(stderr, "[ANDROID] guest executor=%s (experimental)\n", getenv("RECOMP_GUEST_EXECUTOR"));
     setenv("RECOMP_CULL", "0", 0);
     setenv("RECOMP_VK_INSTANCE", "0", 0);
-    setenv("RECOMP_INPUT_DIAG", "1", 0);
+    if (nfsu_diagnostics_enabled) setenv("RECOMP_INPUT_DIAG", "1", 1);
+    else unsetenv("RECOMP_INPUT_DIAG");
+    /* Retail XPP 1EF01B maps (root_port - 1) XOR 2 to Xbox player slot.
+     * HC0 port index 2 is player one; HC1 is not started by this title. */
+    setenv("RECOMP_USB_HC", "0", 1);
+    setenv("RECOMP_USB_NDP", "4", 1);
+    setenv("RECOMP_USB_PORT", "2", 1);
+    setenv("RECOMP_USB_PORT2", "3", 1);
     setenv("RECOMP_WATCHDOG_SECS", "25", 0);
     setenv("RECOMP_WATCHDOG_KEEP", "1", 0);
     setenv("RECOMP_STALL_DUMP_SECS", "10", 0);
@@ -72,6 +112,8 @@ JNIEXPORT void JNICALL Java_org_nfsu_android_GameActivity_nativeSurfaceChanged(
     host_window.window = window;
     host_window.width = width;
     host_window.height = height;
+    menu_touch_cancel();
+    race_touch_cancel();
     if (old != window) host_window.generation++;
     fprintf(stderr, "[ANDROID] window generation=%llu size=%dx%d available=%d\n",
             (unsigned long long)host_window.generation, width, height, window != NULL);
@@ -130,23 +172,69 @@ int android_host_run(void)
 {
     extern void nfsu_audio_diag_poll(void);
     extern void nfsu_diag_poll(void);
+    SDL_FingerID touch_finger = 0;
+    SDL_TouchID touch_device = 0;
+    int touching = 0;
     for (;;) {
         SDL_Event e;
         nfsu_audio_diag_poll();
         nfsu_diag_poll();
+        android_race_controls_poll();
         pthread_mutex_lock(&host_mutex);
         int finished = host_finished;
         pthread_mutex_unlock(&host_mutex);
         if (finished) return 0;
         if (!SDL_WaitEventTimeout(&e, 50)) continue;
         if (e.type == SDL_QUIT) _exit(0);
+        if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERMOTION || e.type == SDL_FINGERUP) {
+            if (e.type == SDL_FINGERDOWN && !touching) {
+                touching = 1;
+                touch_finger = e.tfinger.fingerId;
+                touch_device = e.tfinger.touchId;
+            } else if (e.type == SDL_FINGERDOWN) continue;
+            if (!touching || e.tfinger.fingerId != touch_finger ||
+                e.tfinger.touchId != touch_device) continue;
+            int width, height;
+            SDL_GetWindowSize(host_sdl_window, &width, &height);
+            enum MenuTouchEvent event = e.type == SDL_FINGERDOWN ? MENU_TOUCH_DOWN :
+                e.type == SDL_FINGERUP ? MENU_TOUCH_UP : MENU_TOUCH_MOVE;
+            menu_touch_event(event, e.tfinger.x, e.tfinger.y, width, height);
+            if (e.type == SDL_FINGERUP) touching = 0;
+        }
+        if (e.type == SDL_APP_WILLENTERBACKGROUND ||
+            (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+                                         e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))) {
+            touching = 0;
+            menu_touch_cancel();
+            race_touch_cancel();
+        }
         if (e.type == SDL_APP_DIDENTERBACKGROUND || e.type == SDL_APP_DIDENTERFOREGROUND) {
             int active = e.type == SDL_APP_DIDENTERFOREGROUND;
             pthread_mutex_lock(&host_mutex);
             host_active = active;
+            touching = 0;
+            menu_touch_cancel();
+            race_touch_cancel();
             fprintf(stderr, "[ANDROID] foreground=%d\n", active);
             pthread_cond_broadcast(&host_changed);
             pthread_mutex_unlock(&host_mutex);
         }
     }
+}
+
+/* SDL attaches this guest thread to the VM; Java posts dialog work to UI. */
+void android_show_port_credits(void)
+{
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject activity = SDL_AndroidGetActivity();
+    if (!env || !activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = cls ? (*env)->GetMethodID(env, cls, "showPortCredits", "()V") : NULL;
+    if (method) (*env)->CallVoidMethod(env, activity, method);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
 }

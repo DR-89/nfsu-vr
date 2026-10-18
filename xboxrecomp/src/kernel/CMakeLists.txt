@@ -21,6 +21,7 @@ set(KERNEL_SOURCES
     kernel_bridge.c
     guest_vmem.c
     xbox_memory_layout.c
+    recomp_context.c
     icall_feedback.c
     recomp_trace.c
     nv2a_pb_scan.c
@@ -28,6 +29,18 @@ set(KERNEL_SOURCES
 )
 
 add_library(xbox_kernel STATIC ${KERNEL_SOURCES})
+if(NOT WIN32 AND NOT NINTENDO_SWITCH)
+    target_sources(xbox_kernel PRIVATE guest_scheduler.c)
+    if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_sources(xbox_kernel PRIVATE guest_dispatcher.c)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|x86_64|AMD64)$")
+            enable_language(ASM)
+            target_compile_definitions(xbox_kernel PRIVATE NFSU_GUEST_EXECUTOR=1)
+            target_sources(xbox_kernel PRIVATE guest_fiber.c guest_fiber_switch.S
+                guest_fiber_dispatcher.c)
+        endif()
+    endif()
+endif()
 
 # The device-model side of the kernel: interrupt lines and the contiguous
 # arena's bus range. Its own library so xbox_apu and xbox_usb can link it

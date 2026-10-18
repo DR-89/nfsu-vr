@@ -1,3 +1,4 @@
+#include "input_mode.h"
 /**
  * Manual function overrides and ICALL diagnostics
  *
@@ -35,6 +36,7 @@
 #include <time.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include "android_diagnostics.h"
 
 /* Boundary snapshots, not asynchronous stack unwinding. The SDL host thread
  * can report them even when a guest worker or its GIL stops making progress. */
@@ -57,6 +59,7 @@ static uint64_t audio_diag_ms(void)
 
 static void audio_diag_boundary(uint32_t function, unsigned running, int tick)
 {
+    if (!nfsu_diagnostics_enabled) return;
     AudioDiagnostic *d;
     if (audio_diag_lane < 0) return;
     pthread_mutex_lock(&audio_diag_mutex);
@@ -82,6 +85,7 @@ static void audio_diag_boundary(uint32_t function, unsigned running, int tick)
  * No guest register or stack changes, no signals, and no forced completion. */
 void nfsu_audio_diag_kernel(uint32_t ordinal, uint32_t caller, int entering)
 {
+    if (!nfsu_diagnostics_enabled) return;
     AudioDiagnostic *d;
     if (audio_diag_lane < 0) return;
     pthread_mutex_lock(&audio_diag_mutex);
@@ -102,6 +106,7 @@ void nfsu_audio_diag_kernel(uint32_t ordinal, uint32_t caller, int entering)
 
 void nfsu_audio_diag_poll(void)
 {
+    if (!nfsu_diagnostics_enabled) return;
     static uint64_t last;
     AudioDiagnostic snapshot[2];
     uint64_t now = audio_diag_ms();
@@ -162,12 +167,12 @@ void sub_001A6110(void)
     int previous = audio_diag_lane;
     audio_diag_lane = 1;
     audio_diag_boundary(0x001A6110u, 1, 0);
-    fprintf(stderr, "[AUDTRACE] shutdown entered\n");
+    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown entered\n");
 #endif
     sub_001A6110_gen();
 #ifdef __ANDROID__
     audio_diag_boundary(0x001A6110u, 0, 0);
-    fprintf(stderr, "[AUDTRACE] shutdown returned\n");
+    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown returned\n");
     audio_diag_lane = previous;
 #endif
 }
@@ -221,7 +226,7 @@ void sub_001E6921(void)
     sub_001E6921_gen();
 #ifdef __ANDROID__
     uint32_t node = object + 0x4Cu;
-    nfsu_diag_voice(0x801E6921u, 0, node,
+    if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E6921u, 0, node,
         audio_pointer_ok(node, 8) ? MEM32(node) : 0,
         audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, parent);
 #endif
@@ -238,7 +243,7 @@ void sub_001E2880(void)
 #ifdef __ANDROID__
     /* Removed nodes need not have reciprocal links after unlink. Record the
      * bytes without applying the linked-node invariant to the removed node. */
-    nfsu_diag_voice(0x801E2880u, 0, node,
+    if (nfsu_diagnostics_enabled) nfsu_diag_voice(0x801E2880u, 0, node,
         audio_pointer_ok(node, 8) ? MEM32(node) : 0,
         audio_pointer_ok(node, 8) ? MEM32(node + 4) : 0, 0);
 #endif
@@ -598,6 +603,60 @@ void sub_00018E60(void)
  * itself tests `cmp [0x283434], 3`). */
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
 
+/* Keep guest overrides here so the recompilation scanner protects their
+ * original generated bodies. Gesture policy lives in the shared module. */
+#ifdef __ANDROID__
+#include "feng_touch.h"
+#include "menu_touch.h"
+#endif
+extern void sub_000D8B10_gen(void);
+extern void sub_000DB860_gen(void);
+extern void sub_000D8730_gen(void);
+extern void sub_000DDB60(void);
+/* Native dependencies retained here for the recompiler name-protection scan. */
+extern void sub_000B8310(void);
+extern void sub_000D1AD0(void);
+extern void sub_000C74C0(void);
+extern void sub_000C7A80(void);
+extern void sub_000C7B40(void);
+extern void sub_000D6D30(void);
+extern void sub_000D7A00(void);
+extern void sub_000DE540(void);
+extern void sub_000DF160(void);
+extern void sub_000E53C0(void);
+void nfsu_touch_hit(void)
+{
+#ifdef __ANDROID__
+    feng_touch_hit();
+#else
+    sub_000DDB60();
+#endif
+}
+void sub_000D8730(void)
+{
+#ifdef __ANDROID__
+    feng_touch_dispatch();
+#else
+    sub_000D8730_gen();
+#endif
+}
+void sub_000D8B10(void)
+{
+#ifdef __ANDROID__
+    feng_touch_update();
+#else
+    sub_000D8B10_gen();
+#endif
+}
+void sub_000DB860(void)
+{
+#ifdef __ANDROID__
+    feng_touch_poll();
+#else
+    sub_000DB860_gen();
+#endif
+}
+
 void sub_00018E40(void)
 {
     uint32_t v = s_proj_view;
@@ -680,6 +739,20 @@ void sub_0014B510(void)
     MEM32(centre) = original;
 }
 
+/* Associate cached draw geometry with its actual FEng object, including
+ * the reused-cache path. Group hit bounds are the union of drawn children. */
+extern void sub_000D9D00_gen(void);
+void sub_000D9D00(void)
+{
+#ifdef __ANDROID__
+    uint32_t previous = feng_touch_draw_begin(MEM32(esp + 4));
+#endif
+    sub_000D9D00_gen();
+#ifdef __ANDROID__
+    feng_touch_draw_end(previous);
+#endif
+}
+
 /* FEng renders the rest of the HUD through a cached circular list of
  * quads. This path is shared by sprites and text (one quad per glyph).
  * Select one anchor from the complete object's bounds, then translate all
@@ -697,11 +770,23 @@ static int s_feng_menu_draw;
  * glyphs, so menus retain their original stretched presentation. */
 extern void sub_000DC090_gen(void);
 
+#ifdef __ANDROID__
+void nfsu_controller_settings_refresh(void);
+#endif
 void sub_000DC090(void)
 {
     int previous = s_feng_menu_draw;
     s_feng_menu_draw = 1;
+#ifdef __ANDROID__
+    if (!previous) {
+        nfsu_controller_settings_refresh();
+        feng_touch_frame_begin();
+    }
+#endif
     sub_000DC090_gen();
+#ifdef __ANDROID__
+    if (!previous) feng_touch_frame_end();
+#endif
     s_feng_menu_draw = previous;
 }
 
@@ -714,6 +799,12 @@ void sub_000F8B80(void)
     int previous_draw = s_feng_draw;
     unsigned count = 0;
 
+#ifdef __ANDROID__
+    if (s_feng_menu_draw && feng_touch_draw_cache(ecx)) {
+        esp += 4; /* retain native hit geometry, omit obsolete Y glyph */
+        return;
+    }
+#endif
     s_feng_shift = 0.0f;
     s_feng_draw = s_ui_aspect_active;
     if (s_feng_draw && !s_feng_menu_draw &&
@@ -783,7 +874,7 @@ void sub_000192C0(void)
  * this+0x3C+4*(N-1) (thiscall, the message, ret 4; dispatch at
  * 0x000C281C), Favorite Drive Camera's being sub_000C0C90: step a value,
  * rewrite the texts with sub_000DD490(package, object name, text) and
- * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..8 are added
+ * play the arrow sound (sub_000DDDE0 / sub_000DDD60). Rows 3..9 are added
  * the same way after the original setup; their handlers are our own, at
  * unused int3 bytes after sub_000C0C20 (ROW_HANDLER_VA, recomp_lookup_manual).
  * Texts are our own strings in guest memory -- the language files are
@@ -830,6 +921,7 @@ extern void sub_00016050_gen(void);
 static const int s_scale_pct[] = { 100, 150, 200, 250 };
 static const int s_aniso_lvl[] = { 1, 2, 4, 8, 16 };
 
+static int s_blur = 1;                  /* native blur enabled by default */
 static int s_fps60;                     /* experimental; default 30 FPS */
 static int s_refl = 1;                  /* 0 off, 1 on */
 static int s_scale_idx = 1;             /* into s_scale_pct: 1.5x */
@@ -889,11 +981,13 @@ static const OptRow s_rows[] = {
     { "Square Pixels:", s_onoff, 2, &s_square, picture_changed },
 #endif
     { "Frame Rate:", s_fps_texts, 2, &s_fps60, frame_rate_changed },
+    { "Blur/Bloom:", s_onoff, 2, &s_blur, frame_rate_changed },
 };
 #define N_ROWS ((int)(sizeof s_rows / sizeof s_rows[0]))
 
 static void options_log(void)
 {
+    fprintf(stderr, "[options] blur %s\n", s_blur ? "on" : "off");
     fprintf(stderr, "[options] race frame rate %d FPS (experimental 60 FPS)\n",
             s_fps60 ? 60 : 30);
 #ifdef NFSU2_VULKAN
@@ -909,14 +1003,32 @@ static void options_log(void)
 
 void nfsu1_options_load(void)
 {
+#ifdef __ANDROID__
+    InputMode saved_mode = input_mode_get();
+    int sensor_preference = saved_mode.preference;
+    int race_overlay = saved_mode.overlay_requested;
+#endif
     char line[128];
     FILE *f = fopen(NFSU1_OPTIONS_FILE, "r");
     int i;
 
     if (f) {
         while (fgets(line, sizeof line, f)) {
+#ifdef __ANDROID__
+            if (!strncmp(line, "sensor_mode=", 12)) {
+                int mode = atoi(line + 12);
+                sensor_preference = mode >= -1 && mode <= 1 ? mode : -1;
+                continue;
+            }
+            if (!strncmp(line, "race_overlay=", 13)) {
+                race_overlay = atoi(line + 13) == 1;
+                continue;
+            }
+#endif
             if (!strncmp(line, "reflections=", 12))
                 s_refl = line[12] != '0';
+            else if (!strncmp(line, "blur=", 5))
+                s_blur = line[5] != '0';
             else if (!strncmp(line, "fps=", 4))
                 s_fps60 = atoi(line + 4) == 60;
             else if (!strncmp(line, "fxaa=", 5))
@@ -940,6 +1052,9 @@ void nfsu1_options_load(void)
         }
         fclose(f);
     }
+#ifdef __ANDROID__
+    input_mode_configure(sensor_preference, race_overlay);
+#endif
     refl_changed();
 #ifdef NFSU2_VULKAN
     {
@@ -968,11 +1083,15 @@ static void options_save(void)
         fprintf(stderr, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
         return;
     }
-    fprintf(f, "reflections=%d\nfps=%d\n", s_refl, s_fps60 ? 60 : 30);
+    fprintf(f, "reflections=%d\nfps=%d\nblur=%d\n", s_refl, s_fps60 ? 60 : 30, s_blur);
     if (s_scale_saved)
         fprintf(f, "scale=%d\n", s_scale_pct[s_scale_idx]);
 #ifdef NFSU2_VULKAN
     fprintf(f, "fxaa=%d\naniso=%d\nsquare=%d\n", s_fxaa, s_aniso_lvl[s_aniso_idx], s_square);
+#endif
+#ifdef __ANDROID__
+    InputMode mode = input_mode_get();
+    fprintf(f, "sensor_mode=%d\nrace_overlay=%d\n", mode.preference, mode.overlay_requested);
 #endif
     fclose(f);
 }
@@ -980,25 +1099,26 @@ static void options_save(void)
 /* Our texts in guest memory, each copied once. */
 static uint32_t guest_str(const char *s)
 {
-    static struct { const char *s; uint32_t va; } cache[32];
+    static struct { uint32_t va; } cache[64];
     static uint32_t pool, used;
     size_t n = strlen(s) + 1;
     int i;
 
-    for (i = 0; i < 32 && cache[i].s; i++)
-        if (cache[i].s == s)
+    /* Callers may format several names into the same stack buffer. Intern
+     * by the owned guest copy, never by a borrowed host pointer/address. */
+    for (i = 0; i < 64 && cache[i].va; i++)
+        if (!strcmp((const char *)XBOX_PTR(cache[i].va), s))
             return cache[i].va;
-    if (i == 32)
+    if (i == 64)
         return 0;
     if (!pool) {
-        pool = xbox_ContiguousAlloc(0x400u, 16);
+        pool = xbox_ContiguousAlloc(0x800u, 16);
         if (!pool)
             return 0;
     }
-    if (used + n > 0x400u)
+    if (used + n > 0x800u)
         return 0;
     memcpy((void *)XBOX_PTR(pool + used), s, n);
-    cache[i].s = s;
     cache[i].va = pool + used;
     used += (uint32_t)n;
     return cache[i].va;
@@ -1019,11 +1139,55 @@ static void fe_set_text(uint32_t screen, const char *object, const char *text)
     esp += 12;
 }
 
+/* Android replaces the retail trailers action, preserving the selector and
+ * its native touch/controller activation event. Retail handler: ret 16. */
+extern void sub_000C1FD0_gen(void);
+#ifdef __ANDROID__
+extern void android_show_port_credits(void);
+extern void sub_000DC410(void);
+static void port_credits_caption(uint32_t object, unsigned depth)
+{
+    if (!object || depth > 8) return;
+    if (MEM32(object + 0x18) == 2) {
+        PUSH32(esp, 0); PUSH32(esp, guest_str("ANDROID PORT"));
+        PUSH32(esp, object); PUSH32(esp, ROW_HANDLER_VA);
+        sub_000DC410();
+        esp += 12;
+    } else if (MEM32(object + 0x18) == 5) {
+        uint32_t child = MEM32(object + 0x60);
+        for (unsigned i = 0; child && i < 128; i++, child = MEM32(child + 4))
+            port_credits_caption(child, depth + 1);
+    }
+}
+#endif
+void sub_000C1FD0(void)
+{
+#ifdef __ANDROID__
+    uint32_t message = MEM32(esp + 4), screen = ecx;
+    uint32_t object = MEM32(esp + 8);
+    if (message == 0x0C407210u && object && MEM32(object + 0x10) == 0x8816789Fu) {
+        android_show_port_credits();
+        esp += 20;
+        return;
+    }
+#endif
+    sub_000C1FD0_gen();
+#ifdef __ANDROID__
+    if (message == 0x35F8620Bu) { /* selector initialization */
+        uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx;
+        PUSH32(esp, 0x8816789Fu); PUSH32(esp, MEM32(screen + 0xC));
+        PUSH32(esp, ROW_HANDLER_VA); sub_000DC340(); esp += 8;
+        port_credits_caption(eax, 0);
+        eax = saved_eax; ecx = saved_ecx; edx = saved_edx;
+    }
+#endif
+}
+
 static const char *const s_name_obj[] = {
-    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8",
+    "OptionName_3", "OptionName_4", "OptionName_5", "OptionName_6", "OptionName_7", "OptionName_8", "OptionName_9",
 };
 static const char *const s_data_obj[] = {
-    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8",
+    "OptionData_3", "OptionData_4", "OptionData_5", "OptionData_6", "OptionData_7", "OptionData_8", "OptionData_9",
 };
 
 static void opt_row_text(uint32_t screen, int i)
@@ -1057,6 +1221,259 @@ void sub_000C2A70(void)
         opt_row_text(screen, i);
     }
 }
+
+#ifdef __ANDROID__
+extern void sub_000C2B80_gen(void);
+#include "race_touch.h"
+/* Native HUD availability update: (player, primary flags, secondary flags).
+ * Secondary 0x40000 enables the NitrousGauge, even for a stock drag car.
+ * Its update (9E414..9E449) also checks the vehicle's total NOS duration at
+ * vehicle + 0x40 + 0x3B0: zero and INT_MAX mean no usable system. Check total
+ * capacity, not remaining charge, so an equipped empty bottle keeps its button.
+ * Sample only player one on the
+ * guest thread, then publish a scalar snapshot; Java never follows guest pointers.
+ * Drag/drift checks mirror HUD selection at 3B11F/3B155. Transmission 295B74
+ * is written by CBE90: automatic=0, manual=1. No guest HUD state is modified. */
+extern void sub_000A0140_gen(void);
+static int race_touch_shifting_enabled(void)
+{
+    int drag = MEM8(0x00273784u) || MEM32(0x00265BC8u);
+    return drag || MEM32(0x00295B74u) == 1;
+}
+
+/* Pause and front-end gearbox selectors write the preference through different
+ * handlers. Publish after the native write, without waiting for a HUD refresh. */
+static void race_touch_transmission_changed(void)
+{
+    race_touch_configure_features(race_touch_shifting_enabled(),
+        (race_touch_button_mask() & RACE_NITRO) != 0);
+}
+
+extern void sub_000C0F50_gen(void);
+void sub_000C0F50(void)
+{
+    sub_000C0F50_gen();
+    race_touch_transmission_changed();
+}
+
+extern void sub_000CBE90_gen(void);
+void sub_000CBE90(void)
+{
+    sub_000CBE90_gen();
+    race_touch_transmission_changed();
+}
+
+void sub_000A0140(void)
+{
+    if (MEM32(esp + 4) == MEM32(0x00265B84u) && MEM32(esp + 4)) {
+        int drift = MEM8(0x00273785u) || MEM32(0x00265BC4u);
+        int nitro = (MEM32(esp + 12) & 0x00040000u) != 0;
+        /* A33BC/A33CF initialize the HUD with secondary flags zero before
+         * player + 4 is initialized (allocator poison 0xAAAAAAAA). Match the
+         * native gauge's availability gate before following that pointer. */
+        if (nitro && !drift) {
+            uint32_t vehicle = MEM32(MEM32(esp + 4) + 4);
+            int32_t nitro_capacity = vehicle ? (int32_t)MEM32(vehicle + 0x3F0) : 0;
+            nitro = nitro_capacity > 0 && nitro_capacity != INT32_MAX;
+        }
+        race_touch_configure_features(race_touch_shifting_enabled(), !drift && nitro);
+    }
+    sub_000A0140_gen();
+}
+
+/* Retail scanners return native JOY_EVENT transitions and handle release/state
+ * themselves. Supply a pressed sample only to the registered lookback/skip
+ * scanner; restore the raw controller data before any other action reads it.
+ * This avoids guessing an Xbox button or coupling the gesture to a layout. */
+extern void sub_00131050_gen(void);
+extern void sub_00130A70_gen(void);
+static void race_hold_scanner(void (*original)(void), int analog)
+{
+    uint32_t binding = MEM32(esp + 16), raw = MEM32(esp + 8);
+    uint32_t event = MEM32(binding + 8);
+    /* AB is JOY_EVENT_START: its race handlers open pause. Never synthesize
+     * it for a hold, including while a pre-race scene is playing. */
+    if (!race_touch_hold_active() ||
+        (analog ? event != 0x76u : event != 0xACu)) {
+        original();
+        return;
+    }
+    unsigned bit = MEM8(binding + 0x12);
+    if (bit > 120) { original(); return; }
+    uint32_t address = raw + bit / 8;
+    unsigned shift = bit % 8;
+    uint16_t saved = MEM16(address);
+    uint16_t mask = (analog ? 255u : 1u) << shift;
+    /* +10 is the scanner's inversion flag. */
+    unsigned value = analog ? (255u ^ MEM8(binding + 0x10)) : !MEM8(binding + 0x10);
+    MEM16(address) = (saved & ~mask) | ((value << shift) & mask);
+    original();
+    MEM16(address) = saved;
+}
+void sub_00131050(void) { race_hold_scanner(sub_00131050_gen, 1); }
+void sub_00130A70(void) { race_hold_scanner(sub_00130A70_gen, 0); }
+
+#define SENSOR_HANDLER_VA (ROW_HANDLER_VA + 7u)
+/* Retail FEng: DC340 finds an object, DC220 toggles its selectable state,
+ * and DCD30 changes its color (including native cache invalidation). BF958
+ * uses the same disable/color path with FF606060 for unavailable entries. */
+extern void sub_000DC340(void);
+extern void sub_000DC220(void);
+extern void sub_000DCD30(void);
+typedef struct {
+    uint32_t object[4], color[4];
+} NativeOptionRow;
+static NativeOptionRow s_controller_touch_rows[2];
+
+static uint32_t fe_object_hash(const char *name)
+{
+    uint32_t hash = 0xFFFFFFFFu;
+    for (; *name; name++) {
+        unsigned char c = (unsigned char)*name;
+        if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+        hash = hash * 33 + c;
+    }
+    return hash;
+}
+
+static void native_option_row_enabled(NativeOptionRow *state, uint32_t screen,
+                                     unsigned row, int enabled)
+{
+    static const char *const parts[] = { "OptionName", "OptionData", "LeftArrow", "RightArrow" };
+    uint32_t package = MEM32(screen + 0xC);
+    for (unsigned i = 0; i < 4; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "%s_%u", parts[i], row);
+        uint32_t hash = fe_object_hash(name);
+        PUSH32(esp, hash); PUSH32(esp, package); PUSH32(esp, 0);
+        sub_000DC340();
+        esp += 8;
+        uint32_t object = eax;
+        if (!object) continue;
+        if (state->object[i] != object) {
+            uint32_t color = MEM32(object + 0x2C);
+            if (!color) continue;
+            state->object[i] = object;
+            state->color[i] = (MEM32(color) & 255u) |
+                ((MEM32(color + 4) & 255u) << 8) |
+                ((MEM32(color + 8) & 255u) << 16) |
+                ((MEM32(color + 12) & 255u) << 24);
+        }
+        PUSH32(esp, enabled); PUSH32(esp, hash); PUSH32(esp, package); PUSH32(esp, 0);
+        sub_000DC220();
+        esp += 12;
+        PUSH32(esp, enabled ? state->color[i] : 0xFF606060u);
+        PUSH32(esp, object); PUSH32(esp, 0);
+        sub_000DCD30();
+        esp += 8;
+    }
+}
+
+static uint32_t s_controller_settings_screen;
+static unsigned s_controller_settings_revision;
+static void controller_touch_text(uint32_t screen)
+{
+    InputMode mode = input_mode_get();
+    s_controller_settings_screen = screen;
+    s_controller_settings_revision = mode.revision;
+    fe_set_text(screen, "OptionName_5", "SENSOR MODE:");
+    fe_set_text(screen, "OptionData_5", mode.sensor_enabled ? "On" : "Off");
+    fe_set_text(screen, "OptionName_6", "RACE BUTTON OVERLAY:");
+    fe_set_text(screen, "OptionData_6", mode.overlay_requested ? "On" : "Off");
+    native_option_row_enabled(&s_controller_touch_rows[0], screen, 5, mode.sensor_editable);
+    native_option_row_enabled(&s_controller_touch_rows[1], screen, 6, mode.overlay_editable);
+}
+/* Both Controller menus open the same Android editor through one request. */
+static void bind_touch_layout_row(uint32_t screen, unsigned row, unsigned callback_offset)
+{
+    char name[32];
+    MEM32(screen + callback_offset) = SENSOR_HANDLER_VA + 2;
+    snprintf(name, sizeof(name), "OptionName_%u", row);
+    fe_set_text(screen, name, "TOUCH CONTROL LAYOUT");
+    snprintf(name, sizeof(name), "OptionData_%u", row);
+    fe_set_text(screen, name, "");
+}
+
+extern void sub_000B5B00_gen(void);
+extern void sub_000B5390(void);
+void sub_000B5B00(void)
+{
+    uint32_t screen = ecx;
+    sub_000B5B00_gen(); /* Pause Controller: retain row one, Vibration. */
+    if (!input_mode_sensor_enabled()) return;
+    PUSH32(esp, 0); PUSH32(esp, 2);
+    ecx = screen; PUSH32(esp, 0); sub_000B5390(); /* native row, no arrows */
+    /* The retail pause layout draws its row title on OptionName_N too.
+     * OptionText_N is not the caption displaying the placeholder name. */
+    bind_touch_layout_row(screen, 2, 0x48);
+}
+
+void sub_000C2B80(void)
+{
+    uint32_t screen = ecx;
+    sub_000C2B80_gen();
+    memset(s_controller_touch_rows, 0, sizeof(s_controller_touch_rows));
+    for (unsigned row = 5; row <= 6; row++) {
+        PUSH32(esp, 0); PUSH32(esp, 1); PUSH32(esp, row);
+        ecx = screen; PUSH32(esp, 0); sub_000C1D30();
+        PUSH32(esp, 0); PUSH32(esp, row);
+        ecx = screen; PUSH32(esp, 0); sub_000C1E10();
+        MEM32(screen + 0x3C + 4 * (row - 1)) = SENSOR_HANDLER_VA + row - 5;
+    }
+    PUSH32(esp, 1); PUSH32(esp, 0); PUSH32(esp, 7);
+    ecx = screen; PUSH32(esp, 0); sub_000C1D30();
+    bind_touch_layout_row(screen, 7, 0x54);
+    controller_touch_text(screen);
+}
+static void touch_layout_input(void)
+{
+    uint32_t msg = MEM32(esp + 4);
+    /* Native options route Select as MouseClick, alongside arrow events. */
+    if (msg == 0x0C407210u || msg == FE_PAD_LEFT || msg == FE_PAD_RIGHT)
+        race_touch_request_editor();
+    esp += 8;
+}
+static void controller_touch_input(unsigned row)
+{
+    uint32_t screen = ecx, msg = MEM32(esp + 4);
+    if (msg == FE_PAD_LEFT || msg == FE_PAD_RIGHT) {
+        InputMode mode = input_mode_get();
+        InputSensorPreference preference = mode.preference;
+        int overlay = mode.overlay_requested;
+        if (row == 0) {
+            if (!mode.sensor_editable) { esp += 8; return; }
+            preference = mode.sensor_enabled ? INPUT_SENSOR_OFF : INPUT_SENSOR_ON;
+        } else {
+            if (!mode.overlay_editable) { esp += 8; return; }
+            overlay = !overlay;
+        }
+        input_mode_configure(preference, overlay);
+        options_save();
+        controller_touch_text(screen);
+    }
+    esp += 8;
+}
+/* Called on the guest render thread. Refresh only on a policy change and
+ * only while this exact Controller screen is still registered. */
+void nfsu_controller_settings_refresh(void)
+{
+    InputMode mode = input_mode_get();
+    if (!s_controller_settings_screen || mode.revision == s_controller_settings_revision ||
+        MEM32(0x2BBB54) != 3) return;
+    uint32_t reg = MEM32(0x2BCB9C);
+    for (unsigned n = 0; reg && reg != 0x2BCB9C && n < 64; n++, reg = MEM32(reg)) {
+        if (MEM32(reg - 4 + 0x14) != s_controller_settings_screen) continue;
+        uint32_t package = MEM32(reg - 4 + 0x18);
+        if (!package || !(MEM32(package + 0x1C) & 1)) continue;
+        uint32_t saved_eax = eax, saved_ecx = ecx, saved_edx = edx, saved_esp = esp;
+        controller_touch_text(s_controller_settings_screen);
+        eax = saved_eax; ecx = saved_ecx; edx = saved_edx; esp = saved_esp;
+        return;
+    }
+}
+static void sensor_mode_input(void) { controller_touch_input(0); }
+static void race_overlay_input(void) { controller_touch_input(1); }
+#endif
 
 /* Row input (thiscall, the message, ret 4), as sub_000C0C90: left/right
  * step the value (wrapping), then the texts and the arrow sound. */
@@ -1093,15 +1510,29 @@ static void opt_row_input_2(void) { opt_row_input(2); }
 static void opt_row_input_3(void) { opt_row_input(3); }
 static void opt_row_input_4(void) { opt_row_input(4); }
 static void opt_row_input_5(void) { opt_row_input(5); }
+static void opt_row_input_6(void) { opt_row_input(6); }
 #else
 static void opt_row_input_1(void) { opt_row_input(1); }
+static void opt_row_input_2(void) { opt_row_input(2); }
 #endif
 
 /* Race render (cdecl, no arguments): cube-face views off for the call. */
 void sub_00016050(void)
 {
     uint8_t keep[6];
+    uint32_t native_blur = MEM32(0x00260CC0u);
+    uint32_t blur_limit = MEM32(0x0021C0B4u);
     int n;
+
+    /* 11100/11140/11150 set the native blur request. 286E0 smooths it
+     * through 264FA4. 286E0 adds speed blur and clamps its intensity to
+     * 21C0B4 before drawing. Zero the cap as well to disable both sources while
+     * disabled, preserving the scripted request for re-enabling. */
+    if (!s_blur) {
+        MEM32(0x00260CC0u) = 0;
+        MEM32(0x00264FA4u) = 0;
+        MEM32(0x0021C0B4u) = 0;
+    }
 
     /* NFSU1 XDK presentation interval (0x1DE94C): initialization in
      * sub_000156F0 requests 0x80000002, and D3D uses the low bits as
@@ -1118,6 +1549,10 @@ void sub_00016050(void)
 
     if (s_refl) {
         sub_00016050_gen();
+        if (!s_blur) {
+            MEM32(0x00260CC0u) = native_blur;
+            MEM32(0x0021C0B4u) = blur_limit;
+        }
         return;
     }
     for (n = 0; n < 6; n++) {
@@ -1127,6 +1562,10 @@ void sub_00016050(void)
     sub_00016050_gen();
     for (n = 0; n < 6; n++)
         MEM8(ENVMAP_VIEW(10 + n) + 8u) = keep[n];
+    if (!s_blur) {
+        MEM32(0x00260CC0u) = native_blur;
+        MEM32(0x0021C0B4u) = blur_limit;
+    }
 }
 
 /* ── Menu Size: full screen by default ───────────────────────
@@ -1262,6 +1701,18 @@ void sub_0011BC20(void)
  */
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
+#ifdef __ANDROID__
+    if (xbox_va == 0x000DDB60u) return nfsu_touch_hit;
+    if (xbox_va == 0x00131050u) return sub_00131050;
+    if (xbox_va == 0x00130A70u) return sub_00130A70;
+    if (xbox_va == 0x000A0140u) return sub_000A0140;
+    if (xbox_va == 0x000C0F50u) return sub_000C0F50;
+    if (xbox_va == 0x000CBE90u) return sub_000CBE90;
+    if (xbox_va == 0x000B5B00u) return sub_000B5B00;
+    if (xbox_va == SENSOR_HANDLER_VA) return sensor_mode_input;
+    if (xbox_va == SENSOR_HANDLER_VA + 1) return race_overlay_input;
+    if (xbox_va == SENSOR_HANDLER_VA + 2) return touch_layout_input;
+#endif
     /*
      * TODO: Add your overrides here. Examples:
      *
@@ -1275,9 +1726,9 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
             opt_row_input_0,
 #ifdef NFSU2_VULKAN
             opt_row_input_1, opt_row_input_2, opt_row_input_3, opt_row_input_4,
-            opt_row_input_5,
+            opt_row_input_5, opt_row_input_6,
 #else
-            opt_row_input_1,
+            opt_row_input_1, opt_row_input_2,
 #endif
         };
         return row_input[xbox_va - ROW_HANDLER_VA];

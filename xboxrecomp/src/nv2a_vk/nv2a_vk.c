@@ -44,6 +44,7 @@
  *   RECOMP_VK_HEADLESS=1             (Linux) no window, no present
  */
 #include "nv2a_vk.h"
+#include "../../include/nfsu_perf.h"
 #include "../nv2a_gl/gl_psh.h"
 #include "../nv2a_gl/gl_vsh.h"
 #include "../kernel/nv2a_backend.h"
@@ -181,9 +182,12 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements rq, VkMemoryPropertyFlags w
     return m;
 }
 
+#include "nv2a_vk_image_pool.h"
+
 /* ── Frames in flight ─────────────────────────────────────────────── */
 
 #define VK_FRAMES 2
+#define VK_CBS 8
 #define RING_BYTES (48u << 20)
 
 typedef struct {
@@ -192,7 +196,8 @@ typedef struct {
 
 typedef struct {
     VkCommandPool   pool;
-    VkCommandBuffer cb;
+    VkCommandBuffer cbs[VK_CBS];
+    uint32_t        ncb; /* current buffer; the last one is reserved for flip */
     VkFence         fence;
     VkSemaphore     acquired, rendered;
     VkBuffer        ring;
@@ -212,7 +217,9 @@ typedef struct {
 static Frame  s_fr[VK_FRAMES];
 static Frame *s_f;             /* the frame being recorded */
 static uint32_t s_fi;
-static VkCommandBuffer s_cb;   /* s_f->cb while recording */
+static VkCommandBuffer s_cb;   /* s_f->cbs[s_f->ncb] while recording */
+static uint32_t s_kick_draws, s_st_kicks;
+static uint32_t s_ring_gen; /* invalidates cached constants when the ring resets */
 static uint32_t s_cb_gen;      /* bumped at every vkBeginCommandBuffer */
 static int s_dyn_valid;
 
@@ -251,6 +258,7 @@ static void garbage_free(Frame *f)
         if (f->garbage[i].view) vkDestroyImageView(s_dev, f->garbage[i].view, NULL);
         if (f->garbage[i].image) vkDestroyImage(s_dev, f->garbage[i].image, NULL);
         if (f->garbage[i].mem) vkFreeMemory(s_dev, f->garbage[i].mem, NULL);
+        else if (f->garbage[i].image) pool_release(f->garbage[i].image);
         if (f->garbage[i].pipe) vkDestroyPipeline(s_dev, f->garbage[i].pipe, NULL);
     }
     f->ngarbage = 0;
@@ -261,18 +269,23 @@ static void frame_begin(void)
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     s_f = &s_fr[s_fi];
     if (s_f->submitted) {
+        uint64_t perf_fence = nfsu_perf_begin();
         vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
+        nfsu_perf_end(NFSU_PERF_VK_FENCE, perf_fence);
         vkResetFences(s_dev, 1, &s_f->fence);
         s_f->submitted = 0;
     }
     garbage_free(s_f);
     s_f->ring_off = 0;
+    s_ring_gen++;
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(s_f->cb, &bi);
-    s_cb = s_f->cb;
+    s_f->ncb = 0;
+    s_cb = s_f->cbs[0];
+    vkBeginCommandBuffer(s_cb, &bi);
     s_cb_gen++;
     s_dyn_valid = 0;
+    s_kick_draws = 0;
 }
 
 /* Space in this frame's ring: returns the offset, *ptr the mapping. */
@@ -511,13 +524,33 @@ static int make_image_ml(uint32_t w, uint32_t h, uint32_t layers, uint32_t level
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(s_dev, &ci, NULL, img) != VK_SUCCESS)
         return 0;
-    vkGetImageMemoryRequirements(s_dev, *img, &rq);
-    *mem = alloc_mem(rq, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (!*mem || vkBindImageMemory(s_dev, *img, *mem, 0) != VK_SUCCESS) {
-        vkDestroyImage(s_dev, *img, NULL);
-        if (*mem) vkFreeMemory(s_dev, *mem, NULL);
-        *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
-        return 0;
+    /* Vulkan 1.1: a driver may require or prefer a dedicated allocation. */
+    VkMemoryDedicatedRequirements dedicated = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS };
+    VkMemoryRequirements2 requirements = { VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
+    VkImageMemoryRequirementsInfo2 query = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2 };
+    query.image = *img;
+    requirements.pNext = &dedicated;
+    vkGetImageMemoryRequirements2(s_dev, &query, &requirements);
+    rq = requirements.memoryRequirements;
+    *mem = VK_NULL_HANDLE;
+    int standalone = dedicated.requiresDedicatedAllocation || dedicated.prefersDedicatedAllocation;
+    if (standalone || !pool_bind(*img, &rq)) {
+        VkMemoryDedicatedAllocateInfo image_alloc = { VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO };
+        VkMemoryAllocateInfo allocate = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+        image_alloc.image = *img;
+        allocate.pNext = standalone ? &image_alloc : NULL;
+        allocate.allocationSize = rq.size;
+        allocate.memoryTypeIndex = mem_type(rq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocate.memoryTypeIndex != UINT32_MAX
+            && vkAllocateMemory(s_dev, &allocate, NULL, mem) != VK_SUCCESS)
+            *mem = VK_NULL_HANDLE;
+        if (!*mem || vkBindImageMemory(s_dev, *img, *mem, 0) != VK_SUCCESS) {
+            vkDestroyImage(s_dev, *img, NULL);
+            if (*mem) vkFreeMemory(s_dev, *mem, NULL);
+            *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
+            return 0;
+        }
+        s_pool_fallbacks++;
     }
     vi.image = *img;
     vi.viewType = layers == 6 ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
@@ -529,7 +562,8 @@ static int make_image_ml(uint32_t w, uint32_t h, uint32_t layers, uint32_t level
         vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     if (vkCreateImageView(s_dev, &vi, NULL, view) != VK_SUCCESS) {
         vkDestroyImage(s_dev, *img, NULL);
-        vkFreeMemory(s_dev, *mem, NULL);
+        if (*mem) vkFreeMemory(s_dev, *mem, NULL);
+        else pool_release(*img);
         *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
         return 0;
     }
@@ -2665,8 +2699,9 @@ static int ready(void)
         vkCreateCommandPool(s_dev, &cpi, NULL, &f->pool);
         cai.commandPool = f->pool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        vkAllocateCommandBuffers(s_dev, &cai, &f->cb);
+        cai.commandBufferCount = VK_CBS;
+        if (vkAllocateCommandBuffers(s_dev, &cai, f->cbs) != VK_SUCCESS)
+            return 0;
         vkCreateFence(s_dev, &fci, NULL, &f->fence);
         vkCreateSemaphore(s_dev, &sci, NULL, &f->acquired);
 #ifndef __ANDROID__
@@ -2710,28 +2745,7 @@ static int ready(void)
     return 1;
 }
 
-/* Submit what is recorded and wait for it, then keep recording in the same
- * frame (ring full). */
-static void flush_frame_wait(void)
-{
-    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    end_rendering();
-    s_rt = NULL;
-    vkEndCommandBuffer(s_cb);
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &s_cb;
-    vkQueueSubmit(s_queue, 1, &si, s_f->fence);
-    vkWaitForFences(s_dev, 1, &s_f->fence, VK_TRUE, UINT64_MAX);
-    vkResetFences(s_dev, 1, &s_f->fence);
-    garbage_free(s_f);
-    s_f->ring_off = 0;
-    vkResetCommandPool(s_dev, s_f->pool, 0);
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(s_cb, &bi);
-    s_cb_gen++;
-    s_dyn_valid = 0;
-}
+#include "nv2a_vk_submit.h"
 
 /* ── Render state ─────────────────────────────────────────────────── */
 
@@ -3245,7 +3259,7 @@ static struct {
     size_t       idx_cap;
 } s_pend;
 static int s_inst_on = -1, s_inst_alt;
-static uint32_t s_st_draws, s_st_calls, s_st_inst;
+static uint32_t s_st_draws, s_st_calls, s_st_inst, s_st_creuse;
 
 static void pend_flush(void)
 {
@@ -3360,7 +3374,7 @@ static int pend_append(const Nv2aRawBatch *b, int changed)
     return 1;
 }
 
-static void vk_draw_raw(const Nv2aRawBatch *b)
+static void vk_draw_raw_impl(const Nv2aRawBatch *b)
 {
     VkSurf *s, *sampled[4];
     VkDepthBuf *d;
@@ -3453,6 +3467,12 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         return;
 #endif
 
+    /* Submit before this draw uploads/binds vertices. Android's vertex
+     * bindings would otherwise be lost if begin_rendering switched buffers. */
+    if (kick_due(s_in_render && s_rt == s && s_rt_depth == d))
+        kick_submit();
+    s_kick_draws++;
+
     {
         /* Everything this draw puts in the ring, reserved now: a flush
          * later in the draw would reuse the ring under its own uniforms. */
@@ -3469,6 +3489,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             if (need > RING_BYTES) return;
             ring_alloc(RING_BYTES, 16, &tmp);       /* forces the flush */
             s_f->ring_off = 0;
+            s_ring_gen++;
         }
     }
 #ifdef __ANDROID__
@@ -3564,10 +3585,33 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         }
     }
     {
-        /* Constants last: repeats append theirs right behind (pend_append). */
-        VkDeviceSize cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map), range;
-        if (!map) return;
-        memcpy(map, b->vp_consts, VK_CONST_SIZE);
+        /* Constants last: repeats append theirs right behind (pend_append).
+         * A draw that cannot start an instanced run, with the constants of
+         * the last set uploaded (same generation, still in this ring),
+         * points at that set instead of copying 3 KB again: HUD and 2D
+         * passes draw many quads under one matrix. RECOMP_VK_CONST_REUSE=0
+         * off. */
+        static int reuse_on = -1;
+        static VkDeviceSize last_at;
+        static uint32_t last_gen, last_ring_gen;
+        VkDeviceSize cat, range;
+        int eligible = pend_eligible(b);
+        if (reuse_on < 0) {
+            const char *e = getenv("RECOMP_VK_CONST_REUSE");
+            reuse_on = !(e && *e == '0');
+        }
+        if (reuse_on && !eligible && b->vp_const_gen && b->vp_const_gen == last_gen
+         && last_ring_gen == s_ring_gen && last_at + VK_CONST_SIZE <= s_f->ring_off) {
+            cat = last_at;
+            s_st_creuse++;
+        } else {
+            cat = ring_alloc(VK_CONST_SIZE, s_ubo_align, &map);
+            if (!map) return;
+            memcpy(map, b->vp_consts, VK_CONST_SIZE);
+            last_at = cat;
+            last_gen = b->vp_const_gen;
+            last_ring_gen = s_ring_gen;
+        }
         range = (VkDeviceSize)VK_CONST_SIZE * VK_INST_MAX;
         if (range > s_ubo_range) range = s_ubo_range;
         if (cat + range > RING_BYTES) range = RING_BYTES - cat;
@@ -3603,6 +3647,13 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     if (s_vtrace > 0)
         s_vtrace--;
+}
+
+static void vk_draw_raw(const Nv2aRawBatch *b)
+{
+    uint64_t start = nfsu_perf_begin();
+    vk_draw_raw_impl(b);
+    nfsu_perf_end(NFSU_PERF_VK_DRAW, start);
 }
 
 static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
@@ -4026,7 +4077,7 @@ static void dump_fxaa(VkSurf *s, const char *path)
     }
 }
 
-static void vk_flip(void)
+static void vk_flip_impl(void)
 {
     static int dump_every = -1;
     static char dump_prefix[256];
@@ -4041,6 +4092,11 @@ static void vk_flip(void)
         return;
     pend_flush();
     s_frame++;
+    if (s_frame % 300 == 0) {
+        pool_report();
+        fprintf(stderr, "[vkkick] threshold %d, %u early submits (frame %u)\n",
+                s_kick_n, s_st_kicks, s_frame);
+    }
     if (s_inst_alt)
         s_inst_on = s_frame & 1;
     {
@@ -4051,10 +4107,10 @@ static void vk_flip(void)
             st = e && *e == '1';
         }
         if (st && s_frame - st_frame >= 300) {
-            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended)\n",
+            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended, %u constant sets reused)\n",
                     s_st_draws / (s_frame - st_frame), s_st_calls / (s_frame - st_frame),
-                    s_st_inst / (s_frame - st_frame));
-            s_st_draws = s_st_calls = s_st_inst = 0;
+                    s_st_inst / (s_frame - st_frame), s_st_creuse / (s_frame - st_frame));
+            s_st_draws = s_st_calls = s_st_inst = s_st_creuse = 0;
             st_frame = s_frame;
         }
     }
@@ -4145,6 +4201,7 @@ static void vk_flip(void)
     if (!s_headless) android_prepare_presentation();
 #endif
     if (!s_headless && s_swapchain) {
+        uint64_t perf_acquire = nfsu_perf_begin();
         VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain,
 #ifdef __ANDROID__
                                             /* Pause can race the event drain above. Bound the
@@ -4154,6 +4211,7 @@ static void vk_flip(void)
                                             UINT64_MAX,
 #endif
                                             s_f->acquired, VK_NULL_HANDLE, &idx);
+        nfsu_perf_end(NFSU_PERF_VK_ACQUIRE, perf_acquire);
         if (rr == VK_ERROR_OUT_OF_DATE_KHR || rr == VK_ERROR_SURFACE_LOST_KHR) {
 #ifdef __ANDROID__
             LOGE("Android acquire requires presentation rebuild: %d\n", rr);
@@ -4243,8 +4301,10 @@ static void vk_flip(void)
         si.pSignalSemaphores = &s_f->rendered;
 #endif
     }
+    uint64_t perf_submit = nfsu_perf_begin();
     if (vkQueueSubmit(s_queue, 1, &si, s_f->fence) != VK_SUCCESS)
         LOGE("vkQueueSubmit failed\n");
+    nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
     s_f->submitted = 1;
     if (have_image) {
         VkPresentInfoKHR pi = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -4259,7 +4319,9 @@ static void vk_flip(void)
         pi.pSwapchains = &s_swapchain;
         pi.pImageIndices = &idx;
         VT("flip %u: vkQueuePresentKHR\n", s_frame);
+        uint64_t perf_present = nfsu_perf_begin();
         pr = vkQueuePresentKHR(s_queue, &pi);
+        nfsu_perf_end(NFSU_PERF_VK_PRESENT, perf_present);
 #ifdef __ANDROID__
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
             LOGE("Android present requires presentation rebuild: %d\n", pr);
@@ -4292,6 +4354,14 @@ static void vk_flip(void)
         while (SDL_PollEvent(&e)) { }
     }
 #endif
+}
+
+static void vk_flip(void)
+{
+    uint64_t start = nfsu_perf_begin();
+    vk_flip_impl();
+    nfsu_perf_end(NFSU_PERF_VK_FLIP, start);
+    nfsu_perf_poll();
 }
 
 static void vk_draw(const Nv2aSurface *s, const Nv2aBatch *b)
