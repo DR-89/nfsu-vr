@@ -57,7 +57,7 @@ static int kick_due(int mid_pass)
             if (!*end && n >= 0 && n <= 1000000)
                 s_kick_n = (int)n;
         }
-        LOGE("early submits: threshold %d draws (0 = off)\n", s_kick_n);
+        NFS_LOG_INFO("graphics", "  [VK] " "early submits: threshold %d draws (0 = off)\n", s_kick_n);
     }
     if (!s_kick_n || s_f->ncb + 1 >= VK_CBS)
         return 0;
@@ -78,14 +78,14 @@ static void kick_submit(void)
     uint64_t perf_submit = nfsu_perf_begin();
     if (vkEndCommandBuffer(s_cb) != VK_SUCCESS
         || vkQueueSubmit(s_queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) {
-        LOGE("early submit failed\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "early submit failed\n");
         abort();
     }
     nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
     s_cb = s_f->cbs[++s_f->ncb];
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) {
-        LOGE("early command buffer begin failed\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "early command buffer begin failed\n");
         abort();
     }
     s_cb_gen++;

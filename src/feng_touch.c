@@ -1,3 +1,4 @@
+#include "../xboxrecomp/include/nfsu_log.h"
 #include "input_mode.h"
 /* Native FEng touch engine. The guest thread owns geometry, gestures and
  * dispatch; menu_touch.c supplies the synchronized host event queue.
@@ -973,7 +974,7 @@ void feng_touch_update(void)
         for (uint32_t package = MEM32(feng + 0xE4); package && count++ < 8;
              package = MEM32(package + 4)) {
             uint32_t focus = MEM32(package + 0x80);
-            fprintf(stderr, "[touch] package=%08X flags=%08X selectable=%u focus=%08X\n",
+            NFS_LOG_INFO("input", "[touch] package=%08X flags=%08X selectable=%u focus=%08X\n",
                     package, MEM32(package + 0x1C), MEM32(package + 0x88),
                     focus ? MEM32(focus + 0x10) : 0);
         }

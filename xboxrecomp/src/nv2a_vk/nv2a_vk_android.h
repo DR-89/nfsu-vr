@@ -11,7 +11,7 @@ static VkRenderPass android_render_pass(VkFormat format, int depth, int clear)
             return s_android_passes[i].pass;
         if (!s_android_passes[i].pass) break;
     }
-    if (i == 8) { LOGE("render pass cache full\n"); abort(); }
+    if (i == 8) { NFS_LOG_FATAL("graphics", "  [VK] " "render pass cache full\n"); abort(); }
     VkAttachmentDescription attachments[2] = {0};
     attachments[0].format = format;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -40,7 +40,7 @@ static VkRenderPass android_render_pass(VkFormat format, int depth, int clear)
     info.pSubpasses = &subpass;
     VkRenderPass pass;
     if (vkCreateRenderPass(s_dev, &info, NULL, &pass) != VK_SUCCESS) {
-        LOGE("render pass creation failed\n"); abort();
+        NFS_LOG_FATAL("graphics", "  [VK] " "render pass creation failed\n"); abort();
     }
     s_android_passes[i].format = format;
     s_android_passes[i].depth = depth;
@@ -73,7 +73,7 @@ static void VKAPI_PTR android_begin_rendering(VkCommandBuffer command, const VkR
     create.layers = 1;
     VkFramebuffer framebuffer;
     if (vkCreateFramebuffer(s_dev, &create, NULL, &framebuffer) != VK_SUCCESS) {
-        LOGE("framebuffer creation failed\n"); abort();
+        NFS_LOG_FATAL("graphics", "  [VK] " "framebuffer creation failed\n"); abort();
     }
     if (s_f->nframebuffers == s_f->framebuffer_cap) {
         uint32_t cap = s_f->framebuffer_cap ? s_f->framebuffer_cap * 2 : 64;
@@ -119,7 +119,7 @@ static void VKAPI_PTR android_push_descriptors(VkCommandBuffer command, VkPipeli
     allocate.pSetLayouts = &dsl;
     VkDescriptorSet set;
     if (vkAllocateDescriptorSets(s_dev, &allocate, &set) != VK_SUCCESS) {
-        LOGE("descriptor pool exhausted\n"); abort();
+        NFS_LOG_FATAL("graphics", "  [VK] " "descriptor pool exhausted\n"); abort();
     }
     VkWriteDescriptorSet updated[7];
     if (count > 7) abort();

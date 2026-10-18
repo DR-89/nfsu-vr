@@ -24,6 +24,7 @@
  * writes -- and 8 MiB is not worth a CAS loop. Dedup is free: the same target
  * hit a million times is still one byte.
  */
+#include "../../include/nfsu_log.h"
 
 #include <stdint.h>
 
@@ -124,7 +125,7 @@ static void dump_sites(const char *targets_path)
         fputc('\n', f);
     }
     fclose(f);
-    fprintf(stderr, "[icall-feedback] %s: %lu sites, %lu saturated;"
+    NFS_LOG_INFO("runtime", "[icall-feedback] %s: %lu sites, %lu saturated;"
             " guarded arms hit=%llu missed=%llu\n",
             path, s_site_records, s_site_saturated,
             (unsigned long long)g_icall_guard_hits,
@@ -135,7 +136,7 @@ void recomp_icall_feedback_dump(const char *path)
 {
     FILE *f = fopen(path, "w");
     if (!f) {
-        fprintf(stderr, "[icall-feedback] cannot write %s\n", path);
+        NFS_LOG_ERROR("runtime", "[icall-feedback] cannot write %s\n", path);
         return;
     }
 
@@ -156,7 +157,7 @@ void recomp_icall_feedback_dump(const char *path)
     }
     fclose(f);
 
-    fprintf(stderr, "[icall-feedback] %s: %lu resolved, %lu unresolved targets\n",
+    NFS_LOG_INFO("runtime", "[icall-feedback] %s: %lu resolved, %lu unresolved targets\n",
             path, resolved, unresolved);
     dump_sites(path);
 }

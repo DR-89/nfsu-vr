@@ -1,5 +1,6 @@
 /* Guest wait transactions. No polling, host event race, or partial WaitAll
  * consumption: object state and waiter grants share this lock. */
+#include "../../include/nfsu_log.h"
 #include "guest_dispatcher.h"
 #include "guest_scheduler.h"
 #include "platform/dispatcher_backend.h"
@@ -260,7 +261,7 @@ static DWORD wait_objects(unsigned count, void *const *objects, int all, DWORD m
             pthread_mutex_unlock(&lock);
             static volatile LONG reports;
             if (InterlockedIncrement(&reports) <= 8)
-                fprintf(stderr, "[EXECUTOR] unsupported wait: unsafe kernel boundary (virtual tid %u)\n", w.tid);
+                NFS_LOG_WARN("runtime", "[EXECUTOR] unsupported wait: unsafe kernel boundary (virtual tid %u)\n", w.tid);
             SetLastError(ERROR_NOT_SUPPORTED);
             return WAIT_FAILED;
         }

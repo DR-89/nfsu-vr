@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 /* Darwin: exposes memset_s, its explicit_bzero equivalent. */
 #define __STDC_WANT_LIB_EXT1__ 1
+#include "../../include/nfsu_log.h"
 
 #include "win32_compat.h"
 #include "thread_observer.h"
@@ -516,7 +517,7 @@ static void obj_release(w32_object *o)
          * game's folder, after XDK removed its files) goes by rmdir. */
         if (o->delete_on_close && o->file_path && unlink(o->file_path) != 0
             && rmdir(o->file_path) != 0)
-            fprintf(stderr, "  [FILE] delete on close of %s failed, errno %d\n",
+            NFS_LOG_INFO("runtime", "  [FILE] delete on close of %s failed, errno %d\n",
                     o->file_path, errno);
         free(o->file_path);
     } else if (o->kind == K_FILEMAP) {
@@ -788,7 +789,7 @@ static DWORD unsupported_continuation_wait(const char *kind)
 {
     static volatile LONG reports;
     if (InterlockedIncrement(&reports) <= 8)
-        fprintf(stderr, "[EXECUTOR] unsupported wait: %s (virtual tid %u)\n", kind, GetCurrentThreadId());
+        NFS_LOG_WARN("runtime", "[EXECUTOR] unsupported wait: %s (virtual tid %u)\n", kind, GetCurrentThreadId());
     SetLastError(ERROR_NOT_SUPPORTED);
     return WAIT_FAILED;
 }
@@ -1098,7 +1099,7 @@ int xbox_guest_core(void)
             core = n > 1 ? (int)n - 1 : -1;
 #endif
             if (core >= 0)
-                fprintf(stderr, "  [THREAD] guest code runs on core %d only\n", core);
+                NFS_LOG_DEBUG("runtime", "  [THREAD] guest code runs on core %d only\n", core);
         }
     }
     return core;
@@ -1166,7 +1167,7 @@ void xbox_nx_spread_thread(void)
         return;                          /* one core: nothing to spread */
     k = __atomic_fetch_add(&next, 1, __ATOMIC_RELAXED);
     if (k == 1)
-        fprintf(stderr, "  [NX] threads spread over core mask 0x%llX\n",
+        NFS_LOG_INFO("runtime", "  [NX] threads spread over core mask 0x%llX\n",
                 (unsigned long long)mask);
     k %= __builtin_popcountll(mask);
     for (core = 0; core < 3; core++)
@@ -1257,7 +1258,7 @@ void xbox_nx_thread_report(double interval_s)
     }
     if (n && failed == n)
         len += snprintf(line + len, sizeof line - len, " (thread tick counts unavailable)");
-    fprintf(stderr, "%s\n", line);
+    NFS_LOG_INFO("runtime", "%s\n", line);
 }
 #else
 void xbox_nx_spread_thread(void) { }
@@ -1481,7 +1482,7 @@ static void host_priority_apply(w32_object *o)
         return;                          /* not running yet: the trampoline applies it */
     if (R_SUCCEEDED(svcSetThreadPriority(o->nx_handle, rt ? 0x2D : 0x3B))) {
         o->host_rt = rt;
-        fprintf(stderr, "  [NX] guest thread %p at host priority 0x%X\n",
+        NFS_LOG_INFO("runtime", "  [NX] guest thread %p at host priority 0x%X\n",
                 (void *)o->start, rt ? 0x2D : 0x3B);
     }
 #else
@@ -1846,7 +1847,7 @@ static void nx_probe(void)
      * permitted set does not fail -- the kernel terminates the process, and
      * hbloader does not grant homebrew CreateSharedMemory (0x50). The code-
      * memory SVCs (0x4B/0x4C) are the ones JIT homebrew relies on. */
-    fprintf(stderr, "  [NX] syscall hints: CreateSharedMemory %d MapSharedMemory %d"
+    NFS_LOG_INFO("runtime", "  [NX] syscall hints: CreateSharedMemory %d MapSharedMemory %d"
                     " CreateCodeMemory %d ControlCodeMemory %d\n",
             envIsSyscallHinted(0x50), envIsSyscallHinted(0x13),
             envIsSyscallHinted(0x4B), envIsSyscallHinted(0x4C));
@@ -1862,9 +1863,9 @@ static void nx_probe(void)
         s_nx_mode = NX_PHYSICAL;
     }
     if (s_nx_mode == NX_PHYSICAL && !(envIsSyscallHinted(0x4B) && envIsSyscallHinted(0x4C)))
-        fprintf(stderr, "  [NX] WARNING: code-memory SVCs are not hinted either;"
+        NFS_LOG_ERROR("runtime", "  [NX] WARNING: code-memory SVCs are not hinted either;"
                         " guest memory cannot be mapped\n");
-    fprintf(stderr, "  [NX] guest memory from %s\n",
+    NFS_LOG_INFO("runtime", "  [NX] guest memory from %s\n",
             s_nx_mode == NX_SHARED ? "shared-memory objects (aliasing views)"
                                    : "code-memory views of heap blocks (no aliasing)");
 }
@@ -1892,7 +1893,7 @@ static int nx_commit(uintptr_t a, size_t len)
         void *src = memalign(0x1000, len);
         nx_region *r;
         if (!src) {
-            fprintf(stderr, "  [NX] out of heap for %zu KB at %p\n", len / 1024, (void *)a);
+            NFS_LOG_INFO("runtime", "  [NX] out of heap for %zu KB at %p\n", len / 1024, (void *)a);
             return 0;
         }
         rc = svcCreateCodeMemory(&shm, src, len);
@@ -1900,7 +1901,7 @@ static int nx_commit(uintptr_t a, size_t len)
             rc = svcControlCodeMemory(shm, CodeMapOperation_MapOwner, (void *)a, len,
                                       Perm_Rw);
         if (R_FAILED(rc)) {
-            fprintf(stderr, "  [NX] code-memory view of %zu KB at %p failed: 0x%X\n",
+            NFS_LOG_ERROR("runtime", "  [NX] code-memory view of %zu KB at %p failed: 0x%X\n",
                     len / 1024, (void *)a, rc);
             if (shm) svcCloseHandle(shm);
             free(src);
@@ -1913,13 +1914,13 @@ static int nx_commit(uintptr_t a, size_t len)
     }
     rc = svcCreateSharedMemory(&shm, len, Perm_Rw, Perm_R);
     if (R_FAILED(rc)) {
-        fprintf(stderr, "  [NX] create %zu KB of shared memory failed: 0x%X\n",
+        NFS_LOG_ERROR("runtime", "  [NX] create %zu KB of shared memory failed: 0x%X\n",
                 len / 1024, rc);
         return 0;
     }
     rc = svcMapSharedMemory(shm, (void *)a, len, Perm_Rw);
     if (R_FAILED(rc)) {
-        fprintf(stderr, "  [NX] map shared memory at %p (+%zu KB) failed: 0x%X\n",
+        NFS_LOG_ERROR("runtime", "  [NX] map shared memory at %p (+%zu KB) failed: 0x%X\n",
                 (void *)a, len / 1024, rc);
         svcCloseHandle(shm);
         return 0;
@@ -1945,7 +1946,7 @@ static int nx_map_shm(Handle shm, uintptr_t addr, size_t len)
 {
     Result rc = svcMapSharedMemory(shm, (void *)addr, len, Perm_Rw);
     if (R_FAILED(rc)) {
-        fprintf(stderr, "  [NX] map shared memory at %p (+%zu KB) failed: 0x%X\n",
+        NFS_LOG_ERROR("runtime", "  [NX] map shared memory at %p (+%zu KB) failed: 0x%X\n",
                 (void *)addr, len / 1024, rc);
         return 0;
     }
@@ -1974,7 +1975,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
         virtmemUnlock();
         pthread_mutex_unlock(&s_nx_lock);
         if (!at) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
-        fprintf(stderr, "  [NX] reserved %zu MB at %p\n", want >> 20, at);
+        NFS_LOG_INFO("runtime", "  [NX] reserved %zu MB at %p\n", want >> 20, at);
         return at;
     }
 
@@ -2265,7 +2266,7 @@ BOOL QueryPerformanceFrequency(PLARGE_INTEGER freq)
 
 VOID OutputDebugStringA(LPCSTR str)
 {
-    if (str) fputs(str, stderr);
+    if (str) NFS_LOG_DEBUG("runtime", "%s\n", str);
 }
 
 VOID ExitProcess(UINT exitCode) { exit((int)exitCode); }
@@ -2439,7 +2440,7 @@ BOOL  EnumWindows(WNDENUMPROC p, LPARAM l) { (void)p; (void)l; return FALSE; }
 int MessageBoxA(HWND h, LPCSTR text, LPCSTR caption, UINT type)
 {
     (void)h; (void)type;
-    fprintf(stderr, "[%s] %s\n", caption ? caption : "MessageBox",
+    NFS_LOG_INFO("runtime", "[%s] %s\n", caption ? caption : "MessageBox",
                                    text    ? text    : "");
     return 1;   /* IDOK */
 }
@@ -2465,7 +2466,8 @@ VOID OutputDebugStringW(LPCWSTR str)
 {
     if (!str) return;
     for (const WCHAR *p = str; *p; p++)
-        fputc((*p < 128) ? (int)*p : '?', stderr);
+        NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_DEBUG, "%c", (*p < 128) ? (int)*p : '?');
+    NFS_LOG_STREAM("runtime", NFS_LOG_LEVEL_DEBUG, "\n");
 }
 
 /*
@@ -2619,7 +2621,7 @@ HANDLE CreateFileMappingA(HANDLE file, LPSECURITY_ATTRIBUTES sa, DWORD protect,
     }
     rc = svcCreateSharedMemory(&shm, nx_page(size), Perm_Rw, Perm_R);
     if (R_FAILED(rc)) {
-        fprintf(stderr, "  [NX] file mapping of %zu KB failed: 0x%X\n",
+        NFS_LOG_ERROR("runtime", "  [NX] file mapping of %zu KB failed: 0x%X\n",
                 (size_t)size / 1024, rc);
         SetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return NULL;
@@ -2674,13 +2676,13 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
                 nx_region *r = nx_add(at, len, 0, 0, 0);
                 if (r) r->alias_of = o->nx_view0;
                 if (!said++)
-                    fprintf(stderr, "  [NX] aliasing views with svcMapProcessMemory\n");
+                    NFS_LOG_INFO("runtime", "  [NX] aliasing views with svcMapProcessMemory\n");
                 view_register((void *)at, len);
                 pthread_mutex_unlock(&s_nx_lock);
                 return (LPVOID)at;
             }
             if (!said++)
-                fprintf(stderr, "  [NX] second view of a mapping refused (0x%X): this host"
+                NFS_LOG_ERROR("runtime", "  [NX] second view of a mapping refused (0x%X): this host"
                         " cannot alias memory\n", rc);
             pthread_mutex_unlock(&s_nx_lock);
             SetLastError(ERROR_NOT_ENOUGH_MEMORY);
@@ -3070,7 +3072,7 @@ VOID RtlUnwind(PVOID TargetFrame, PVOID TargetIp,
 VOID RaiseException(DWORD code, DWORD flags, DWORD nargs, const ULONG_PTR *args)
 {
     (void)flags; (void)nargs; (void)args;
-    fprintf(stderr, "[win32_compat] RaiseException(0x%08X): SEH not emulated\n", code);
+    NFS_LOG_INFO("runtime", "[win32_compat] RaiseException(0x%08X): SEH not emulated\n", code);
     /* TODO: on Windows this does not return; SEH dispatch unimplemented. */
 }
 

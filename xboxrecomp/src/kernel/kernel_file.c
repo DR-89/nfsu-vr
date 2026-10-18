@@ -15,6 +15,7 @@
  */
 
 #define _GNU_SOURCE   /* FNM_CASEFOLD */
+#include "../../include/nfsu_log.h"
 #include "kernel.h"
 #include <string.h>
 #include <stdio.h>
@@ -497,7 +498,7 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
              * surfaces far away. Halo's save path hits one, gets
              * STATUS_NOT_IMPLEMENTED, converts it to DOS error 317 and asserts
              * "couldn't open or create saved game file". */
-            fprintf(stderr, "  [FILE] NtSetInformationFile: unhandled class %d\n",
+            NFS_LOG_WARN("files", "  [FILE] NtSetInformationFile: unhandled class %d\n",
                     (int)FileInformationClass);
             fflush(stderr);
             return STATUS_NOT_IMPLEMENTED;
@@ -1150,7 +1151,7 @@ NTSTATUS __stdcall xbox_NtSetInformationFile(
              * surfaces far away. Halo's save path hits one, gets
              * STATUS_NOT_IMPLEMENTED, converts it to DOS error 317 and asserts
              * "couldn't open or create saved game file". */
-            fprintf(stderr, "  [FILE] NtSetInformationFile: unhandled class %d\n",
+            NFS_LOG_WARN("files", "  [FILE] NtSetInformationFile: unhandled class %d\n",
                     (int)FileInformationClass);
             fflush(stderr);
             return STATUS_NOT_IMPLEMENTED;

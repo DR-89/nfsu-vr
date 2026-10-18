@@ -31,6 +31,7 @@
  *    if state is dirty, rebuilds/looks up the shader, uploads constants,
  *    and binds everything to the D3D11 pipeline.
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_internal.h"
 #include "d3d8_combiners.h"
@@ -809,7 +810,7 @@ static ID3D11PixelShader *compile_combiner_shader(const NV2ACombinerState *state
 
     len = d3d8_combiners_generate_hlsl(state, hlsl, sizeof(hlsl));
     if (len < 0) {
-        fprintf(stderr, "NV2A combiners: HLSL generation failed (buffer overflow)\n");
+        NFS_LOG_ERROR("graphics", "NV2A combiners: HLSL generation failed (buffer overflow)\n");
         return NULL;
     }
 
@@ -818,11 +819,11 @@ static ID3D11PixelShader *compile_combiner_shader(const NV2ACombinerState *state
                     D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
                     &code, &errors);
     if (FAILED(hr)) {
-        fprintf(stderr, "NV2A combiners: HLSL compile failed: %s\n",
+        NFS_LOG_ERROR("graphics", "NV2A combiners: HLSL compile failed: %s\n",
                 errors ? (char *)ID3D10Blob_GetBufferPointer(errors)
                        : "unknown error");
         /* Dump the generated source for debugging */
-        fprintf(stderr, "--- Generated HLSL ---\n%s\n--- End HLSL ---\n", hlsl);
+        NFS_LOG_DEBUG("graphics", "--- Generated HLSL ---\n%s\n--- End HLSL ---\n", hlsl);
         if (errors) ID3D10Blob_Release(errors);
         return NULL;
     }
@@ -836,7 +837,7 @@ static ID3D11PixelShader *compile_combiner_shader(const NV2ACombinerState *state
     ID3D10Blob_Release(code);
 
     if (FAILED(hr)) {
-        fprintf(stderr, "NV2A combiners: CreatePixelShader failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("graphics", "NV2A combiners: CreatePixelShader failed: 0x%08lX\n", hr);
         return NULL;
     }
 
@@ -933,12 +934,12 @@ HRESULT d3d8_combiners_init(void)
     hr = ID3D11Device_CreateBuffer(d3d8_GetD3D11Device(), &cbd, NULL,
                                    &g_combiner_cb);
     if (FAILED(hr)) {
-        fprintf(stderr, "NV2A combiners: Failed to create constant buffer: "
+        NFS_LOG_ERROR("graphics", "NV2A combiners: Failed to create constant buffer: "
                 "0x%08lX\n", hr);
         return hr;
     }
 
-    fprintf(stderr, "NV2A combiners: Initialized (cache size=%d)\n",
+    NFS_LOG_DEBUG("graphics", "NV2A combiners: Initialized (cache size=%d)\n",
             COMBINER_CACHE_SIZE);
     return S_OK;
 }
@@ -960,7 +961,7 @@ void d3d8_combiners_shutdown(void)
         g_combiner_cb = NULL;
     }
 
-    fprintf(stderr, "NV2A combiners: Shut down\n");
+    NFS_LOG_DEBUG("graphics", "NV2A combiners: Shut down\n");
 }
 
 /* ================================================================
@@ -1013,7 +1014,7 @@ BOOL d3d8_combiners_prepare_draw(void)
     /* Get or compile the pixel shader for this combiner state */
     ps = d3d8_combiners_get_shader(&g_combiner_state);
     if (!ps) {
-        fprintf(stderr, "NV2A combiners: Failed to get shader, "
+        NFS_LOG_DEBUG("graphics", "NV2A combiners: Failed to get shader, "
                 "falling back to FFP\n");
         return FALSE;
     }

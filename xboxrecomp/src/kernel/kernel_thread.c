@@ -10,6 +10,7 @@
  *   - Time intervals use NT 100-nanosecond units (negative = relative)
  *   - Thread priorities use NT KPRIORITY increments
  */
+#include "../../include/nfsu_log.h"
 
 #include <stdio.h>
 #include "kernel.h"
@@ -478,8 +479,8 @@ NTSTATUS __stdcall xbox_NtResumeThread(
         {   /* diagnostic: which handle, and is it a thread at all */
             static int shown;
             if (shown++ < 10)
-                fprintf(stderr, "  [KERNEL] NtResumeThread(%p) failed: error %lu, tid %lu\n",
-                        ThreadHandle, GetLastError(), GetThreadId(ThreadHandle));
+                NFS_LOG_INFO("runtime", "  [KERNEL] NtResumeThread(%p) failed: error %lu, tid %lu\n",
+                        ThreadHandle, (unsigned long)GetLastError(), (unsigned long)GetThreadId(ThreadHandle));
         }
         return STATUS_UNSUCCESSFUL;
     }
@@ -488,9 +489,9 @@ NTSTATUS __stdcall xbox_NtResumeThread(
         static XBOX_THREAD_LOCAL unsigned idle;
         if (prev == 0 && ThreadHandle == last) {
             if (++idle == 20000)
-                fprintf(stderr, "  [KERNEL] NtResumeThread: tid %lu resumes tid %lu (handle %p)"
+                NFS_LOG_INFO("runtime", "  [KERNEL] NtResumeThread: tid %lu resumes tid %lu (handle %p)"
                                 " 20000 times; it is never suspended\n",
-                        GetCurrentThreadId(), GetThreadId(ThreadHandle), ThreadHandle);
+                        (unsigned long)GetCurrentThreadId(), (unsigned long)GetThreadId(ThreadHandle), ThreadHandle);
         } else {
             idle = 0;
             last = ThreadHandle;

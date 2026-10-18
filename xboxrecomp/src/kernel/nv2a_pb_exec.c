@@ -24,6 +24,7 @@
  * has not given us any vertices". RECOMP_FB_DUMP=<prefix> writes the surface to
  * <prefix>NNN.bmp, so the result can be looked at without a display.
  */
+#include "../../include/nfsu_log.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -140,8 +141,7 @@ static int surface_write_refused(uint32_t base, uint32_t bytes, const char *what
         return 0;
     if (!said) {
         said = 1;
-        fprintf(stderr,
-                "  [GPU] REFUSING to %s surface 0x%08X..0x%08X: that overlaps "
+        NFS_LOG_DEBUG("graphics", "  [GPU] REFUSING to %s surface 0x%08X..0x%08X: that overlaps "
                 "the loaded image (0x%08X..0x%08X).\n"
                 "  [GPU]   SET_SURFACE_COLOR_OFFSET is a DMA-object offset, not "
                 "a guest VA, and this executor treats it as one. Writing here "
@@ -973,7 +973,7 @@ static void dump_surface_bmp(void)
     }
     fclose(f);
     if (seq == 1)
-        fprintf(stderr, "  [GPU] framebuffer dump: %s (%ux%u from 0x%08X %ubpp)\n",
+        NFS_LOG_DEBUG("graphics", "  [GPU] framebuffer dump: %s (%ux%u from 0x%08X %ubpp)\n",
                 path, w, h, s_gpu.color_offset, bpp);
 }
 
@@ -1024,7 +1024,7 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
             uint32_t key = (tex->color << 24) ^ (tex->width << 12) ^ tex->height, k;
             for (k = 0; k < 64 && seen[k].n && seen[k].key != key; k++) { }
             if (k < 64 && (seen[k].key = key, (seen[k].n++ % 1000) == 0))
-                fprintf(stderr, "  [TEX] decode fmt 0x%02X %ux%u pitch %u x%u\n",
+                NFS_LOG_DEBUG("graphics", "  [TEX] decode fmt 0x%02X %ux%u pitch %u x%u\n",
                         tex->color, tex->width, tex->height, tex->pitch, seen[k].n);
         }
     }
@@ -1114,7 +1114,7 @@ static void clear_surface(uint32_t param)
      * summary says drawing stopped; only a marker next to the surrounding
      * activity says what the title was doing when it stopped. */
     if ((s_gpu.clears % 100) == 0)
-        fprintf(stderr, "  [GPU] clear #%u\n", s_gpu.clears);
+        NFS_LOG_DEBUG("graphics", "  [GPU] clear #%u\n", s_gpu.clears);
     /* Distinct clear colours actually used. "Cleared to black" and "the clear
      * never ran" look identical in the framebuffer, and only one of them is a
      * bug -- so record what was asked for, not just how often. */
@@ -1126,7 +1126,7 @@ static void clear_surface(uint32_t param)
             if (seen[i] == s_gpu.clear_color) break;
         if (i == n && n < 8) {
             seen[n++] = s_gpu.clear_color;
-            fprintf(stderr, "  [GPU] clear colour 0x%08X -> surface 0x%08X"
+            NFS_LOG_DEBUG("graphics", "  [GPU] clear colour 0x%08X -> surface 0x%08X"
                             " (%ubpp)\n",
                     s_gpu.clear_color, s_gpu.color_offset, surface_bpp());
         }
@@ -1156,7 +1156,7 @@ static void clear_surface(uint32_t param)
             c[0] = s_gpu.clip_w * 0.15f; c[1] = s_gpu.clip_h * 0.85f;
             raster_triangle(a, b, c, 0xFFFF00FFu, NULL);  /* magenta: never a clear colour */
             if (announced++ == 0)
-            fprintf(stderr, "  [GPU] raster self-test: triangle (%.0f,%.0f)"
+            NFS_LOG_DEBUG("graphics", "  [GPU] raster self-test: triangle (%.0f,%.0f)"
                             " (%.0f,%.0f) (%.0f,%.0f) into 0x%08X %ubpp\n",
                     a[0], a[1], b[0], b[1], c[0], c[1],
                     s_gpu.color_offset, surface_bpp());
@@ -1468,7 +1468,7 @@ static void dump_texture_bmp(uint32_t seq)
         }
     }
     fclose(f);
-    fprintf(stderr, "  [TEXDUMP] %s (%ux%u fmt 0x%02X)\n",
+    NFS_LOG_DEBUG("graphics", "  [TEXDUMP] %s (%ux%u fmt 0x%02X)\n",
             path, w, h, s_gpu.tex.color);
     fflush(stderr);
 }
@@ -2685,12 +2685,12 @@ static VpcProg *vpc_get(void)
         vpc_analyse(p);
         if (getenv("RECOMP_CULL_TRACE") && shown++ < 40) {
             uint32_t i;
-            fprintf(stderr, "[cull] program at %u: %s%s, slice %u, oPos types x %d y %d w %d, den %d%s\n",
+            NFS_LOG_DEBUG("graphics", "[cull] program at %u: %s%s, slice %u, oPos types x %d y %d w %d, den %d%s\n",
                     p->start, p->ok ? "eligible" : "not eligible: ", p->ok ? "" : p->why,
                     p->n, p->tx, p->ty, p->tw, p->den, p->fast ? ", fast form" : "");
             for (i = 0; i < p->n; i++) {
                 const VpcIns *q = &p->ins[i];
-                fprintf(stderr, "[cull]   %s%s mac %u ilu %u dst r%u.%X ird r%u.%X out %u:%u.%X%s v%u c%u%s | "
+                NFS_LOG_DEBUG("graphics", "[cull]   %s%s mac %u ilu %u dst r%u.%X ird r%u.%X out %u:%u.%X%s v%u c%u%s | "
                         "A %u:%u%s.%u%u%u%u B %u:%u%s.%u%u%u%u C %u:%u%s.%u%u%u%u\n", q->run_mac ? "M" : "-", q->run_ilu ? "I" : "-", q->mac, q->ilu, q->dst, q->mmask, q->ird,
                         q->imask, q->o_out, q->o_addr, q->omask, q->o_ilu ? "(ilu)" : "", q->vattr,
                         q->cidx, q->rel ? "+a0" : "",
@@ -3035,12 +3035,12 @@ static void cull_report(void)
     frames = s_gpu.flips - s_cull.flips0;
     if (!frames)
         frames = 1;
-    fprintf(stderr, "[cull] program lookups %u, analysed %u\n", s_vpc_lookups, s_vpc_analysed);
-    fprintf(stderr, "[cull] test %.2f us/draw, %.0f vertices/draw\n",
+    NFS_LOG_DEBUG("graphics", "[cull] program lookups %u, analysed %u\n", s_vpc_lookups, s_vpc_analysed);
+    NFS_LOG_DEBUG("graphics", "[cull] test %.2f us/draw, %.0f vertices/draw\n",
             s_cull.draws ? s_cull.ns / 1000.0 / s_cull.draws : 0.0,
             s_cull.draws ? (double)s_cull.verts / s_cull.draws : 0.0);
     s_cull.ns = s_cull.verts = 0;
-    fprintf(stderr, "[cull] per frame: %u draws, %u tested, %u off screen%s; not tested: %u program, "
+    NFS_LOG_DEBUG("graphics", "[cull] per frame: %u draws, %u tested, %u off screen%s; not tested: %u program, "
             "%u attribute, %u behind the eye; check mismatches %u | same as previous: %u all, "
             "%u but constants, %u but constants+vertices\n",
             s_cull.draws / frames, s_cull.tested / frames, s_cull.culled / frames,
@@ -3128,7 +3128,7 @@ static int cull_batch(uint32_t lo, uint32_t nv)
         s_cull.culled++;
         if (s_cull.check && cull_check()) {
             if (s_cull.check_bad++ < 20)
-                fprintf(stderr, "[cull] MISMATCH: batch rejected but a vertex is on screen "
+                NFS_LOG_DEBUG("graphics", "[cull] MISMATCH: batch rejected but a vertex is on screen "
                         "(xform %s, prog start %u, %u indices)\n", vp ? "program" : "fixed",
                         s_vp.prog_start, s_gpu.idx_count);
             off = 0;
@@ -3335,7 +3335,7 @@ static void raster_batch(void)
             if ((shown++ % 1000) == 0) {
                 float p[4] = {0};
                 int ok = fetch_position(s_gpu.idx[0], p);
-                fprintf(stderr, "  [SKIP] xform=%u vp=%d ffp=%d prog_start=%u "
+                NFS_LOG_DEBUG("graphics", "  [SKIP] xform=%u vp=%d ffp=%d prog_start=%u "
                         "n=%u attr0 off=%08X stride=%u type=%u | pos ok=%d "
                         "(%.2f %.2f %.3f rhw %.4f) clip %ux%u\n",
                         s_gpu.xform_mode, batch_is_vp(), batch_is_ffp(),
@@ -3345,7 +3345,7 @@ static void raster_batch(void)
                         s_gpu.clip_w, s_gpu.clip_h);
                 if (batch_is_vp()) {
                     const VpOut *o = vp_vertex(s_gpu.idx[0]);
-                    fprintf(stderr, "  [SKIP]   raw oPos %.2f %.2f %.3f %.3f  aa %g x %g\n",
+                    NFS_LOG_DEBUG("graphics", "  [SKIP]   raw oPos %.2f %.2f %.3f %.3f  aa %g x %g\n",
                             o->pos[0], o->pos[1], o->pos[2], o->pos[3],
                             (double)s_gpu.aa_sx, (double)s_gpu.aa_sy);
                 }
@@ -3370,7 +3370,7 @@ static void raster_batch(void)
             const float *m = s_gpu.composite;
             float in[4], out[4];
             uint32_t k;
-            fprintf(stderr, "  [FFP] batch %u prim %u n %u mode 0x%X vp_off %.2f %.2f %.2f"
+            NFS_LOG_DEBUG("graphics", "  [FFP] batch %u prim %u n %u mode 0x%X vp_off %.2f %.2f %.2f"
                             " clip %ux%u+%u+%u\n"
                             "  [FFP]   M = %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n",
                     s_gpu.batches_ffp, s_gpu.prim, s_gpu.idx_count, s_gpu.xform_mode,
@@ -3381,7 +3381,7 @@ static void raster_batch(void)
             for (k = 0; k < s_gpu.idx_count && k < 4; k++) {
                 fetch_attr(&s_gpu.attr[0], s_gpu.idx[k], in);
                 fetch_position(s_gpu.idx[k], out);
-                fprintf(stderr, "  [FFP]   v%u (%g %g %g %g) -> (%g %g %g %g)\n",
+                NFS_LOG_DEBUG("graphics", "  [FFP]   v%u (%g %g %g %g) -> (%g %g %g %g)\n",
                         s_gpu.idx[k], in[0], in[1], in[2], in[3],
                         out[0], out[1], out[2], out[3]);
             }
@@ -3405,7 +3405,7 @@ static void raster_batch(void)
     for_each_triangle(raster_tri, NULL);
 
     if (s_gpu.tris_drawn && (s_gpu.tris_drawn % 500) == 0)
-        fprintf(stderr, "  [GPU] %u triangles rasterised\n", s_gpu.tris_drawn);
+        NFS_LOG_DEBUG("graphics", "  [GPU] %u triangles rasterised\n", s_gpu.tris_drawn);
 
     /* Capture the surface while the geometry is still on it.
      *
@@ -3433,7 +3433,7 @@ static void draw_primitive(void)
         return;
     s_gpu.draws++;
     if (pb_verbose() && (s_gpu.draws % 200) == 0)
-        fprintf(stderr, "  [GPU] draw #%u\n", s_gpu.draws);
+        NFS_LOG_DEBUG("graphics", "  [GPU] draw #%u\n", s_gpu.draws);
     s_gpu.verts += s_gpu.idx_count;
 
     /* How many batches carry coordinates at all, and what range they span.
@@ -3465,9 +3465,9 @@ static void draw_primitive(void)
             from = e ? atol(e) : 0;
         }
         if (s_gpu.flips >= (uint32_t)from && shown++ < (from ? 3000 : 6)) {
-            fprintf(stderr, "  [GPU] --- batch at flip %u, xform mode %u, tex fmt 0x%08X addr %u/%u\n",
+            NFS_LOG_DEBUG("graphics", "  [GPU] --- batch at flip %u, xform mode %u, tex fmt 0x%08X addr %u/%u\n",
                     s_gpu.flips, s_gpu.xform_mode, s_tex_reg[1], s_gpu.tex.addr_u, s_gpu.tex.addr_v);
-            fprintf(stderr, "  [GPU]   light en %u mask 0x%X colmat 0x%X ctl 0x%X ambient %g %g %g"
+            NFS_LOG_DEBUG("graphics", "  [GPU]   light en %u mask 0x%X colmat 0x%X ctl 0x%X ambient %g %g %g"
                             " | comb ctl 0x%X c0 icw 0x%08X ocw 0x%08X a0 icw 0x%08X f0 0x%08X"
                             " fin 0x%08X/0x%08X | tex1 0x%08X ctl0 0x%08X | diffuse0 0x%08X attr2 %u\n",
                     s_reg[0x0314/4], s_reg[0x03BC/4], s_reg[0x0298/4], s_reg[0x0294/4],
@@ -3480,7 +3480,7 @@ static void draw_primitive(void)
                 float lc[4] = {0};
                 for (li = 0; li < 6; li++) {
                     uint32_t b = 0x1000 + li * 0x80;
-                    fprintf(stderr, "  [GPU]   light%u amb %g %g %g dif %g %g %g dir %g %g %g pos %g %g %g att %g %g %g\n",
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   light%u amb %g %g %g dif %g %g %g dir %g %g %g pos %g %g %g att %g %g %g\n",
                             li, reg_f(b), reg_f(b + 4), reg_f(b + 8),
                             reg_f(b + 0xC), reg_f(b + 0x10), reg_f(b + 0x14),
                             reg_f(b + 0x34), reg_f(b + 0x38), reg_f(b + 0x3C),
@@ -3491,10 +3491,10 @@ static void draw_primitive(void)
                     const float *mv = (const float *)&s_reg[0x0480 / 4];
                     const float *im = (const float *)&s_reg[0x0580 / 4];
                     float nn[4];
-                    fprintf(stderr, "  [GPU]   MV %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n",
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   MV %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n",
                             mv[0], mv[1], mv[2], mv[3], mv[4], mv[5], mv[6], mv[7],
                             mv[8], mv[9], mv[10], mv[11], mv[12], mv[13], mv[14], mv[15]);
-                    fprintf(stderr, "  [GPU]   IMV %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n",
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   IMV %g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g\n",
                             im[0], im[1], im[2], im[3], im[4], im[5], im[6], im[7],
                             im[8], im[9], im[10], im[11], im[12], im[13], im[14], im[15]);
                     if (s_gpu.idx_count && fetch_attr(&s_gpu.attr[2], s_gpu.idx[0], nn)) {
@@ -3505,7 +3505,7 @@ static void draw_primitive(void)
                             ee[q] = mv[4*q]*pp[0] + mv[4*q+1]*pp[1] + mv[4*q+2]*pp[2] + mv[4*q+3];
                             ne[q] = mv[4*q]*nn[0] + mv[4*q+1]*nn[1] + mv[4*q+2]*nn[2];
                         }
-                        fprintf(stderr, "  [GPU]   normal v0 %g %g %g | eye pos %g %g %g | eye n %g %g %g | n.toEye %g"
+                        NFS_LOG_DEBUG("graphics", "  [GPU]   normal v0 %g %g %g | eye pos %g %g %g | eye n %g %g %g | n.toEye %g"
                                         " | half0 %g %g %g half1 %g %g %g | twoside %u\n",
                                 nn[0], nn[1], nn[2], ee[0], ee[1], ee[2], ne[0], ne[1], ne[2],
                                 -(ee[0]*ne[0] + ee[1]*ne[1] + ee[2]*ne[2]),
@@ -3514,11 +3514,11 @@ static void draw_primitive(void)
                     }
                 }
                 if (s_gpu.idx_count && lit_color(s_gpu.idx[0], lc))
-                    fprintf(stderr, "  [GPU]   lit v0 = %g %g %g %g  mat alpha %g emis %g %g %g\n",
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   lit v0 = %g %g %g %g  mat alpha %g emis %g %g %g\n",
                             lc[0], lc[1], lc[2], lc[3], reg_f(0x03B4),
                             reg_f(0x03A8), reg_f(0x03AC), reg_f(0x03B0));
             }
-            fprintf(stderr, "  [GPU]   blend %u %X/%X eq %X | depth %u func %X write %u | atest %u %X ref %u | cull %u\n",
+            NFS_LOG_DEBUG("graphics", "  [GPU]   blend %u %X/%X eq %X | depth %u func %X write %u | atest %u %X ref %u | cull %u\n",
                     s_gpu.rs.blend_enable, s_gpu.rs.blend_src, s_gpu.rs.blend_dst, s_gpu.rs.blend_eq,
                     s_gpu.rs.depth_test_enable, s_gpu.rs.depth_func, s_gpu.rs.depth_write,
                     s_gpu.rs.alpha_test_enable, s_gpu.rs.alpha_func, s_gpu.rs.alpha_ref,
@@ -3527,10 +3527,10 @@ static void draw_primitive(void)
                 static int prog_shown;
                 uint32_t pc;
                 if (!prog_shown++) {
-                    fprintf(stderr, "  [VP] start %u load %u const_load %u\n",
+                    NFS_LOG_DEBUG("graphics", "  [VP] start %u load %u const_load %u\n",
                             s_vp.prog_start, s_vp.prog_load, s_vp.const_load);
                     for (pc = s_vp.prog_start; pc < VP_SLOTS && pc < s_vp.prog_start + 40; pc++) {
-                        fprintf(stderr, "  [VP] %3u: %08X %08X %08X %08X\n", pc,
+                        NFS_LOG_DEBUG("graphics", "  [VP] %3u: %08X %08X %08X %08X\n", pc,
                                 s_vp.prog[pc][0], s_vp.prog[pc][1],
                                 s_vp.prog[pc][2], s_vp.prog[pc][3]);
                         if (s_vp.prog[pc][3] & 1)
@@ -3539,7 +3539,7 @@ static void draw_primitive(void)
                     for (pc = 0; pc < VP_CONSTS; pc++)
                         if (s_vp.c[pc][0] != 0.0f || s_vp.c[pc][1] != 0.0f
                          || s_vp.c[pc][2] != 0.0f || s_vp.c[pc][3] != 0.0f)
-                            fprintf(stderr, "  [VP] c%-3u %g %g %g %g\n", pc,
+                            NFS_LOG_DEBUG("graphics", "  [VP] c%-3u %g %g %g %g\n", pc,
                                     s_vp.c[pc][0], s_vp.c[pc][1], s_vp.c[pc][2], s_vp.c[pc][3]);
                 }
             }
@@ -3548,10 +3548,10 @@ static void draw_primitive(void)
                 float sp[4];
                 for (k = 0; k < s_gpu.idx_count && k < 4; k++)
                     if (fetch_position(s_gpu.idx[k], sp))
-                        fprintf(stderr, "  [GPU]   screen[%u] = %.1f %.1f z %.1f rhw %g\n",
+                        NFS_LOG_DEBUG("graphics", "  [GPU]   screen[%u] = %.1f %.1f z %.1f rhw %g\n",
                                 k, sp[0], sp[1], sp[2], sp[3]);
             }
-            fprintf(stderr, "  [GPU] prim %u, %u indices, pos attr:"
+            NFS_LOG_DEBUG("graphics", "  [GPU] prim %u, %u indices, pos attr:"
                             " off 0x%08X type %u size %u stride %u\n",
                     s_gpu.prim, s_gpu.idx_count, s_gpu.attr[0].offset,
                     s_gpu.attr[0].type, s_gpu.attr[0].size, s_gpu.attr[0].stride);
@@ -3560,7 +3560,7 @@ static void draw_primitive(void)
              * vertex arrays -- Half-Life 2's menu, for one -- showed no
              * texture state at all, and the reason a quad sampled flat was
              * invisible. */
-            fprintf(stderr, "  [GPU]   tex: off 0x%08X %ux%u pitch %u"
+            NFS_LOG_DEBUG("graphics", "  [GPU]   tex: off 0x%08X %ux%u pitch %u"
                             " colour 0x%02X swizzled %d valid %d\n",
                     s_gpu.tex.offset, s_gpu.tex.width, s_gpu.tex.height,
                     s_gpu.tex.pitch, s_gpu.tex.color,
@@ -3570,7 +3570,7 @@ static void draw_primitive(void)
                 for (k = 0; k < s_gpu.idx_count && k < 3; k++) {
                     float t[2];
                     if (fetch_texcoord(s_gpu.idx[k], t))
-                        fprintf(stderr, "  [GPU]   uv[%u] = %.3f %.3f\n",
+                        NFS_LOG_DEBUG("graphics", "  [GPU]   uv[%u] = %.3f %.3f\n",
                                 k, t[0], t[1]);
                 }
             }
@@ -3578,17 +3578,17 @@ static void draw_primitive(void)
              * vertices are the payload -- so print the payload too. */
             if (s_gpu.inline_active) {
                 uint32_t k;
-                fprintf(stderr, "  [GPU]   inline %u dwords:", s_gpu.inline_count);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "  [GPU]   inline %u dwords:", s_gpu.inline_count);
                 for (k = 0; k < s_gpu.inline_count && k < 16; k++)
-                    fprintf(stderr, " %08X", s_gpu.inline_buf[k]);
-                fprintf(stderr, "\n");
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %08X", s_gpu.inline_buf[k]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
                 for (k = 0; k < s_gpu.idx_count && k < 4; k++) {
                     float t[2];
                     if (fetch_texcoord(s_gpu.idx[k], t))
-                        fprintf(stderr, "  [GPU]   uv[%u] = %.3f %.3f\n",
+                        NFS_LOG_DEBUG("graphics", "  [GPU]   uv[%u] = %.3f %.3f\n",
                                 k, t[0], t[1]);
                 }
-                fprintf(stderr, "  [GPU]   tex: off 0x%08X %ux%u pitch %u"
+                NFS_LOG_DEBUG("graphics", "  [GPU]   tex: off 0x%08X %ux%u pitch %u"
                                 " colour 0x%02X valid %d\n",
                         s_gpu.tex.offset, s_gpu.tex.width, s_gpu.tex.height,
                         s_gpu.tex.pitch, s_gpu.tex.color, s_gpu.tex.valid);
@@ -3606,7 +3606,7 @@ static void draw_primitive(void)
                         continue;
                     for (k = 0; k < 64; k++)
                         if (mem[at->offset + k]) nz++;
-                    fprintf(stderr, "  [GPU]   attr%-2u off 0x%08X type %u"
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   attr%-2u off 0x%08X type %u"
                                     " size %u stride %-3u  %u/64 bytes set\n",
                             a, at->offset, at->type, at->size, at->stride, nz);
                 }
@@ -3617,18 +3617,18 @@ static void draw_primitive(void)
                  * buffer genuinely has not been filled yet. */
                 const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
                 uint32_t k;
-                fprintf(stderr, "  [GPU]   bytes @0x%08X:", s_gpu.attr[0].offset);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "  [GPU]   bytes @0x%08X:", s_gpu.attr[0].offset);
                 for (k = 0; k < 32; k++)
-                    fprintf(stderr, " %02X", mem[s_gpu.attr[0].offset + k]);
-                fprintf(stderr, "\n");
-                fprintf(stderr, "  [GPU]   indices:");
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %02X", mem[s_gpu.attr[0].offset + k]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "  [GPU]   indices:");
                 for (k = 0; k < s_gpu.idx_count && k < 8; k++)
-                    fprintf(stderr, " %u", s_gpu.idx[k]);
-                fprintf(stderr, "\n");
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %u", s_gpu.idx[k]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
             }
             for (i = 0; i < s_gpu.idx_count && i < 3; i++) {
                 if (fetch_attr(&s_gpu.attr[0], s_gpu.idx[i], v))
-                    fprintf(stderr, "  [GPU]   v[%u] = %.3f %.3f %.3f %.3f\n",
+                    NFS_LOG_DEBUG("graphics", "  [GPU]   v[%u] = %.3f %.3f %.3f %.3f\n",
                             s_gpu.idx[i], v[0], v[1], v[2], v[3]);
             }
         }
@@ -4000,7 +4000,7 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
             InterlockedExchange(&s_trap_lock, 0);
         }
         if (GetTickCount64() > give_up) {
-            fprintf(stderr, "  [PB] NOP(%u) trap still pending after 2 s "
+            NFS_LOG_DEBUG("graphics", "  [PB] NOP(%u) trap still pending after 2 s "
                     "(PMC_INTR %08X EN %08X)\n", param, nv[0x100 / 4],
                     nv[0x140 / 4]);
             give_up = GetTickCount64() + 2000;
@@ -4009,7 +4009,7 @@ static void trap_deliver_hooked(volatile uint32_t *nv, uint32_t method,
     }
     xbox_set_irq_line(3, 0);
     if ((++handled_n & 1023) == 0)
-        fprintf(stderr, "  [PB] NOP trap handled, %u so far\n", handled_n);
+        NFS_LOG_DEBUG("graphics", "  [PB] NOP trap handled, %u so far\n", handled_n);
     xbox_Nv2aHoldInterrupts(0);
 }
 
@@ -4058,7 +4058,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
     if (pb_verbose() && (method == 0x17C4 || (method >= 0x0C00 && method < 0x0C24))) {
         static int shown;
         if (shown++ < 20)
-            fprintf(stderr, "  [GPU] back-light method 0x%04X = 0x%08X\n", method, param);
+            NFS_LOG_DEBUG("graphics", "  [GPU] back-light method 0x%04X = 0x%08X\n", method, param);
     }
     /* BACK_END_WRITE_SEMAPHORE_RELEASE. The title's pointer already names the
      * semaphore word; SET_SEMAPHORE_OFFSET is not added (in X-Men Legends it
@@ -4132,7 +4132,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             nv[0x400100 / 4] |= 1;
             nv[0x000100 / 4] |= 0x1000;
             if (GetTickCount64() > give_up) {
-                fprintf(stderr, "  [PB] NOP(%u) trap still pending after 2 s "
+                NFS_LOG_DEBUG("graphics", "  [PB] NOP(%u) trap still pending after 2 s "
                         "(PMC_INTR %08X EN %08X)\n", param, nv[0x100 / 4],
                         nv[0x140 / 4]);
                 give_up = GetTickCount64() + 2000;
@@ -4161,7 +4161,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             if (!ok || shown++ < 8 || (handled_n & 1023) == 0)
             {
                 extern int xbox_IrqlRaisedCount(void);
-                fprintf(stderr, "  [PB] NOP(%u) trap %s, %u handled so far "
+                NFS_LOG_DEBUG("graphics", "  [PB] NOP(%u) trap %s, %u handled so far "
                         "(PMC_INTR %08X EN %08X PGRAPH_INTR %08X irql-raised %d)\n",
                         param, ok ? "handled" : "timed out", handled_n,
                         nv[0x100 / 4], nv[0x140 / 4], nv[0x400100 / 4],
@@ -4203,7 +4203,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         default: break;
         }
         if (slot >= 0 && shown[slot]++ < 4)
-            fprintf(stderr, "  [GPU] subch %u method 0x%04X param 0x%08X\n",
+            NFS_LOG_DEBUG("graphics", "  [GPU] subch %u method 0x%04X param 0x%08X\n",
                     subch, method, param);
     }
 
@@ -4214,7 +4214,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
             trace2d = e && *e && *e != '0';
         }
         if (trace2d && shown2d++ < 4000)
-            fprintf(stderr, "  [2D] subch %u method 0x%04X param 0x%08X\n",
+            NFS_LOG_DEBUG("graphics", "  [2D] subch %u method 0x%04X param 0x%08X\n",
                     subch, method, param);
         note_unhandled(method, param);
         return;
@@ -4362,7 +4362,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
                 if (GetTickCount64() > give_up) {
                     static unsigned timeouts;
                     if (timeouts++ < 8)
-                        fprintf(stderr, "  [PB] FLIP_STALL: no flip retired in 250 ms "
+                        NFS_LOG_DEBUG("graphics", "  [PB] FLIP_STALL: no flip retired in 250 ms "
                                 "(read %u write %u), going on\n",
                                 s_gpu.flip_read, s_gpu.flip_write);
                     /* Taken as a lost sync: the read index one off the
@@ -4409,7 +4409,7 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
         if (pb_verbose()) {
             static unsigned n;
             if (n++ < 8) {
-                fprintf(stderr, "  [GPU] flip %u: read=%u write=%u\n",
+                NFS_LOG_DEBUG("graphics", "  [GPU] flip %u: read=%u write=%u\n",
                         s_gpu.flips, s_gpu.flip_read, s_gpu.flip_write);
                 fflush(stderr);
             }
@@ -4563,7 +4563,7 @@ static void find_quad_vertices(void)
     const uint32_t *ram = (const uint32_t *)xbox_GetMemoryOffset();
     uint32_t i, hits = 0;
 
-    fprintf(stderr, "[GPU] searching guest RAM for 640.0f/480.0f pairs...\n");
+    NFS_LOG_DEBUG("graphics", "[GPU] searching guest RAM for 640.0f/480.0f pairs...\n");
     for (i = 0x1000 / 4; i < (0x04000000u / 4) - 8 && hits < 12; i++) {
         if (ram[i] != W && ram[i] != H)
             continue;
@@ -4580,17 +4580,17 @@ static void find_quad_vertices(void)
                 continue;
         }
         hits++;
-        fprintf(stderr, "  [GPU]   0x%08X:", i * 4);
+        NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "  [GPU]   0x%08X:", i * 4);
         {
             uint32_t k;
             for (k = 0; k < 8; k++)
-                fprintf(stderr, " %08X", ram[i + k]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %08X", ram[i + k]);
         }
-        fprintf(stderr, "\n");
+        NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
         i += 8;
     }
     if (!hits)
-        fprintf(stderr, "  [GPU]   none found -- the quad is not in RAM in"
+        NFS_LOG_DEBUG("graphics", "  [GPU]   none found -- the quad is not in RAM in"
                         " that form\n");
     fflush(stderr);
 }
@@ -4607,22 +4607,22 @@ static void find_nan_matrices(void)
     const uint32_t *ram = (const uint32_t *)xbox_GetMemoryOffset();
     uint32_t i, hits = 0;
 
-    fprintf(stderr, "[GPU] searching guest RAM for NaN matrices...\n");
+    NFS_LOG_DEBUG("graphics", "[GPU] searching guest RAM for NaN matrices...\n");
     for (i = 0x1000 / 4; i < (0x04000000u / 4) - 20 && hits < 10; i++) {
         if (ram[i] != NAN_NEG || ram[i + 1] != NAN_NEG || ram[i + 2] != NAN_NEG)
             continue;
         hits++;
-        fprintf(stderr, "  [GPU]   0x%08X:", i * 4);
+        NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "  [GPU]   0x%08X:", i * 4);
         {
             uint32_t k;
             for (k = 0; k < 16; k++)
-                fprintf(stderr, " %08X", ram[i + k]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %08X", ram[i + k]);
         }
-        fprintf(stderr, "\n");
+        NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
         i += 16;
     }
     if (!hits)
-        fprintf(stderr, "  [GPU]   none in RAM -- the NaNs are computed into"
+        NFS_LOG_DEBUG("graphics", "  [GPU]   none in RAM -- the NaNs are computed into"
                         " registers, not stored\n");
     fflush(stderr);
 }
@@ -4652,7 +4652,7 @@ static void peek_addresses(void)
             continue;
         v = *(const uint32_t *)(mem + va);
         memcpy(&f, &v, 4);
-        fprintf(stderr, "  [PEEK] 0x%08X = %08X  (%g)\n", va, v, f);
+        NFS_LOG_DEBUG("graphics", "  [PEEK] 0x%08X = %08X  (%g)\n", va, v, f);
     }
     fflush(stderr);
 }
@@ -4681,21 +4681,21 @@ static void peek_chain(void)
         uint32_t off = (uint32_t)strtoul(tok, NULL, 0);
         if (step == 0) {
             cur = off;
-            fprintf(stderr, "  [CHAIN] start 0x%08X\n", cur);
+            NFS_LOG_DEBUG("graphics", "  [CHAIN] start 0x%08X\n", cur);
         } else {
             if (cur < 0x1000u || cur + 4 >= 0x04000000u) {
-                fprintf(stderr, "  [CHAIN] step %d: 0x%08X is not a guest"
+                NFS_LOG_DEBUG("graphics", "  [CHAIN] step %d: 0x%08X is not a guest"
                                 " pointer -- chain ends\n", step, cur);
                 return;
             }
             cur = *(const uint32_t *)(mem + cur) + off;
-            fprintf(stderr, "  [CHAIN] step %d: deref +0x%X -> 0x%08X\n",
+            NFS_LOG_DEBUG("graphics", "  [CHAIN] step %d: deref +0x%X -> 0x%08X\n",
                     step, off, cur);
         }
         step++;
     }
     if (cur >= 0x1000u && cur + 4 < 0x04000000u)
-        fprintf(stderr, "  [CHAIN] final value at 0x%08X = 0x%08X\n",
+        NFS_LOG_DEBUG("graphics", "  [CHAIN] final value at 0x%08X = 0x%08X\n",
                 cur, *(const uint32_t *)(mem + cur));
     fflush(stderr);
 }
@@ -4720,12 +4720,12 @@ void nv2a_pb_exec_report(void)
     }
     int i, j;
 
-    fprintf(stderr, "[GPU] surface 0x%08X pitch %u clip %ux%u+%u+%u"
+    NFS_LOG_WARN("graphics", "[GPU] surface 0x%08X pitch %u clip %ux%u+%u+%u"
                     " clears %u | %u unhandled methods (%d distinct)\n",
             s_gpu.color_offset, s_gpu.pitch, s_gpu.clip_w, s_gpu.clip_h,
             s_gpu.clip_x, s_gpu.clip_y, s_gpu.clears,
             s_gpu.unhandled_total, s_unhandled_count);
-    fprintf(stderr, "[GPU] draws %u (%u with coordinates), %u indices;"
+    NFS_LOG_DEBUG("graphics", "[GPU] draws %u (%u with coordinates), %u indices;"
                     " x %.1f..%.1f  y %.1f..%.1f\n",
             s_gpu.draws, s_gpu.nonzero_draws, s_gpu.verts,
             s_gpu.min_x, s_gpu.max_x, s_gpu.min_y, s_gpu.max_y);
@@ -4736,13 +4736,13 @@ void nv2a_pb_exec_report(void)
     /* Drawn and skipped separately: "nothing appeared" and "every batch needed
      * a vertex program we do not run" look identical on screen, and only one
      * of them means the rasteriser is broken. */
-    fprintf(stderr, "[GPU] brightest pixel written 0x%08X\n", s_gpu.pixel_max);
-    fprintf(stderr, "[GPU] %llu pixels written; draw surface 0x%08X"
+    NFS_LOG_DEBUG("graphics", "[GPU] brightest pixel written 0x%08X\n", s_gpu.pixel_max);
+    NFS_LOG_DEBUG("graphics", "[GPU] %llu pixels written; draw surface 0x%08X"
                     " -> 0x%08X, clear surface 0x%08X -> 0x%08X\n",
             (unsigned long long)s_gpu.pixels, s_gpu.drawn_offset,
             dma_resolve(s_gpu.drawn_offset), s_gpu.color_offset,
             dma_resolve(s_gpu.color_offset));
-    fprintf(stderr, "[GPU] rasterised %u triangles; %u batches skipped as not"
+    NFS_LOG_DEBUG("graphics", "[GPU] rasterised %u triangles; %u batches skipped as not"
                     " screen-space, %u triangles fully off-surface;"
                     " %u batches via the fixed-function transform\n",
             s_gpu.tris_drawn, s_gpu.batches_untransformed,
@@ -4752,11 +4752,11 @@ void nv2a_pb_exec_report(void)
      * that draws its background from one texture and its text from another
      * shows both as flat colour if either half is missing, so the split is
      * what says which half. */
-    fprintf(stderr, "[GPU] batches: %u textured, %u with no texcoords,"
+    NFS_LOG_DEBUG("graphics", "[GPU] batches: %u textured, %u with no texcoords,"
                     " %u with texcoords but no usable stage\n",
             s_gpu.batches_textured, s_gpu.batches_no_uv, s_gpu.batches_no_tex);
     for (i = 0; i < s_tex_use_count; i++)
-        fprintf(stderr, "  [TEXUSE] 0x%08X %ux%u fmt 0x%02X%s: %u batches\n",
+        NFS_LOG_DEBUG("graphics", "  [TEXUSE] 0x%08X %ux%u fmt 0x%02X%s: %u batches\n",
                 s_tex_use[i].offset, s_tex_use[i].width, s_tex_use[i].height,
                 s_tex_use[i].color,
                 d3d8_format_dxt_block_bytes(s_tex_use[i].color) ? " dxt"
@@ -4767,7 +4767,7 @@ void nv2a_pb_exec_report(void)
         uint32_t k;
         for (k = 0; k < sizeof s_tex_set / sizeof s_tex_set[0]; k++)
             if (s_tex_set[k])
-                fprintf(stderr, "  [TEX] 0x%04X = 0x%08X\n",
+                NFS_LOG_DEBUG("graphics", "  [TEX] 0x%04X = 0x%08X\n",
                         (unsigned)(NV_TEX_FIRST + k * 4), s_tex_reg[k]);
     }
 
@@ -4799,7 +4799,7 @@ void nv2a_pb_exec_report(void)
              * is using. */
             union { uint32_t u; float f; } v;
             v.u = s_unhandled[i].last_param;
-            fprintf(stderr, "  [GPU]   0x%04X x%-8u last=0x%08X (%.4f)\n",
+            NFS_LOG_DEBUG("graphics", "  [GPU]   0x%04X x%-8u last=0x%08X (%.4f)\n",
                     s_unhandled[i].method, s_unhandled[i].count,
                     v.u, v.f);
         }

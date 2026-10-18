@@ -6,6 +6,7 @@
  *
  * Most of these map 1:1 to Win32 CRT functions.
  */
+#include "../../include/nfsu_log.h"
 
 #include "kernel.h"
 #include "recomp_context.h"
@@ -258,7 +259,7 @@ static CRITICAL_SECTION* xbox_cs_shadow(PRTL_CRITICAL_SECTION guest)
         const char* mode = getenv("RECOMP_CS_MODE");
         g_cs_single_mode = (mode && !strcmp(mode, "single")) ? 1 : 0;
         if (g_cs_single_mode)
-            fprintf(stderr, "  [CS] RECOMP_CS_MODE=single: every guest lock "
+            NFS_LOG_DEBUG("runtime", "  [CS] RECOMP_CS_MODE=single: every guest lock "
                             "shares one recursive lock\n");
     }
     if (g_cs_single_mode) {
@@ -375,7 +376,7 @@ static void xbox_guest_backtrace(int depth)
         uint32_t word = *(const uint32_t *)((uintptr_t)(sp + i * 4)
                                             + g_xbox_mem_offset);
         if (word >= g_xbox_code_lo && word < g_xbox_code_hi) {
-            fprintf(stderr, "  [CS]     guest 0x%08X\n", word);
+            NFS_LOG_DEBUG("runtime", "  [CS]     guest 0x%08X\n", word);
             shown++;
         }
     }
@@ -460,23 +461,23 @@ static void crt_lock_trace(const char *what, PRTL_CRITICAL_SECTION guest)
             watch_va = w ? (uint32_t)strtoul(w, NULL, 0) : 0;
         }
         if (watch && va == watch_va) {
-            fprintf(stderr, "  [CSWATCH] t%-6lu %s 0x%08X\n",
-                    GetCurrentThreadId(), what, va);
+            NFS_LOG_INFO("runtime", "  [CSWATCH] t%-6lu %s 0x%08X\n",
+                    (unsigned long)GetCurrentThreadId(), what, va);
             xbox_guest_backtrace(8);
             fflush(stderr);
         }
     }
 
     if (all) {
-        fprintf(stderr, "  [CSTRACE] t%-6lu %-4s 0x%08X idx %d\n",
-                GetCurrentThreadId(), what, va, idx);
+        NFS_LOG_INFO("runtime", "  [CSTRACE] t%-6lu %-4s 0x%08X idx %d\n",
+                (unsigned long)GetCurrentThreadId(), what, va, idx);
         fflush(stderr);
         return;
     }
     if (idx < 0)
         return;
-    fprintf(stderr, "  [CSTRACE] t%-6lu %-4s lock %d\n",
-            GetCurrentThreadId(), what, idx);
+    NFS_LOG_INFO("runtime", "  [CSTRACE] t%-6lu %-4s lock %d\n",
+            (unsigned long)GetCurrentThreadId(), what, idx);
     fflush(stderr);
 }
 
@@ -526,9 +527,9 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
         return;
     }
     if (InterlockedIncrement(&g_cs_contention_reports) <= 16) {
-        fprintf(stderr, "  [CS] thread %lu waiting on guest lock 0x%08X"
+        NFS_LOG_DEBUG("runtime", "  [CS] thread %lu waiting on guest lock 0x%08X"
                         " (held by thread %lu)\n",
-                GetCurrentThreadId(),
+                (unsigned long)GetCurrentThreadId(),
                 (uint32_t)((uintptr_t)CriticalSection
                            - (uintptr_t)g_xbox_mem_offset),
                 (unsigned long)(uintptr_t)cs->OwningThread);
@@ -537,7 +538,7 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
                 (uint32_t)((uintptr_t)CriticalSection
                            - (uintptr_t)g_xbox_mem_offset));
             if (idx >= 0)
-                fprintf(stderr, "  [CS]   that is CRT lock %d\n", idx);
+                NFS_LOG_DEBUG("runtime", "  [CS]   that is CRT lock %d\n", idx);
         }
         {
             /* Where the holder took it. The waiter's own backtrace below
@@ -545,12 +546,12 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
              * at. */
             XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
             if (slot && slot->owner_tid)
-                fprintf(stderr, "  [CS]   holder thread %lu took it at guest"
+                NFS_LOG_DEBUG("runtime", "  [CS]   holder thread %lu took it at guest"
                                 " 0x%08X (depth %ld)\n",
                         slot->owner_tid, slot->owner_site, slot->depth);
         }
-        fprintf(stderr, "  [CS] enters=%ld leaves=%ld (outstanding %ld)\n",
-                g_cs_enters, g_cs_leaves, g_cs_enters - g_cs_leaves);
+        NFS_LOG_DEBUG("runtime", "  [CS] enters=%ld leaves=%ld (outstanding %ld)\n",
+                (long)g_cs_enters, (long)g_cs_leaves, (long)(g_cs_enters - g_cs_leaves));
         xbox_guest_backtrace(10);
         fflush(stderr);
     }
@@ -576,8 +577,8 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
 #endif
     xbox_cs_note_owner(cs);
     if (g_cs_contention_reports <= 16) {
-        fprintf(stderr, "  [CS] thread %lu acquired 0x%08X\n",
-                GetCurrentThreadId(),
+        NFS_LOG_DEBUG("runtime", "  [CS] thread %lu acquired 0x%08X\n",
+                (unsigned long)GetCurrentThreadId(),
                 (uint32_t)((uintptr_t)CriticalSection
                            - (uintptr_t)g_xbox_mem_offset));
         fflush(stderr);

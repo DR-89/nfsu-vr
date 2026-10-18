@@ -6,6 +6,7 @@
  * plus a trace of every register access, because what the driver does after
  * that decides how the rest gets built.
  */
+#include "../../include/nfsu_log.h"
 #include "ohci.h"
 #include "../platform/mmio_decode.h"
 #include "../kernel/xbox_memory_layout.h"
@@ -211,7 +212,7 @@ static uint64_t ohci_read(void *dev, uint32_t off, int size)
     if (s_trace) {
         static unsigned n;
         if (n++ < 600)
-            fprintf(stderr, "  [OHCI%d] read  +0x%02X = %08X\n",
+            NFS_LOG_INFO("input", "  [OHCI%d] read  +0x%02X = %08X\n",
                     hc->index, off, (uint32_t)v);
     }
     return v;
@@ -231,7 +232,7 @@ static void ohci_write(void *dev, uint32_t off, uint64_t val, int size)
     if (s_trace) {
         static unsigned n;
         if (n++ < 600)
-            fprintf(stderr, "  [OHCI%d] write +0x%02X = %08X\n",
+            NFS_LOG_INFO("input", "  [OHCI%d] write +0x%02X = %08X\n",
                     hc->index, off, v);
     }
 
@@ -577,7 +578,7 @@ static uint32_t ohci_do_td(OhciController *hc, uint32_t ed0, uint32_t td)
     if (s_trace) {
         static unsigned n;
         if (n++ < 80) {
-            fprintf(stderr, "  [OHCI%d] TD %08X dp=%u ep=%u cbp=%08X be=%08X "
+            NFS_LOG_INFO("input", "  [OHCI%d] TD %08X dp=%u ep=%u cbp=%08X be=%08X "
                             "len=%d\n", hc->index, td, dp, endpoint, cbp, be,
                     len);
             fflush(stderr);
@@ -597,7 +598,7 @@ static uint32_t ohci_do_td(OhciController *hc, uint32_t ed0, uint32_t td)
             c->len = -1;   /* answered lazily on the first IN */
             c->sent = 0;
             if (s_trace) {
-                fprintf(stderr, "  [OHCI%d] SETUP %02X %02X value %04X "
+                NFS_LOG_INFO("input", "  [OHCI%d] SETUP %02X %02X value %04X "
                                 "index %04X len %u\n",
                         hc->index, c->setup.bmRequestType, c->setup.bRequest,
                         c->setup.wValue, c->setup.wIndex, c->setup.wLength);
@@ -622,7 +623,7 @@ static uint32_t ohci_do_td(OhciController *hc, uint32_t ed0, uint32_t td)
                      * that sees one usually stops using the device -- so
                      * an unhandled request is not a gap that degrades
                      * gracefully, it is one that ends input. */
-                    fprintf(stderr, "  [OHCI%d] STALL: unhandled control "
+                    NFS_LOG_WARN("input", "  [OHCI%d] STALL: unhandled control "
                             "request %02X %02X value %04X index %04X len %u\n",
                             hc->index, c->setup.bmRequestType, c->setup.bRequest,
                             c->setup.wValue, c->setup.wIndex, c->setup.wLength);
@@ -644,7 +645,7 @@ static uint32_t ohci_do_td(OhciController *hc, uint32_t ed0, uint32_t td)
             c->sent += n;
             moved = n;
             if (s_trace && n > 0) {
-                fprintf(stderr, "  [OHCI%d] IN ep0 %d bytes (%d/%d)\n",
+                NFS_LOG_INFO("input", "  [OHCI%d] IN ep0 %d bytes (%d/%d)\n",
                         hc->index, n, c->sent, c->len);
                 fflush(stderr);
             }
@@ -655,7 +656,7 @@ static uint32_t ohci_do_td(OhciController *hc, uint32_t ed0, uint32_t td)
             int n = usb_gamepad_report(dev, rep, (int)sizeof rep);
             if (!polled[dev]) {
                 polled[dev] = 1;
-                fprintf(stderr, "  [OHCI%d] pad %d (address %u, port %u) "
+                NFS_LOG_INFO("input", "  [OHCI%d] pad %d (address %u, port %u) "
                         "polled\n", hc->index, dev + 1,
                         usb_gamepad_address(dev), s_dev_port[dev] + 1);
                 fflush(stderr);
@@ -717,7 +718,7 @@ static int ohci_walk_eds(OhciController *hc, uint32_t ed, uint32_t *done_head)
         if (s_trace) {
             static unsigned n;
             if (n++ < 60) {
-                fprintf(stderr, "  [OHCI%d] ED %08X info=%08X head=%08X "
+                NFS_LOG_INFO("input", "  [OHCI%d] ED %08X info=%08X head=%08X "
                                 "tail=%08X next=%08X\n", hc->index, ed, ed0,
                         head, tail, rd32(ed + 12));
                 fflush(stderr);
@@ -738,7 +739,7 @@ static int ohci_walk_eds(OhciController *hc, uint32_t ed, uint32_t *done_head)
                 static unsigned shown;
                 if (shown++ < 32) {
                     uint32_t t = next, k;
-                    fprintf(stderr, "  [OHCI%d] TD %08X ep %u -> cc %u (ED %08X info %08X,"
+                    NFS_LOG_INFO("input", "  [OHCI%d] TD %08X ep %u -> cc %u (ED %08X info %08X,"
                                     " TD info %08X, next %08X, ED tail %08X)"
                                     " own | %08X %08X %08X %08X\n",
                             hc->index, td, (ed0 >> 7) & 0xFu, cc, ed, ed0,
@@ -747,13 +748,13 @@ static int ohci_walk_eds(OhciController *hc, uint32_t ed, uint32_t *done_head)
                     /* The rest of the transfer, as the driver will walk it:
                      * hardware words, then its own +0x10..+0x1F fields. */
                     for (k = 0; k < 10 && t && t != tail; k++) {
-                        fprintf(stderr, "    TD %08X info %08X cbp %08X next %08X be %08X"
+                        NFS_LOG_INFO("input", "    TD %08X info %08X cbp %08X next %08X be %08X"
                                         " | %08X %08X %08X %08X\n",
                                 t, rd32(t), rd32(t + 4), rd32(t + 8), rd32(t + 12),
                                 rd32(t + 16), rd32(t + 20), rd32(t + 24), rd32(t + 28));
                         t = rd32(t + 8) & ED_PTR_MASK;
                     }
-                    fprintf(stderr, "    tail TD %08X info %08X next %08X | %08X %08X %08X %08X\n",
+                    NFS_LOG_INFO("input", "    tail TD %08X info %08X next %08X | %08X %08X %08X %08X\n",
                             tail, rd32(tail), rd32(tail + 8), rd32(tail + 16),
                             rd32(tail + 20), rd32(tail + 24), rd32(tail + 28));
                     fflush(stderr);
@@ -802,12 +803,12 @@ static void ohci_flush_done(OhciController *hc)
         static unsigned n;
         uint32_t t = held, k;
         if (n++ < 40) {
-            fprintf(stderr, "  [OHCI%d] done list:", hc->index);
+            NFS_LOG_STREAM("input", NFS_LOG_LEVEL_INFO, "  [OHCI%d] done list:", hc->index);
             for (k = 0; t && k < 12; k++) {
-                fprintf(stderr, " %08X", t);
+                NFS_LOG_STREAM("input", NFS_LOG_LEVEL_INFO, " %08X", t);
                 t = rd32(t + 8) & ED_PTR_MASK;
             }
-            fprintf(stderr, "%s\n", t ? " ..." : " (end)");
+            NFS_LOG_STREAM("input", NFS_LOG_LEVEL_INFO, "%s\n", t ? " ..." : " (end)");
             fflush(stderr);
         }
     }
@@ -878,7 +879,7 @@ static int ohci_run_periodic_list(OhciController *hc)
          * problem from a pad nobody serviced. */
         if (!hc->periodic_seen) {
             hc->periodic_seen = 1;
-            fprintf(stderr, "  [OHCI%d] periodic slot %u -> ED %08X "
+            NFS_LOG_INFO("input", "  [OHCI%d] periodic slot %u -> ED %08X "
                     "info=%08X\n", hc->index, slot, ed, rd32(ed));
             fflush(stderr);
         }
@@ -938,7 +939,7 @@ static int ohci_call_isr(OhciController *hc)
         static uint32_t last_ctx, last_first;
         uint32_t first = context ? *(uint32_t *)(mem + context) : 0;
         if (context != last_ctx || first != last_first) {
-            fprintf(stderr, "  [OHCI%d] ISR 0x%08X kinterrupt 0x%08X context 0x%08X"
+            NFS_LOG_INFO("input", "  [OHCI%d] ISR 0x%08X kinterrupt 0x%08X context 0x%08X"
                             " [context]=0x%08X\n",
                     hc->index, routine, kinterrupt, context, first);
             fflush(stderr);
@@ -949,7 +950,7 @@ static int ohci_call_isr(OhciController *hc)
 
     fn = recomp_lookup(routine);
     if (!fn) {
-        fprintf(stderr, "  [OHCI%d] ISR 0x%08X has no translation\n",
+        NFS_LOG_INFO("input", "  [OHCI%d] ISR 0x%08X has no translation\n",
                 hc->index, routine);
         fflush(stderr);
         return -1;
@@ -960,7 +961,7 @@ static int ohci_call_isr(OhciController *hc)
      * is not starved by a controller that interrupts. */
     slot = xbox_worker_stack_alloc();
     if (slot < 0) {
-        fprintf(stderr, "  [OHCI%d] no worker stack for the ISR\n", hc->index);
+        NFS_LOG_INFO("input", "  [OHCI%d] no worker stack for the ISR\n", hc->index);
         fflush(stderr);
         return -1;
     }
@@ -969,7 +970,7 @@ static int ohci_call_isr(OhciController *hc)
     {
         static int last_slot = -1;
         if (slot != last_slot) {
-            fprintf(stderr, "  [OHCI%d] ISR on worker stack slice %d (top 0x%08X)\n",
+            NFS_LOG_INFO("input", "  [OHCI%d] ISR on worker stack slice %d (top 0x%08X)\n",
                     hc->index, slot, g_esp);
             fflush(stderr);
             last_slot = slot;
@@ -1009,7 +1010,7 @@ static void ohci_raise(OhciController *hc, uint32_t source)
     if (s_trace || claimed >= 0) {
         static unsigned n;
         if (n++ < 20) {
-            fprintf(stderr, "  [OHCI%d] raised %08X -> ISR %s\n",
+            NFS_LOG_INFO("input", "  [OHCI%d] raised %08X -> ISR %s\n",
                     hc->index, source,
                     claimed < 0 ? "not callable" :
                     claimed ? "claimed it" : "declined it");
@@ -1128,7 +1129,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
     {
         uint32_t tib = xbox_AllocThreadTib();
         if (!tib) {
-            fprintf(stderr, "  [OHCI0] no TIB for the controller thread; "
+            NFS_LOG_INFO("input", "  [OHCI0] no TIB for the controller thread; "
                             "not delivering interrupts\n");
             fflush(stderr);
             return 0;
@@ -1151,7 +1152,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
              * USB bring-up well past 30 s, and giving up then means the pad
              * never arrives. Say so once, and keep waiting. */
             if (++waited == 30000u / OHCI_TICK_MS)
-                fprintf(stderr, "  [OHCI0] not started after 30 s; still waiting\n");
+                NFS_LOG_INFO("input", "  [OHCI0] not started after 30 s; still waiting\n");
             continue;
         }
         if (!(enable & INTR_MIE))
@@ -1165,7 +1166,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
         if (!plugged && (enable & INTR_RHSC)) {
             ohci_plug(hc, 0, 1);
             plugged = 1;
-            fprintf(stderr, "  [OHCI0] operational after %u ms; device "
+            NFS_LOG_INFO("input", "  [OHCI0] operational after %u ms; device "
                             "arriving on port %u\n", waited * OHCI_TICK_MS,
                     s_dev_port[0] + 1);
             fflush(stderr);
@@ -1182,7 +1183,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
                 int want = usb_gamepad_connected((int)d);
                 if (want != s_dev_plugged[d]) {
                     ohci_plug(hc, d, want);
-                    fprintf(stderr, "  [OHCI%d] pad %u %s port %u\n",
+                    NFS_LOG_INFO("input", "  [OHCI%d] pad %u %s port %u\n",
                             hc->index, d + 1,
                             want ? "plugged into" : "unplugged from",
                             s_dev_port[d] + 1);
@@ -1211,7 +1212,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
 
             if (hcca && hcca != shown_hcca) {
                 shown_hcca = hcca;
-                fprintf(stderr, "  [OHCI%d] HcHCCA = 0x%08X, HcControlHeadED = 0x%08X\n",
+                NFS_LOG_INFO("input", "  [OHCI%d] HcHCCA = 0x%08X, HcControlHeadED = 0x%08X\n",
                         hc->index, hcca, hc->reg[0x20 / 4]);
                 fflush(stderr);
             }
@@ -1248,7 +1249,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
         if (control & 0x04u) {
             if (!hc->ple_seen) {
                 hc->ple_seen = 1;
-                fprintf(stderr, "  [OHCI%d] periodic list enabled "
+                NFS_LOG_INFO("input", "  [OHCI%d] periodic list enabled "
                         "(HcControl=%08X HCCA=%08X)\n",
                         hc->index, control, hc->reg[HcHCCA / 4]);
                 fflush(stderr);
@@ -1298,7 +1299,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
         if (xbox_IrqlBlocksInterrupts() && ++held_off <= OHCI_IRQ_HOLDOFF) {
             if (!held_off_warned) {
                 held_off_warned = 1;
-                fprintf(stderr, "  [OHCI%d] irq held off by guest IRQL "
+                NFS_LOG_INFO("input", "  [OHCI%d] irq held off by guest IRQL "
                         "(depth %d, status=0x%02X)\n",
                         hc->index, xbox_IrqlRaisedCount(), status);
                 fflush(stderr);
@@ -1307,7 +1308,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
         }
         if (held_off > OHCI_IRQ_HOLDOFF && !held_off_forced) {
             held_off_forced = 1;
-            fprintf(stderr, "  [OHCI%d] guest IRQL never dropped (depth %d); "
+            NFS_LOG_INFO("input", "  [OHCI%d] guest IRQL never dropped (depth %d); "
                     "delivering anyway\n", hc->index, xbox_IrqlRaisedCount());
             fflush(stderr);
         }
@@ -1328,7 +1329,7 @@ static DWORD WINAPI ohci_thread(LPVOID unused)
          * register at all between one delivery and the next. */
         if (status == last_status && hc->ack_seq == last_ack) {
             if (++repeats > 200) {
-                fprintf(stderr, "  [OHCI%d] status %08X delivered 200 times "
+                NFS_LOG_INFO("input", "  [OHCI%d] status %08X delivered 200 times "
                                 "with no acknowledgement; stopping\n",
                         hc->index, status);
                 fflush(stderr);
@@ -1406,7 +1407,7 @@ void xbox_OhciInit(void)
 
         if (!off) {
             s_enabled = 0;
-            fprintf(stderr, "  OHCI: guest memory not mapped yet; disabled\n");
+            NFS_LOG_INFO("input", "  OHCI: guest memory not mapped yet; disabled\n");
             return;
         }
         for (i = 0; i < 2; i++) {
@@ -1415,7 +1416,7 @@ void xbox_OhciInit(void)
             if (!VirtualProtect(at, XBOX_OHCI_SIZE, PAGE_NOACCESS,
                                 &old_protect)) {
                 s_enabled = 0;
-                fprintf(stderr, "  OHCI: cannot trap 0x%08X (error %lu); "
+                NFS_LOG_ERROR("input", "  OHCI: cannot trap 0x%08X (error %lu); "
                                 "disabled\n", s_hc[i].base, GetLastError());
                 return;
             }
@@ -1433,7 +1434,7 @@ void xbox_OhciInit(void)
                       ohci_mmio_rd, ohci_mmio_wr, &s_hc[1]);
 #endif
 
-    fprintf(stderr, "  OHCI: two controllers at 0x%08X and 0x%08X, "
+    NFS_LOG_INFO("input", "  OHCI: two controllers at 0x%08X and 0x%08X, "
                     "%u ports each, %u pad(s) on HC%d\n",
             XBOX_OHCI0_BASE, XBOX_OHCI1_BASE, s_ndp, s_ndev, s_device_hc);
     fflush(stderr);
@@ -1484,7 +1485,7 @@ int xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va)
                       ohci_read, ohci_write);
     if (!ok && hc->decode_fail++ < 20) {
         const uint8_t *ip = (const uint8_t *)((PCONTEXT)ctx)->Rip;
-        fprintf(stderr, "  [OHCI%d] undecoded access at +0x%03X: "
+        NFS_LOG_INFO("input", "  [OHCI%d] undecoded access at +0x%03X: "
                         "%02X %02X %02X %02X %02X %02X\n",
                 hc->index, xbox_va - hc->base,
                 ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
@@ -1504,7 +1505,7 @@ void xbox_OhciReport(void)
     if (!s_enabled)
         return;
     for (i = 0; i < 2; i++)
-        fprintf(stderr, "  [OHCI%d] %u reads, %u writes, %u undecoded; "
+        NFS_LOG_INFO("input", "  [OHCI%d] %u reads, %u writes, %u undecoded; "
                         "HcControl=%08X HcIntStatus=%08X port1=%08X\n",
                 i, s_hc[i].reads, s_hc[i].writes, s_hc[i].decode_fail,
                 s_hc[i].reg[HcControl / 4],

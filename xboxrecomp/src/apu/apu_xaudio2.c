@@ -5,6 +5,7 @@
  * Called from the APU monitor frame to submit mixed samples.
  * Falls back gracefully if XAudio2 is unavailable.
  */
+#include "../../include/nfsu_log.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -67,21 +68,21 @@ int xa2_init(void)
 
     hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
-        fprintf(stderr, "[XA2] CoInitializeEx failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("audio", "[XA2] CoInitializeEx failed: 0x%08lX\n", hr);
         return 0;
     }
     com_initialized = SUCCEEDED(hr);
 
     hr = XAudio2Create(&g_xa2, 0, XAUDIO2_DEFAULT_PROCESSOR);
     if (FAILED(hr) || !g_xa2) {
-        fprintf(stderr, "[XA2] XAudio2Create failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("audio", "[XA2] XAudio2Create failed: 0x%08lX\n", hr);
         goto fail;
     }
 
     hr = IXAudio2_CreateMasteringVoice(g_xa2, &g_xa2_master,
         XA2_CHANNELS, XA2_SAMPLE_RATE, 0, NULL, NULL, 0);
     if (FAILED(hr)) {
-        fprintf(stderr, "[XA2] CreateMasteringVoice failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("audio", "[XA2] CreateMasteringVoice failed: 0x%08lX\n", hr);
         goto fail;
     }
 
@@ -95,13 +96,13 @@ int xa2_init(void)
     hr = IXAudio2_CreateSourceVoice(g_xa2, &g_xa2_source,
         &wfx, 0, XAUDIO2_DEFAULT_FREQ_RATIO, NULL, NULL, NULL);
     if (FAILED(hr)) {
-        fprintf(stderr, "[XA2] CreateSourceVoice failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("audio", "[XA2] CreateSourceVoice failed: 0x%08lX\n", hr);
         goto fail;
     }
 
     hr = IXAudio2SourceVoice_Start(g_xa2_source, 0, XAUDIO2_COMMIT_NOW);
     if (FAILED(hr)) {
-        fprintf(stderr, "[XA2] Start failed: 0x%08lX\n", hr);
+        NFS_LOG_ERROR("audio", "[XA2] Start failed: 0x%08lX\n", hr);
         goto fail;
     }
 
@@ -109,7 +110,7 @@ int xa2_init(void)
     g_xa2_initialized = 1;
     g_xa2_frames_written = 0;
 
-    fprintf(stderr, "[XA2] XAudio2 initialized (%d Hz stereo 16-bit, %d x %d-sample buffers)\n",
+    NFS_LOG_INFO("audio", "[XA2] XAudio2 initialized (%d Hz stereo 16-bit, %d x %d-sample buffers)\n",
             XA2_SAMPLE_RATE, XA2_NUM_BUFS, XA2_BUF_SAMPLES);
     return 1;
 
@@ -138,7 +139,7 @@ void xa2_shutdown(void)
     }
 
     if (g_xa2_initialized)
-        fprintf(stderr, "[XA2] Shut down (%d frames written)\n", g_xa2_frames_written);
+        NFS_LOG_INFO("audio", "[XA2] Shut down (%d frames written)\n", g_xa2_frames_written);
     g_xa2_initialized = 0;
 }
 
@@ -172,7 +173,7 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
         if (state.BuffersQueued == 0 && g_xa2_stats.submitted) {
             g_xa2_stats.underruns++;
             if (getenv("RECOMP_APU_TRACE") && g_xa2_stats.underruns < 20)
-                fprintf(stderr, "[XA2] underrun: %.1f ms since the previous block\n",
+                NFS_LOG_INFO("audio", "[XA2] underrun: %.1f ms since the previous block\n",
                         (now.QuadPart - prev.QuadPart) * 1000.0 / f.QuadPart);
         }
         prev = now;
@@ -276,7 +277,7 @@ int xa2_init(void)
 
     e = getenv("RECOMP_AUDIO");
     if (e && strcmp(e, "0") == 0) {
-        fprintf(stderr, "[AUDIO] host output off (RECOMP_AUDIO=0)\n");
+        NFS_LOG_INFO("audio", "[AUDIO] host output off (RECOMP_AUDIO=0)\n");
         return 0;
     }
     e = getenv("RECOMP_AUDIO_BLOCKS");
@@ -285,7 +286,7 @@ int xa2_init(void)
     if (e) xa2_set_master_volume((float)atoi(e) / 100.0f);
 
     if (!SDL_WasInit(SDL_INIT_AUDIO) && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
-        fprintf(stderr, "[AUDIO] SDL audio init failed: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("audio", "[AUDIO] SDL audio init failed: %s\n", SDL_GetError());
         return 0;
     }
 
@@ -299,7 +300,7 @@ int xa2_init(void)
     /* No allowed changes: SDL converts if the device wants another format. */
     g_sdla_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (!g_sdla_dev) {
-        fprintf(stderr, "[AUDIO] SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("audio", "[AUDIO] SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return 0;
     }
@@ -307,7 +308,7 @@ int xa2_init(void)
     dump_init();
 
     g_sdla_frames_written = 0;
-    fprintf(stderr, "[AUDIO] SDL %s output: %d Hz, %d ch, %d-sample device buffer,"
+    NFS_LOG_INFO("audio", "[AUDIO] SDL %s output: %d Hz, %d ch, %d-sample device buffer,"
                     " queue %d x %d samples\n",
             SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "?",
             have.freq, have.channels, have.samples,
@@ -321,7 +322,7 @@ void xa2_shutdown(void)
     SDL_CloseAudioDevice(g_sdla_dev);
     g_sdla_dev = 0;
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
-    fprintf(stderr, "[AUDIO] shut down (%d blocks written, %llu underruns,"
+    NFS_LOG_INFO("audio", "[AUDIO] shut down (%d blocks written, %llu underruns,"
                     " %llu dropped)\n", g_sdla_frames_written,
             (unsigned long long)g_sdla_stats.underruns,
             (unsigned long long)g_sdla_stats.dropped);
@@ -373,7 +374,7 @@ static void dump_init(void)
     s_dump.buf = s_dump.cap ? (int16_t *)malloc(s_dump.cap * sizeof(int16_t)) : NULL;
     if (!s_dump.buf) return;
     s_dump.on = 1;
-    fprintf(stderr, "[AUDIO] dump: %llu s from %llu s to %s\n",
+    NFS_LOG_INFO("audio", "[AUDIO] dump: %llu s from %llu s to %s\n",
             (unsigned long long)(s_dump.left / SDLA_SAMPLE_RATE),
             (unsigned long long)(s_dump.skip / SDLA_SAMPLE_RATE), s_dump.path);
 }
@@ -397,7 +398,7 @@ static void dump_block(const int16_t *pcm, int num_samples)
         fwrite(s_dump.buf, sizeof(int16_t), s_dump.n, s_dump.f);
         fclose(s_dump.f);
     }
-    fprintf(stderr, "[AUDIO] dump written: %s (%zu bytes)%s\n", s_dump.path,
+    NFS_LOG_INFO("audio", "[AUDIO] dump written: %s (%zu bytes)%s\n", s_dump.path,
             s_dump.n * sizeof(int16_t), s_dump.f ? "" : " -- open failed");
     free(s_dump.buf);
     s_dump.buf = NULL;
@@ -421,7 +422,7 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
     if (queued == 0 && g_sdla_stats.submitted) {
         g_sdla_stats.underruns++;
         if (getenv("RECOMP_APU_TRACE") && g_sdla_stats.underruns < 20)
-            fprintf(stderr, "[AUDIO] underrun\n");
+            NFS_LOG_INFO("audio", "[AUDIO] underrun\n");
     }
 
     n = num_samples * SDLA_CHANNELS;

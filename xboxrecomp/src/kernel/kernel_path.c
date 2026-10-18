@@ -11,6 +11,7 @@
  * The Win32 build emits UTF-16 paths (for CreateFileW); the Linux build
  * emits UTF-8 paths with '/' separators (for open()).
  */
+#include "../../include/nfsu_log.h"
 
 #include "kernel.h"
 #include <stdio.h>
@@ -443,7 +444,7 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
     }
 
     if (xbox_partition_device_path(xbox_path, host_path_buf, buf_size)) {
-        fprintf(stderr, "  [PATH] %s -> partition image\n", xbox_path);
+        NFS_LOG_INFO("files", "  [PATH] %s -> partition image\n", xbox_path);
         fflush(stderr);
         return TRUE;
     }
@@ -463,7 +464,7 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
     return TRUE;
 
 translate:
-    fprintf(stderr, "  [PATH] %s\n", xbox_path);
+    NFS_LOG_INFO("files", "  [PATH] %s\n", xbox_path);
     fflush(stderr);
     {
         WCHAR remainder_wide[MAX_PATH];
@@ -702,7 +703,7 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
 
     /* The request as the title made it; the [FILE] line after the open pairs
      * with it, the same as on the Win32 backend. */
-    fprintf(stderr, "  [PATH] %s\n", xbox_path);
+    NFS_LOG_INFO("files", "  [PATH] %s\n", xbox_path);
 
     {
         int digit = xbox_partition_device_digit(xbox_path, 0);

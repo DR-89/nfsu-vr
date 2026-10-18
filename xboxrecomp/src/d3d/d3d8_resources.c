@@ -5,6 +5,7 @@
  * Resources use system memory staging with UpdateSubresource on Unlock
  * for maximum compatibility with D3D8 Lock semantics.
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_internal.h"
 #include "d3d8_swizzle.h"
@@ -235,7 +236,7 @@ DXGI_FORMAT d3d8_to_dxgi_format(D3DFORMAT fmt)
     case D3DFMT_INDEX32:        return DXGI_FORMAT_R32_UINT;
 
     default:
-        fprintf(stderr, "D3D8: Unknown format 0x%X, using R8G8B8A8\n", fmt);
+        NFS_LOG_DEBUG("graphics", "D3D8: Unknown format 0x%X, using R8G8B8A8\n", fmt);
         return DXGI_FORMAT_R8G8B8A8_UNORM;
     }
 }
@@ -1576,7 +1577,7 @@ HRESULT d3d8_CreateTextureImpl(UINT Width, UINT Height, UINT Levels, DWORD Usage
 
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &tex->d3d11_texture);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateTexture2D failed: 0x%08lX (fmt=%d %ux%u)\n", hr, Format, Width, Height);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateTexture2D failed: 0x%08lX (fmt=%d %ux%u)\n", hr, Format, Width, Height);
         free(tex->sys_mem);
         free(tex);
         return hr;
@@ -1627,7 +1628,7 @@ static void d3d8_check_overlay(void)
         offsetof(D3D8VolumeTexture, srv) != offsetof(D3D8Texture, srv)   ||
         offsetof(D3D8CubeTexture, width) != offsetof(D3D8Texture, width) ||
         offsetof(D3D8VolumeTexture, levels) != offsetof(D3D8Texture, levels))
-        fprintf(stderr, "D3D8: internal base-texture layout mismatch\n");
+        NFS_LOG_DEBUG("graphics", "D3D8: internal base-texture layout mismatch\n");
 }
 
 ID3D11ShaderResourceView *d3d8_base_srv(IDirect3DBaseTexture8 *texture)
@@ -1955,7 +1956,7 @@ HRESULT d3d8_CreateCubeTextureImpl(UINT EdgeLength, UINT Levels, DWORD Usage, D3
 
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &cube->d3d11_texture);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateCubeTexture2D failed: 0x%08lX (fmt=%d edge=%u)\n", hr, Format, EdgeLength);
+        NFS_LOG_ERROR("graphics", "D3D8: CreateCubeTexture2D failed: 0x%08lX (fmt=%d edge=%u)\n", hr, Format, EdgeLength);
         free(cube->sys_mem);
         free(cube);
         return hr;
@@ -2261,7 +2262,7 @@ HRESULT d3d8_CreateVolumeTextureImpl(UINT Width, UINT Height, UINT Depth, UINT L
 
     hr = ID3D11Device_CreateTexture3D(d3d8_GetD3D11Device(), &td, NULL, &vol->d3d11_texture);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateVolumeTexture3D failed: 0x%08lX (fmt=%d %ux%ux%u)\n",
+        NFS_LOG_ERROR("graphics", "D3D8: CreateVolumeTexture3D failed: 0x%08lX (fmt=%d %ux%ux%u)\n",
                 hr, Format, Width, Height, Depth);
         free(vol->sys_mem);
         free(vol);
@@ -2377,7 +2378,7 @@ HRESULT d3d8_CreateImageSurfaceImpl(UINT Width, UINT Height, D3DFORMAT Format, I
 
     if (!ppSurface || !Width || !Height) return E_INVALIDARG;
     if (d3d8_to_dxgi_format(Format) == DXGI_FORMAT_UNKNOWN) {
-        fprintf(stderr, "D3D8: CreateImageSurface: unsupported format 0x%X\n", Format);
+        NFS_LOG_WARN("graphics", "D3D8: CreateImageSurface: unsupported format 0x%X\n", Format);
         return E_INVALIDARG;
     }
 
@@ -2393,7 +2394,7 @@ HRESULT d3d8_CreateImageSurfaceImpl(UINT Width, UINT Height, D3DFORMAT Format, I
 
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &tex);
     if (FAILED(hr)) {
-        fprintf(stderr, "D3D8: CreateImageSurface failed: 0x%08lX (fmt=0x%X %ux%u)\n",
+        NFS_LOG_ERROR("graphics", "D3D8: CreateImageSurface failed: 0x%08lX (fmt=0x%X %ux%u)\n",
                 hr, Format, Width, Height);
         return hr;
     }

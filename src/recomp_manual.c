@@ -1,3 +1,4 @@
+#include "../xboxrecomp/include/nfsu_log.h"
 #include "input_mode.h"
 /**
  * Manual function overrides and ICALL diagnostics
@@ -118,7 +119,7 @@ void nfsu_audio_diag_poll(void)
     for (unsigned lane = 0; lane < 2; lane++) {
         AudioDiagnostic *d = &snapshot[lane];
         if (!d->tid) continue;
-        fprintf(stderr, "[AUDTRACE] t=%llu lane=%s tid=%ld running=%u ticks=%llu"
+        NFS_LOG_STREAM("audio", NFS_LOG_LEVEL_TRACE, "[AUDTRACE] t=%llu lane=%s tid=%ld running=%u ticks=%llu"
                 " function=%08X kernel=%u caller=%08X age_ms=%llu"
                 " sampled_active=%u sampled_run=%u stack_words=",
                 (unsigned long long)now, lane ? "shutdown" : "worker", d->tid,
@@ -126,8 +127,8 @@ void nfsu_audio_diag_poll(void)
                 d->ordinal, d->caller,
                 (unsigned long long)(now >= d->changed_ms ? now - d->changed_ms : 0),
                 d->active, d->requested);
-        for (unsigned i = 0; i < d->count; i++) fprintf(stderr, " %08X", d->stack[i]);
-        fputc('\n', stderr);
+        for (unsigned i = 0; i < d->count; i++) NFS_LOG_STREAM("audio", NFS_LOG_LEVEL_TRACE, " %08X", d->stack[i]);
+        NFS_LOG_STREAM("audio", NFS_LOG_LEVEL_TRACE, "\n");
     }
     fflush(stderr);
 }
@@ -167,12 +168,12 @@ void sub_001A6110(void)
     int previous = audio_diag_lane;
     audio_diag_lane = 1;
     audio_diag_boundary(0x001A6110u, 1, 0);
-    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown entered\n");
+    if (nfsu_diagnostics_enabled) NFS_LOG_TRACE("audio", "[AUDTRACE] shutdown entered\n");
 #endif
     sub_001A6110_gen();
 #ifdef __ANDROID__
     audio_diag_boundary(0x001A6110u, 0, 0);
-    if (nfsu_diagnostics_enabled) fprintf(stderr, "[AUDTRACE] shutdown returned\n");
+    if (nfsu_diagnostics_enabled) NFS_LOG_TRACE("audio", "[AUDTRACE] shutdown returned\n");
     audio_diag_lane = previous;
 #endif
 }
@@ -200,12 +201,12 @@ static void audio_list_sample(uint32_t operation, uint32_t node, uint32_t parent
     }
     nfsu_diag_voice(operation, caller, node, next, prev, parent);
     if (invalid) {
-        fprintf(stderr, "[VOICE-LINK] invalid observed op=%08X node=%08X"
+        NFS_LOG_ERROR("audio", "[VOICE-LINK] invalid observed op=%08X node=%08X"
                 " next=%08X prev=%08X parent=%08X caller=%08X\n",
                 operation, node, next, prev, parent, caller);
         if (operation == 0x001E6921u && audio_pointer_ok(node - 0x4Cu, 0x6C)) {
             uint32_t object = node - 0x4Cu;
-            fprintf(stderr, "[VOICE-LINK] object=%08X count=%u channel=%u"
+            NFS_LOG_INFO("audio", "[VOICE-LINK] object=%08X count=%u channel=%u"
                     " status=%04X owner=%08X\n", object, MEM8(object + 0x64),
                     MEM8(object + 0x65), MEM16(object + 0x12), MEM32(object + 0x68));
         }
@@ -332,7 +333,7 @@ void sub_001D0340(void)
         static uint32_t registered;
         if (sem && sem != registered) {
             nv2a_pb_set_semaphore_target(sem);
-            fprintf(stderr, "[D3D] GPU semaphore at 0x%08X\n", sem);
+            NFS_LOG_INFO("system", "[D3D] GPU semaphore at 0x%08X\n", sem);
             registered = sem;
         }
         if (0 /* NFSU2 main-loop return addresses */) {
@@ -349,7 +350,7 @@ void sub_001D0340(void)
             if (lag < 0) {
                 const char *e = getenv("RECOMP_FRAME_LAG");
                 lag = e && *e == '1';
-                fprintf(stderr, "[D3D] frame fence: %s\n",
+                NFS_LOG_INFO("system", "[D3D] frame fence: %s\n",
                         lag ? "previous frame (RECOMP_FRAME_LAG=1)" : "this frame");
             }
             if (lag) {
@@ -987,17 +988,17 @@ static const OptRow s_rows[] = {
 
 static void options_log(void)
 {
-    fprintf(stderr, "[options] blur %s\n", s_blur ? "on" : "off");
-    fprintf(stderr, "[options] race frame rate %d FPS (experimental 60 FPS)\n",
+    NFS_LOG_INFO("system", "[options] blur %s\n", s_blur ? "on" : "off");
+    NFS_LOG_INFO("system", "[options] race frame rate %d FPS (experimental 60 FPS)\n",
             s_fps60 ? 60 : 30);
 #ifdef NFSU2_VULKAN
-    fprintf(stderr, "[options] car reflections %s, resolution scale %d%%%s, anti-aliasing %s,"
+    NFS_LOG_INFO("system", "[options] car reflections %s, resolution scale %d%%%s, anti-aliasing %s,"
             " anisotropic %dx, square pixels %s\n",
             s_refl ? "on" : "off", s_scale_pct[s_scale_idx],
             nv2a_vk_scale_pct ? "" : " (RECOMP_GL_SCALE)", s_fxaa ? "on" : "off",
             s_aniso_lvl[s_aniso_idx], s_square ? "on" : "off");
 #else
-    fprintf(stderr, "[options] car reflections %s\n", s_refl ? "on" : "off");
+    NFS_LOG_INFO("system", "[options] car reflections %s\n", s_refl ? "on" : "off");
 #endif
 }
 
@@ -1080,7 +1081,7 @@ static void options_save(void)
 {
     FILE *f = fopen(NFSU1_OPTIONS_FILE, "w");
     if (!f) {
-        fprintf(stderr, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
+        NFS_LOG_STREAM("system", NFS_LOG_LEVEL_ERROR, "[options] cannot write " NFSU1_OPTIONS_FILE "\n");
         return;
     }
     fprintf(f, "reflections=%d\nfps=%d\nblur=%d\n", s_refl, s_fps60 ? 60 : 30, s_blur);
@@ -1641,7 +1642,7 @@ void sub_0011BC20(void)
     if (node_ptr_ok(next) && node_ptr_ok(prev)) {
         if ((MEM32(prev) != n || MEM32(next + 4u) != n) && logged < 32) {
             logged++;
-            fprintf(stderr, "[node] %08X: next %08X (prev %08X) prev %08X (next %08X),"
+            NFS_LOG_INFO("system", "[node] %08X: next %08X (prev %08X) prev %08X (next %08X),"
                     " hash %08X solid %08X, from %08X, state %u\n", n, next,
                     MEM32(next + 4u), prev, MEM32(prev), MEM32(n + 8u),
                     MEM32(n + 0xCu), MEM32(esp), MEM32(NFSU1_GAMEFLOW_STATE));
@@ -1651,7 +1652,7 @@ void sub_0011BC20(void)
     }
     if (logged < 32) {
         logged++;
-        fprintf(stderr, "[node] %08X: next %08X prev %08X hash %08X solid %08X,"
+        NFS_LOG_INFO("system", "[node] %08X: next %08X prev %08X hash %08X solid %08X,"
                 " from %08X, state %u: links outside RAM, cleared without unlink\n",
                 n, next, prev, MEM32(n + 8u), MEM32(n + 0xCu), MEM32(esp),
                 MEM32(NFSU1_GAMEFLOW_STATE));
@@ -1751,15 +1752,15 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
  */
 void recomp_icall_fail_log(uint32_t va)
 {
-    fprintf(stderr, "[ICALL] Failed to resolve VA 0x%08X (total calls: %llu)\n",
+    NFS_LOG_ERROR("system", "[ICALL] Failed to resolve VA 0x%08X (total calls: %llu)\n",
             va, (unsigned long long)g_icall_count);
 
     /* Dump last 16 call targets from the ring buffer */
-    fprintf(stderr, "  Recent ICALL targets:\n");
+    NFS_LOG_INFO("system", "  Recent ICALL targets:\n");
     for (int i = 0; i < 16; i++) {
         int idx = (g_icall_trace_idx - 16 + i) & 15;
         if (g_icall_trace[idx])
-            fprintf(stderr, "    [%2d] 0x%08X\n", i, g_icall_trace[idx]);
+            NFS_LOG_INFO("system", "    [%2d] 0x%08X\n", i, g_icall_trace[idx]);
     }
     fflush(stderr);
 }
@@ -1803,7 +1804,7 @@ void recomp_icall_not_code_log(uint32_t va)
         if (n != 1)
             return;
     }
-    fprintf(stderr, "[ICALL] target 0x%08X is not code -- skipped %llu time(s) "
+    NFS_LOG_INFO("system", "[ICALL] target 0x%08X is not code -- skipped %llu time(s) "
                     "(null or wild function pointer, at call #%llu)\n",
             va, (unsigned long long)hits[i],
             (unsigned long long)g_icall_count);
@@ -1827,8 +1828,7 @@ void recomp_unimpl(const char *text, uint32_t va)
 
     if (printed < 50 || stop) {
         printed++;
-        fprintf(stderr,
-                "[UNIMPL] untranslated instruction REACHED: `%s` at 0x%08X"
+        NFS_LOG_INFO("system", "[UNIMPL] untranslated instruction REACHED: `%s` at 0x%08X"
                 " (a no-op; set RECOMP_UNIMPL_TRAP=1 to stop here)\n",
                 text, va);
         fflush(stderr);

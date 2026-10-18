@@ -4,3 +4,6 @@
 [submodule "third_party/glslang"]
 	path = third_party/glslang
 	url = https://github.com/KhronosGroup/glslang.git
+[submodule "third_party/zlog"]
+	path = third_party/zlog
+	url = https://github.com/HardySimpson/zlog.git

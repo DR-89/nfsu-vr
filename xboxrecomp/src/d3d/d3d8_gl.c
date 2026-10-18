@@ -20,6 +20,7 @@
  * beyond pos/diffuse/UV, Xbox VSH bytecode → GLSL, register-combiner
  * pixel programs → GLSL fragment.
  */
+#include "../../include/nfsu_log.h"
 
 #include "d3d8_xbox.h"
 #include "d3d8_fvf.h"
@@ -217,7 +218,7 @@ static GLuint compile_shader(GLenum type, const char *src)
     if (!ok) {
         char log[1024]; GLsizei n = 0;
         glGetShaderInfoLog(s, sizeof(log), &n, log);
-        fprintf(stderr, "[d3d8_gl] shader compile failed: %.*s\n", n, log);
+        NFS_LOG_ERROR("graphics", "[d3d8_gl] shader compile failed: %.*s\n", n, log);
         glDeleteShader(s);
         return 0;
     }
@@ -235,7 +236,7 @@ static GLuint link_program(GLuint vs, GLuint fs)
     if (!ok) {
         char log[1024]; GLsizei n = 0;
         glGetProgramInfoLog(p, sizeof(log), &n, log);
-        fprintf(stderr, "[d3d8_gl] program link failed: %.*s\n", n, log);
+        NFS_LOG_ERROR("graphics", "[d3d8_gl] program link failed: %.*s\n", n, log);
         glDeleteProgram(p);
         return 0;
     }
@@ -554,7 +555,7 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) {
-            fprintf(stderr, "[d3d8_gl] window close requested\n");
+            NFS_LOG_DEBUG("graphics", "[d3d8_gl] window close requested\n");
         }
     }
     return D3D_OK;
@@ -995,12 +996,12 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
                                 g.backbuf_w, g.backbuf_h,
                                 SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
     if (!g.window) {
-        fprintf(stderr, "[d3d8_gl] SDL_CreateWindow failed: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("graphics", "[d3d8_gl] SDL_CreateWindow failed: %s\n", SDL_GetError());
         return D3DERR_INVALIDCALL;
     }
     g.glctx = SDL_GL_CreateContext(g.window);
     if (!g.glctx) {
-        fprintf(stderr, "[d3d8_gl] SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("graphics", "[d3d8_gl] SDL_GL_CreateContext failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(g.window);
         g.window = NULL;
         return D3DERR_INVALIDCALL;
@@ -1008,7 +1009,7 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
     SDL_GL_MakeCurrent(g.window, g.glctx);
     SDL_GL_SetSwapInterval(1);
 
-    fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
+    NFS_LOG_DEBUG("graphics", "[d3d8_gl] GL %s / GLSL %s\n",
             glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
 
     init_gl_pipeline();

@@ -4,6 +4,7 @@
  * Reuses the same x86-64 instruction decoder pattern as nv2a_mmio_hook.c
  * but routes reads/writes through the MCPX APU register handlers.
  */
+#include "../../include/nfsu_log.h"
 
 #include "apu.h"
 #include <stdio.h>
@@ -243,7 +244,7 @@ static bool apu_decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_wri
     /* Unrecognized */
     g_apu_mmio_decode_fail++;
     if (g_apu_mmio_decode_fail <= 20) {
-        fprintf(stderr, "[APU] MMIO decode fail at RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
+        NFS_LOG_INFO("audio", "[APU] MMIO decode fail at RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
                 (void*)ctx->Rip, mmio_offset, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
         fflush(stderr);
     }
@@ -272,7 +273,7 @@ bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
              * goes past, and an offset alone never shows it. */
             uint64_t v = g_apu_state
                        ? mcpx_apu_mmio_read(g_apu_state, mmio_offset, 4) : 0;
-            fprintf(stderr, "  [APUMMIO] %s 0x%05X = %08X%s\n",
+            NFS_LOG_INFO("audio", "  [APUMMIO] %s 0x%05X = %08X%s\n",
                     is_write ? "write" : "read ", mmio_offset,
                     (uint32_t)v, ok ? "" : "  (decode failed)");
         }

@@ -13,6 +13,7 @@
  */
 
 #ifdef _WIN32
+#include "../xboxrecomp/include/nfsu_log.h"
 #  include <windows.h>
 #  include <dbghelp.h>
 #else
@@ -100,9 +101,9 @@ extern void xbox_path_init(const char *game_dir, const char *save_dir);
  * generated sub_XXXXXXXX at best, the guest stack names the whole chain. */
 void print_guest_state(void)
 {
-    fprintf(stderr, "  guest: eax=%08X ecx=%08X edx=%08X ebx=%08X\n",
+    NFS_LOG_INFO("system", "  guest: eax=%08X ecx=%08X edx=%08X ebx=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx);
-    fprintf(stderr, "         esi=%08X edi=%08X esp=%08X\n",
+    NFS_LOG_INFO("system", "         esi=%08X edi=%08X esp=%08X\n",
             g_esi, g_edi, g_esp);
 
     if (g_xbox_mem_offset && g_esp >= XBOX_STACK_BASE
@@ -110,23 +111,23 @@ void print_guest_state(void)
         const uint32_t *sp =
             (const uint32_t *)((uintptr_t)g_xbox_mem_offset + g_esp);
         int shown = 0, i;
-        fprintf(stderr, "  guest stack (return addresses, innermost first):\n");
+        NFS_LOG_INFO("system", "  guest stack (return addresses, innermost first):\n");
         for (i = 0; i < 512 && shown < 24; i++) {
             uint32_t v = sp[i];
             if (g_esp + (uint32_t)i * 4u >= XBOX_STACK_BASE + XBOX_STACK_SIZE)
                 break;
             if (v > g_xbox_code_lo && v < g_xbox_code_hi) {
-                fprintf(stderr, "    [esp+%-4d] 0x%08X\n", i * 4, v);
+                NFS_LOG_INFO("system", "    [esp+%-4d] 0x%08X\n", i * 4, v);
                 shown++;
             }
         }
     }
     {
         unsigned k;
-        fprintf(stderr, "  recent ICALL targets:");
+        NFS_LOG_STREAM("system", NFS_LOG_LEVEL_INFO, "  recent ICALL targets:");
         for (k = 0; k < 16; k++)
-            fprintf(stderr, " %08X", g_icall_trace[(g_icall_trace_idx + k) & 15]);
-        fprintf(stderr, "\n");
+            NFS_LOG_STREAM("system", NFS_LOG_LEVEL_INFO, " %08X", g_icall_trace[(g_icall_trace_idx + k) & 15]);
+        NFS_LOG_STREAM("system", NFS_LOG_LEVEL_INFO, "\n");
     }
     fflush(stderr);
 }
@@ -144,7 +145,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
         if (fault >= 0xFD000000 && fault < 0xFE000000)
             return EXCEPTION_CONTINUE_SEARCH;
 
-        fprintf(stderr, "[CRASH] access violation at RIP=0x%llX, %s 0x%llX "
+        NFS_LOG_FATAL("system", "[CRASH] access violation at RIP=0x%llX, %s 0x%llX "
                         "(guest VA 0x%08X)\n",
                 (unsigned long long)ep->ContextRecord->Rip,
                 ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
@@ -154,7 +155,7 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
         sym->SizeOfStruct = sizeof(SYMBOL_INFO);
         sym->MaxNameLen = 255;
         if (SymFromAddr(GetCurrentProcess(), ep->ContextRecord->Rip, &disp, sym))
-            fprintf(stderr, "  in %s+0x%llX\n", sym->Name,
+            NFS_LOG_INFO("system", "  in %s+0x%llX\n", sym->Name,
                     (unsigned long long)disp);
         print_guest_state();
     }
@@ -178,14 +179,15 @@ static void install_crash_reporter(void) {}
 
 static void crash_signal(int sig, siginfo_t *si, void *uc)
 {
+    nfs_log_emergency_mode();
     (void)uc;
-    fprintf(stderr, "[CRASH] signal %d, fault addr %p (guest VA 0x%08X)\n",
+    NFS_LOG_FATAL("system", "[CRASH] signal %d, fault addr %p (guest VA 0x%08X)\n",
             sig, si->si_addr,
             (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)g_xbox_mem_offset));
 #if defined(__ANDROID__) && defined(__aarch64__)
     ucontext_t *context = (ucontext_t *)uc;
     if (context) {
-        fprintf(stderr, "[NATIVE] pc=%016llX pc_offset=%llX lr=%016llX"
+        NFS_LOG_INFO("system", "[NATIVE] pc=%016llX pc_offset=%llX lr=%016llX"
                 " sp=%016llX fp=%016llX base=%llX\n",
                 (unsigned long long)context->uc_mcontext.pc,
                 (unsigned long long)(context->uc_mcontext.pc - diagnostic_library_base),
@@ -194,7 +196,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
                 (unsigned long long)context->uc_mcontext.regs[29],
                 (unsigned long long)diagnostic_library_base);
         for (unsigned i = 0; i < 31; i++)
-            fprintf(stderr, "[NATIVE] x%u=%016llX\n", i,
+            NFS_LOG_INFO("system", "[NATIVE] x%u=%016llX\n", i,
                     (unsigned long long)context->uc_mcontext.regs[i]);
     }
 #endif
@@ -205,7 +207,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
          * faulted -- the guest stack alone does not on a worker thread. */
         void *frames[32];
         int n = backtrace(frames, 32);
-        fprintf(stderr, "  host backtrace:\n");
+        NFS_LOG_INFO("system", "  host backtrace:\n");
         fflush(stderr);
         backtrace_symbols_fd(frames, n, 2);
     }
@@ -220,7 +222,7 @@ static void install_crash_reporter(void)
     Dl_info info;
     if (dladdr((void *)crash_signal, &info)) {
         diagnostic_library_base = (uintptr_t)info.dli_fbase;
-        fprintf(stderr, "[NATIVE] library=%s base=%llX diagnostics=2\n",
+        NFS_LOG_INFO("system", "[NATIVE] library=%s base=%llX diagnostics=2\n",
                 info.dli_fname, (unsigned long long)diagnostic_library_base);
     }
 #endif
@@ -273,7 +275,7 @@ static void *load_file(const char *path, size_t *out_size)
 
 static void fatal(const char *msg)
 {
-    fprintf(stderr, "[FATAL] %s\n", msg);
+    NFS_LOG_FATAL("system", "[FATAL] %s\n", msg);
 #if defined(_WIN32)
     MessageBoxA(NULL, msg, "NFSU2 recomp", MB_ICONERROR);
 #elif defined(__SWITCH__)
@@ -322,7 +324,7 @@ int main(int argc, char **argv)
     if (pthread_create(&th, &attr, game_thread, &rc) == 0)
         pthread_join(th, NULL);
     else
-        fprintf(stderr, "[FATAL] cannot start the game thread\n");
+        NFS_LOG_FATAL("system", "[FATAL] cannot start the game thread\n");
     switch_shutdown();
     return rc;
 }
@@ -347,7 +349,7 @@ int main(int argc, char **argv)
     HANDLE thread = CreateThread(NULL, 16u * 1024u * 1024u,
                                  android_game_thread, &rc, 0, NULL);
     if (!thread) {
-        fprintf(stderr, "Cannot start Android game thread: %u\n", GetLastError());
+        NFS_LOG_ERROR("system", "Cannot start Android game thread: %u\n", GetLastError());
         return 1;
     }
     android_host_run();
@@ -376,9 +378,9 @@ static int game_main(void)
     /* Install managed device events before APU/OHCI can create or signal them. */
     xbox_guest_executor_prepare();
 
-    printf("=== Need for Speed: Underground 2 (Xbox) - static recompilation ===\n");
+    NFS_LOG_INFO("system", "=== Need for Speed: Underground 1 (Xbox) - static recompilation ===\n");
     install_crash_reporter();
-    if (getenv("NFSU2_EXIT_TRACE"))
+    if (getenv("NFSU1_EXIT_TRACE"))
         atexit(print_guest_state);
 
     /* Runtime defaults this title needs; an explicit setting still wins.
@@ -408,12 +410,12 @@ static int game_main(void)
 
     xbe_data = load_file(xbe_path, &xbe_size);
     if (!xbe_data) {
-        fprintf(stderr, "cannot read %s\n", xbe_path);
+        NFS_LOG_ERROR("system", "cannot read %s\n", xbe_path);
         fatal("Failed to load default.xbe. Put the extracted disc in the game "
               "directory (or set NFSU2_GAME_DIR).");
         return 1;
     }
-    printf("XBE %s: %zu bytes\n", xbe_path, xbe_size);
+    NFS_LOG_INFO("system", "XBE %s: %zu bytes\n", xbe_path, xbe_size);
 
     if (!xbox_MemoryLayoutInit(xbe_data, xbe_size)) {
         fatal("Failed to initialise the Xbox memory layout "
@@ -422,7 +424,7 @@ static int game_main(void)
         return 1;
     }
     g_xbox_mem_offset = xbox_GetMemoryOffset();
-    printf("Xbox memory mapped at host offset 0x%llX\n",
+    NFS_LOG_INFO("system", "Xbox memory mapped at host offset 0x%llX\n",
            (unsigned long long)g_xbox_mem_offset);
 
     /* Game time per frame is capped: sub_001890C0 takes the real elapsed
@@ -438,7 +440,7 @@ static int game_main(void)
             float *cap = (float *)((uint8_t *)xbox_GetMemoryBase() + 0x3A4C64);
             if (*cap == 3.0f) {
                 *cap = steps;
-                printf("[BOOT] game time cap %.0f ms per frame\n", steps * 1000.0f / 60.0f);
+                NFS_LOG_INFO("system", "[BOOT] game time cap %.0f ms per frame\n", steps * 1000.0f / 60.0f);
             }
         }
     }
@@ -455,7 +457,7 @@ static int game_main(void)
 
         if (!plain || !apu || strcmp(apu, "0") != 0) {
             g_apu_state = mcpx_apu_init_standalone((uint8_t *)xbox_GetMemoryBase());
-            fprintf(stderr, "[BOOT] emulated APU %s\n",
+            NFS_LOG_INFO("system", "[BOOT] emulated APU %s\n",
                     g_apu_state ? "up" : "FAILED to initialise");
             if (g_apu_state && plain)
                 xbox_MmioRegister(NFSU2_APU_BASE, NFSU2_APU_END,
@@ -508,12 +510,12 @@ static int game_main(void)
     g_esp = XBOX_STACK_TOP;
 
     if (!recomp_dispatch_init())
-        fprintf(stderr, "[BOOT] flat dispatch unavailable; "
+        NFS_LOG_WARN("system", "[BOOT] flat dispatch unavailable; "
                         "indirect calls will use the binary search\n");
 
     xbox_WatchdogStart();
 
-    printf("Starting guest at 0x%08X (esp=0x%08X)\n", NFSU2_ENTRY_POINT, g_esp);
+    NFS_LOG_INFO("system", "Starting guest at 0x%08X (esp=0x%08X)\n", NFSU2_ENTRY_POINT, g_esp);
     if (!xbox_guest_executor_run(xbe_entry_point, g_esp, g_fs_base)) {
         xbox_gil_mark_main();
         xbox_gil_enter();
@@ -521,7 +523,7 @@ static int game_main(void)
         xbox_gil_leave();
     }
 
-    printf("Guest returned. Cleaning up.\n");
+    NFS_LOG_INFO("system", "Guest returned. Cleaning up.\n");
     xbox_kernel_shutdown();
     xbox_MemoryLayoutShutdown();
     free(xbe_data);

@@ -1,4 +1,5 @@
 /* Scheduler policy lives here, never in the POSIX object implementation. */
+#include "../../include/nfsu_log.h"
 #include "guest_scheduler.h"
 #include "guest_dispatcher.h"
 #include "platform/thread_observer.h"
@@ -154,7 +155,7 @@ void xgs_poll(void)
     memset(&stats, 0, sizeof(stats));
     stats.start = stats.last = end;
     pthread_mutex_unlock(&mutex);
-    fprintf(stderr, "[SCHED5] main_tid=%u window_ms=%.1f wait_ms=%.2f overflow_ms=%.2f"
+    NFS_LOG_DEBUG("runtime", "[SCHED5] main_tid=%u window_ms=%.1f wait_ms=%.2f overflow_ms=%.2f"
         " spin=%llu dispatch=%llu higher=%llu quantum=%llu suspend=%llu other=%llu\n",
         main_tid, (end - snapshot.start) / 1e6, snapshot.wait_ns / 1e6,
         snapshot.overflow_ns / 1e6,
@@ -163,7 +164,7 @@ void xgs_poll(void)
         (unsigned long long)snapshot.causes[4], (unsigned long long)snapshot.causes[5]);
     for (unsigned i = 0; i < snapshot.used; i++) {
         XgsRow *r = &snapshot.rows[i];
-        fprintf(stderr, "[SCHEDW] main_tid=%u tid=%u host_tid=%lu priority=%d main_priority=%d"
+        NFS_LOG_DEBUG("runtime", "[SCHEDW] main_tid=%u tid=%u host_tid=%lu priority=%d main_priority=%d"
             " dispatch=%d phase=%s reason=%s wait_ms=%.2f selections=%llu\n", main_tid, r->tid, r->host_tid, r->priority,
             r->main_priority, r->dispatch, phases[r->phase], reasons[r->reason], r->ns / 1e6,
             (unsigned long long)r->selections);

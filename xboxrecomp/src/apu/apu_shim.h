@@ -18,6 +18,7 @@
 /* ============================================================
  * Pull in base QEMU type shims from NV2A extraction
  * ============================================================ */
+#include "../../include/nfsu_log.h"
 #include "../nv2a/qemu_shim.h"
 
 #include <math.h>
@@ -354,7 +355,7 @@ static inline void *qemu_add_vm_change_state_handler(VMChangeStateHandler fn,
 #ifndef warn_reportf_err
 static inline void warn_reportf_err(Error *err, const char *fmt, ...) {
     if (err) {
-        fprintf(stderr, "[APU-WARN] %s%s\n", fmt ? fmt : "", err->msg);
+        NFS_LOG_WARN("audio", "[APU-WARN] %s%s\n", fmt ? fmt : "", err->msg);
         error_free(err);
     }
 }

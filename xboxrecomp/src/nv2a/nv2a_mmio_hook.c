@@ -4,6 +4,7 @@
  * Decodes x86-64 MOV instructions that access NV2A MMIO registers,
  * routes them through the NV2A register handlers, and advances RIP.
  */
+#include "../../include/nfsu_log.h"
 
 #include "nv2a_mmio_hook.h"
 #include "nv2a_state.h"
@@ -355,7 +356,7 @@ static bool decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_write)
     /* Unrecognized instruction */
     g_mmio_decode_fail++;
     if (g_mmio_decode_fail <= 20) {
-        fprintf(stderr, "[NV2A] MMIO decode fail at RIP=%p: %02X %02X %02X %02X %02X %02X\n",
+        NFS_LOG_DEBUG("graphics", "[NV2A] MMIO decode fail at RIP=%p: %02X %02X %02X %02X %02X %02X\n",
                 (void*)ctx->Rip, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
         fflush(stderr);
     }
@@ -374,7 +375,7 @@ void nv2a_hook_init(ptrdiff_t xbox_mem_offset)
     g_nv2a_vram = (uint8_t *)VirtualAlloc(NULL, NV2A_VRAM_SIZE + NV2A_RAMIN_SIZE,
                                             MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_nv2a_vram) {
-        fprintf(stderr, "[NV2A] Failed to allocate %u MB for VRAM!\n",
+        NFS_LOG_ERROR("graphics", "[NV2A] Failed to allocate %u MB for VRAM!\n",
                 (NV2A_VRAM_SIZE + NV2A_RAMIN_SIZE) / (1024*1024));
         return;
     }
@@ -385,7 +386,7 @@ void nv2a_hook_init(ptrdiff_t xbox_mem_offset)
     nv2a_init_standalone(g_nv2a_vram, NV2A_VRAM_SIZE,
                          ramin_ptr, NV2A_RAMIN_SIZE);
 
-    fprintf(stderr, "[NV2A] MMIO hook initialized: VRAM=%p RAMIN=%p\n",
+    NFS_LOG_DEBUG("graphics", "[NV2A] MMIO hook initialized: VRAM=%p RAMIN=%p\n",
             (void*)g_nv2a_vram, (void*)ramin_ptr);
 }
 

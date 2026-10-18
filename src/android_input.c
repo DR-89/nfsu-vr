@@ -1,3 +1,4 @@
+#include "../xboxrecomp/include/nfsu_log.h"
 #include "input_mode.h"
 /* Android's single player-one endpoint switches between physical SDL input
  * and a persistent SDL virtual touch controller. SDL's joystick lock owns all
@@ -9,6 +10,7 @@
 #include <string.h>
 #include "android_input.h"
 #include "race_touch.h"
+#include "android_input_trace.h"
 #include "menu_touch.h"
 #include "../xboxrecomp/src/input/xinput_xbox.h"
 
@@ -70,7 +72,7 @@ static void discover_locked(void)
         }
         if (!found && empty >= 0) {
             pads[empty] = SDL_GameControllerOpen(index);
-            if (pads[empty]) fprintf(stderr, "[INPUT] physical controller %s -> player %d\n",
+            if (pads[empty]) NFS_LOG_INFO("input", "[INPUT] physical controller %s -> player %d\n",
                     SDL_GameControllerName(pads[empty]), empty + 1);
         }
     }
@@ -79,7 +81,7 @@ static void discover_locked(void)
     if (atomic_exchange(&physical, connected) != connected) {
         touch_state_locked(0);
         race_touch_enable(0);
-        fprintf(stderr, "[INPUT] player 1 source: %s\n", connected ? "physical" : "touch");
+        NFS_LOG_INFO("input", "[INPUT] player 1 source: %s\n", connected ? "physical" : "touch");
     }
 }
 
@@ -87,7 +89,7 @@ void xbox_InputInit(void)
 {
     if (atomic_load(&ready)) return;
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
-        fprintf(stderr, "[INPUT] SDL init failed: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("input", "[INPUT] SDL init failed: %s\n", SDL_GetError());
         return;
     }
     SDL_LockJoysticks();
@@ -106,7 +108,7 @@ void xbox_InputInit(void)
             touch_id = SDL_JoystickGetDeviceInstanceID(index);
             touch = SDL_GameControllerOpen(index);
         }
-        if (!touch) fprintf(stderr, "[INPUT] virtual controller failed: %s\n", SDL_GetError());
+        if (!touch) NFS_LOG_ERROR("input", "[INPUT] virtual controller failed: %s\n", SDL_GetError());
         touch_state_locked(0);
         discover_locked();
         atomic_store(&ready, 1);
@@ -194,6 +196,23 @@ DWORD xbox_InputGetState(DWORD port, XBOX_INPUT_STATE *state)
             state->Gamepad.sThumbLX = sensor.sThumbLX;
         if (abs(sensor.sThumbLY) > abs(state->Gamepad.sThumbLY))
             state->Gamepad.sThumbLY = sensor.sThumbLY;
+    }
+    if (port == 0 && android_input_trace_enabled()) {
+        static XBOX_GAMEPAD previous;
+        static int initialized, previous_physical;
+        int physical_source = pad != touch;
+        if (!initialized || previous_physical != physical_source ||
+                memcmp(&previous, &state->Gamepad, sizeof(previous)) != 0) {
+            previous = state->Gamepad;
+            previous_physical = physical_source;
+            initialized = 1;
+            NFS_LOG_TRACE("input", "[INPUT_TRACE] t=%llu report source=%s buttons=%04X"
+                    " steer=%d gas=%u brake=%u\n", android_input_trace_time(),
+                    physical_source ? "physical+overlay" : "touch",
+                    state->Gamepad.wButtons, state->Gamepad.sThumbLX,
+                    state->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER],
+                    state->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER]);
+        }
     }
     SDL_UnlockJoysticks();
     return ERROR_SUCCESS;

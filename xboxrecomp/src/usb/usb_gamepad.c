@@ -11,6 +11,7 @@
  * Input comes from the host through the existing xbox_input layer, so a real
  * pad plugged into the PC drives this one.
  */
+#include "../../include/nfsu_log.h"
 #include "usb_gamepad.h"
 
 #include <stdio.h>
@@ -277,7 +278,7 @@ static uint8_t synthetic_buttons(void)
             if (mask) {
                 configured = 1;
                 t0 = (unsigned long)GetTickCount();
-                fprintf(stderr, "  PAD: synthesising button mask 0x%02X for "
+                NFS_LOG_INFO("input", "  PAD: synthesising button mask 0x%02X for "
                         "%u ms every %u ms\n", mask, hold_ms, period_ms);
                 fflush(stderr);
             }
@@ -355,7 +356,7 @@ static void pad_script_parse(int dev)
         p = (*end == ',') ? end + 1 : NULL;
     }
     if (n) {
-        fprintf(stderr, "  PAD%d: script with %d step(s)\n", dev + 1, n);
+        NFS_LOG_INFO("input", "  PAD%d: script with %d step(s)\n", dev + 1, n);
         fflush(stderr);
     }
     s_script_count[dev] = n;
@@ -420,7 +421,7 @@ static void pad_script(int dev, uint8_t *digital, uint8_t *analog)
                                 p++;
                         }
                         live_until = now + hold;
-                        fprintf(stderr, "  PAD1: live %s for %u ms\n", line, hold);
+                        NFS_LOG_INFO("input", "  PAD1: live %s for %u ms\n", line, hold);
                         fflush(stderr);
                     }
                 }
@@ -445,7 +446,7 @@ static void pad_script(int dev, uint8_t *digital, uint8_t *analog)
             int b;
             if (i < 64 && !(shown[dev] & (1ull << i))) {
                 shown[dev] |= 1ull << i;
-                fprintf(stderr, "  PAD%d: step %d at %lu ms\n", dev + 1, i, now);
+                NFS_LOG_INFO("input", "  PAD%d: step %d at %lu ms\n", dev + 1, i, now);
                 fflush(stderr);
             }
             *digital |= steps[i].digital;
@@ -506,7 +507,7 @@ int usb_gamepad_report(int dev, uint8_t *out, int max)
                 XBOX_INPUT_STATE probe;
                 DWORD rc = xbox_InputGetState(0, &probe);
                 last = now;
-                fprintf(stderr, "  [INPUT] kbd_env=%d window_has_RETURN=%d "
+                NFS_LOG_INFO("input", "  [INPUT] kbd_env=%d window_has_RETURN=%d "
                         "InputGetState=%lu buttons=0x%04X\n",
                         getenv("RECOMP_KEYBOARD") ? 1 : 0,
                         xbox_FramebufferKeyDown(0x0D),
@@ -562,7 +563,7 @@ void usb_gamepad_output(int dev, const uint8_t *data, int len)
     if (trace < 0)
         trace = getenv("RECOMP_RUMBLE_TRACE") != NULL;
     if (trace) {
-        fprintf(stderr, "  PAD%d: rumble %04X %04X\n", dev + 1,
+        NFS_LOG_INFO("input", "  PAD%d: rumble %04X %04X\n", dev + 1,
                 vib.wLeftMotorSpeed, vib.wRightMotorSpeed);
         fflush(stderr);
     }

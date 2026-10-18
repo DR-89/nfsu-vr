@@ -33,6 +33,7 @@
  *   RECOMP_GL_SHARED_Z=0             depth buffer per colour surface instead of
  *                                    per zeta address (the old behaviour)
  */
+#include "../../include/nfsu_log.h"
 #include "nv2a_gl.h"
 #include "gl_api.h"
 #include "gl_psh.h"
@@ -71,10 +72,10 @@ static void gl_step_done(const char *what)
     if (s_finish) {
         glFinish();
         if (s_new_obj)
-            fprintf(stderr, "  [GL] %s done\n", what);
+            NFS_LOG_DEBUG("graphics", "  [GL] %s done\n", what);
         else if (what[0] == 's') {        /* "swap": one line a frame, a heartbeat */
             static unsigned swaps;
-            fprintf(stderr, "  [GL] frame %u swapped\n", ++swaps);
+            NFS_LOG_DEBUG("graphics", "  [GL] frame %u swapped\n", ++swaps);
         }
     }
     if (!upload)
@@ -254,7 +255,7 @@ static GlSurf *surf_get(uint32_t va, uint32_t w, uint32_t h,
                               GL_RENDERBUFFER, s->ds);
     s->ds_on = s->ds;
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        fprintf(stderr, "  [GL] surface 0x%08X %ux%u incomplete\n", va, s->pw, s->ph);
+        NFS_LOG_DEBUG("graphics", "  [GL] surface 0x%08X %ux%u incomplete\n", va, s->pw, s->ph);
     glViewport(0, 0, (GLsizei)s->pw, (GLsizei)s->ph);
     glClearColor(0, 0, 0, 1);
     glClearDepth(1.0);
@@ -266,7 +267,7 @@ static GlSurf *surf_get(uint32_t va, uint32_t w, uint32_t h,
     state_dirty();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     if (s_trace)
-        fprintf(stderr, "  [GL] surface 0x%08X %ux%u (aa %ux%u, stored %ux%u)\n",
+        NFS_LOG_DEBUG("graphics", "  [GL] surface 0x%08X %ux%u (aa %ux%u, stored %ux%u)\n",
                 va, w, h, aa_sx, aa_sy, s->pw, s->ph);
     return s;
 }
@@ -300,7 +301,7 @@ static GLuint depth_get(uint32_t va, uint32_t pw, uint32_t ph, int *fresh)
     glBindRenderbuffer(GL_RENDERBUFFER, d->rb);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, (GLsizei)pw, (GLsizei)ph);
     if (s_trace)
-        fprintf(stderr, "  [GL] depth 0x%08X %ux%u\n", va, pw, ph);
+        NFS_LOG_DEBUG("graphics", "  [GL] depth 0x%08X %ux%u\n", va, pw, ph);
     return d->rb;
 }
 
@@ -599,7 +600,7 @@ static GLuint tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h,
     t->hash = hash; t->used = t->checked = s_frame;
     s_new_obj = 1;
     if (s_trace)
-        fprintf(stderr, "  [GL] texture 0x%08X format 0x%02X %ux%u pitch %u\n",
+        NFS_LOG_DEBUG("graphics", "  [GL] texture 0x%08X format 0x%02X %ux%u pitch %u\n",
                 va, color, w, h, pitch);
 
     if (color == 0x12 && pitch && !(pitch & 3) && pitch / 4 >= w) {
@@ -638,7 +639,7 @@ static GLuint tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h,
                 return t->tex;
             }
             s3tc = 0;
-            fprintf(stderr, "  [GL] compressed DXT upload refused; decoding DXT on the CPU\n");
+            NFS_LOG_DEBUG("graphics", "  [GL] compressed DXT upload refused; decoding DXT on the CPU\n");
         }
     }
     if ((size_t)w * h > s_decode_cap) {
@@ -679,7 +680,7 @@ static GLuint tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h,
                      GL_UNSIGNED_BYTE, &magenta);
         tex_account(t, 4);
         if (s_trace)
-            fprintf(stderr, "  [GL] texture 0x%08X format 0x%02X not decodable\n",
+            NFS_LOG_DEBUG("graphics", "  [GL] texture 0x%08X format 0x%02X not decodable\n",
                     va, color);
     }
     return t->tex;
@@ -837,11 +838,11 @@ static GLuint compile(GLenum type, const char *const *src, int n)
         char log[4096];
         int i;
         glGetShaderInfoLog(sh, sizeof log, NULL, log);
-        fprintf(stderr, "  [GL] %s shader failed:\n%s\n",
+        NFS_LOG_ERROR("graphics", "  [GL] %s shader failed:\n%s\n",
                 type == GL_VERTEX_SHADER ? "vertex" : "fragment", log);
         if (s_trace)
             for (i = 0; i < n; i++)
-                fprintf(stderr, "%s", src[i]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "%s", src[i]);
         glDeleteShader(sh);
         return 0;
     }
@@ -946,7 +947,7 @@ static void prog_cache_prewarm(void)
     s_prewarming = 0;
     fclose(f);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    fprintf(stderr, "  [GL] %u shader programs precompiled from %s in %.0f ms%s\n", n, path,
+    NFS_LOG_DEBUG("graphics", "  [GL] %u shader programs precompiled from %s in %.0f ms%s\n", n, path,
             (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6,
             bad ? " (file ends in a bad record)" : "");
 }
@@ -1008,7 +1009,7 @@ static GlProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     }
     memset(p, 0, sizeof *p);
     if ((++s_prog_made % 100) == 0)
-        fprintf(stderr, "  [GL] %u shader programs compiled (%u live)\n",
+        NFS_LOG_DEBUG("graphics", "  [GL] %u shader programs compiled (%u live)\n",
                 s_prog_made, s_prog_live + 1);
 
     vs[nvs++] = nv2a_gl_vsh_prelude();
@@ -1040,7 +1041,7 @@ static GlProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     if (!ok) {
         char log[2048];
         glGetProgramInfoLog(p->prog, sizeof log, NULL, log);
-        fprintf(stderr, "  [GL] link failed: %s\n", log);
+        NFS_LOG_ERROR("graphics", "  [GL] link failed: %s\n", log);
         glDeleteProgram(p->prog);
         p->prog = 0;
         return NULL;
@@ -1081,7 +1082,7 @@ static GlProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     if (s_trace) {
         static int shown;
         if (shown++ < 4)
-            fprintf(stderr, "  [GL] program %016llX linked\n", (unsigned long long)vkey);
+            NFS_LOG_DEBUG("graphics", "  [GL] program %016llX linked\n", (unsigned long long)vkey);
     }
     return p;
 }
@@ -1098,12 +1099,12 @@ static int ready(void)
         /* The host already made the window and context (a loading screen)
          * and has let go of the context: take it on this thread. */
         if (SDL_GL_MakeCurrent(s_win, s_ctx) != 0) {
-            fprintf(stderr, "  [GL] adopting the window: %s\n", SDL_GetError());
+            NFS_LOG_DEBUG("graphics", "  [GL] adopting the window: %s\n", SDL_GetError());
             return 0;
         }
     } else {
         if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
-            fprintf(stderr, "  [GL] SDL video: %s\n", SDL_GetError());
+            NFS_LOG_DEBUG("graphics", "  [GL] SDL video: %s\n", SDL_GetError());
             return 0;
         }
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -1113,19 +1114,19 @@ static int ready(void)
         s_win = SDL_CreateWindow("NV2A", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                  1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!s_win) {
-            fprintf(stderr, "  [GL] window: %s\n", SDL_GetError());
+            NFS_LOG_DEBUG("graphics", "  [GL] window: %s\n", SDL_GetError());
             return 0;
         }
         s_ctx = SDL_GL_CreateContext(s_win);
         if (!s_ctx) {
-            fprintf(stderr, "  [GL] context: %s\n", SDL_GetError());
+            NFS_LOG_DEBUG("graphics", "  [GL] context: %s\n", SDL_GetError());
             return 0;
         }
     }
     SDL_GL_SetSwapInterval(0);
     if (nv2a_gl_load(SDL_GL_GetProcAddress) != 0)
         return 0;
-    fprintf(stderr, "  [GL] %s / %s / %s\n", (const char *)glGetString(GL_VENDOR),
+    NFS_LOG_DEBUG("graphics", "  [GL] %s / %s / %s\n", (const char *)glGetString(GL_VENDOR),
             (const char *)glGetString(GL_RENDERER), (const char *)glGetString(GL_VERSION));
     {
         const char *e = getenv("RECOMP_GL_SCALE");
@@ -1137,7 +1138,7 @@ static int ready(void)
         glGetIntegerv(0x84E8, &mr);                 /* GL_MAX_RENDERBUFFER_SIZE */
         s_max_size = mt > 0 && mr > 0 ? (mt < mr ? mt : mr) : 4096;
         if (s_scale != 1.0)
-            fprintf(stderr, "  [GL] rendering at %gx (RECOMP_GL_SCALE), surfaces up to %d\n",
+            NFS_LOG_DEBUG("graphics", "  [GL] rendering at %gx (RECOMP_GL_SCALE), surfaces up to %d\n",
                     s_scale, s_max_size);
     }
     {
@@ -1147,7 +1148,7 @@ static int ready(void)
         int dw = 0, dh = 0, sw = 0, sh = 0;
         SDL_GL_GetDrawableSize(s_win, &dw, &dh);
         if (!nv2a_gl_screen_size(&sw, &sh)) { sw = dw; sh = dh; }
-        fprintf(stderr, "  [GL] screen %dx%d, SDL drawable %dx%d\n", sw, sh, dw, dh);
+        NFS_LOG_DEBUG("graphics", "  [GL] screen %dx%d, SDL drawable %dx%d\n", sw, sh, dw, dh);
     }
     glGenVertexArrays(1, &s_vao);
     glBindVertexArray(s_vao);
@@ -1631,7 +1632,7 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
         for (k2 = 0; k2 < nseen && seen[k2] != sp; k2++) { }
         if (odd && k2 == nseen && nseen < 32) {
             seen[nseen++] = sp;
-            fprintf(stderr, "  [GL] texture modes 0x%05X (stages %u %u %u %u) prim %u n %u"
+            NFS_LOG_DEBUG("graphics", "  [GL] texture modes 0x%05X (stages %u %u %u %u) prim %u n %u"
                     " fmt %02X %02X %02X %02X bumpmat1 %08X %08X %08X %08X\n",
                     sp, sp & 0x1F, (sp >> 5) & 0x1F, (sp >> 10) & 0x1F, (sp >> 15) & 0x1F,
                     b->prim, b->index_count,
@@ -1757,7 +1758,7 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
             (s->va == watch_va || b->tex_va[0] == watch_va || b->tex_va[1] == watch_va ||
              b->tex_va[2] == watch_va || b->tex_va[3] == watch_va)) {
             watch_n++;
-            fprintf(stderr, "  [WATCH] surf %08X %ux%u prim %u n %u xform %u attrs %04X direct %04X"
+            NFS_LOG_DEBUG("graphics", "  [WATCH] surf %08X %ux%u prim %u n %u xform %u attrs %04X direct %04X"
                     " modes %05X other %08X ctl %08X\n"
                     "          c0 icw %08X ocw %08X a icw %08X ocw %08X final %08X %08X\n",
                     s->va, s->w, s->h, b->prim, b->index_count, b->xform, b->attr_present,
@@ -1768,15 +1769,15 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                 uint32_t base = (0x1B00u + i * 0x40u) / 4;
                 if (!(r[base + 3] & 0x40000000u))
                     continue;
-                fprintf(stderr, "          t%u va %08X%s fmt %08X ctl0 %08X ctl1 %08X filt %08X rect %08X"
+                NFS_LOG_DEBUG("graphics", "          t%u va %08X%s fmt %08X ctl0 %08X ctl1 %08X filt %08X rect %08X"
                         " tscale %g %g\n", i, b->tex_va[i], surf_find(b->tex_va[i]) ? " (surface)" : "",
                         r[base + 1], r[base + 3], r[base + 4], r[base + 5], r[base + 7],
                         tscale[i][0], tscale[i][1]);
             }
-            fprintf(stderr, "          4UB spec %08X diff %08X 4F spec %08X %08X %08X %08X fog en %u fc0 %08X fc1 %08X\n",
+            NFS_LOG_DEBUG("graphics", "          4UB spec %08X diff %08X 4F spec %08X %08X %08X %08X fog en %u fc0 %08X fc1 %08X\n",
                     r[0x1940 / 4 + 4], r[0x1940 / 4 + 3], r[0x1A40 / 4], r[0x1A44 / 4],
                     r[0x1A48 / 4], r[0x1A4C / 4], r[0x29C / 4], r[0x1E20 / 4], r[0x1E24 / 4]);
-            fprintf(stderr, "          blend %u %04X %04X alphatest %u func %X ref %u zmask %u ztest %u cmask %08X\n",
+            NFS_LOG_DEBUG("graphics", "          blend %u %04X %04X alphatest %u func %X ref %u zmask %u ztest %u cmask %08X\n",
                     r[0x304 / 4], r[0x344 / 4], r[0x348 / 4], r[0x300 / 4], r[0x33C / 4], r[0x340 / 4],
                     r[0x35C / 4], r[0x30C / 4], r[0x358 / 4]);
             s_watch_hit = 1;
@@ -1790,14 +1791,14 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                     memcpy(&u0, b->direct[9].ptr, 4);
                     memcpy(&v0, b->direct[9].ptr + 4, 4);
                     glBindFramebuffer(0x8CA8, src->fbo);         /* GL_READ_FRAMEBUFFER */
-                    fprintf(stderr, "          src %ux%u at (%g,%g)+4/12/20/28:", src->w, src->h, u0, v0);
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "          src %ux%u at (%g,%g)+4/12/20/28:", src->w, src->h, u0, v0);
                     for (q = 0; q < 4; q++) {
                         GLint xx = (GLint)u0 + 4 + q * 8, yy = (GLint)v0 + 4 + q * 8;
                         if (xx < 0 || yy < 0 || xx >= (GLint)src->w || yy >= (GLint)src->h) continue;
                         glReadPixels(to_stored((uint32_t)xx, src->pw, src->w), to_stored((uint32_t)yy, src->ph, src->h), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-                        fprintf(stderr, " %02X%02X%02X%02X", px[0], px[1], px[2], px[3]);
+                        NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %02X%02X%02X%02X", px[0], px[1], px[2], px[3]);
                     }
-                    fprintf(stderr, "\n");
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
                     glBindFramebuffer(0x8CA8, s->fbo);
                 }
             }
@@ -1805,7 +1806,7 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                 static const int wa[4] = { 0, 3, 9, 10 };
                 uint32_t v, j;
                 for (v = 0; v < b->vertex_count && v < 4; v++) {
-                    fprintf(stderr, "          v%u", v);
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "          v%u", v);
                     for (j = 0; j < 4; j++) {
                         int a2 = wa[j];
                         if (!(b->attr_direct & (1u << a2)) || !b->direct[a2].ptr)
@@ -1814,21 +1815,21 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                         if (b->direct[a2].type == 2) {
                             float f4[4] = { 0 };
                             memcpy(f4, q, 4 * (b->direct[a2].size < 4 ? b->direct[a2].size : 4));
-                            fprintf(stderr, " a%d(%g %g %g %g)", a2, f4[0], f4[1], f4[2], f4[3]);
+                            NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " a%d(%g %g %g %g)", a2, f4[0], f4[1], f4[2], f4[3]);
                         } else {
                             uint32_t w4;
                             memcpy(&w4, q, 4);
-                            fprintf(stderr, " a%d(t%u %08X)", a2, b->direct[a2].type, w4);
+                            NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " a%d(t%u %08X)", a2, b->direct[a2].type, w4);
                         }
                     }
-                    fprintf(stderr, "\n");
+                    NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
                 }
             }
             if (b->attrs && !(b->attr_direct & 0x0209)) {
                 uint32_t v;
                 for (v = 0; v < b->vertex_count && v < 4; v++) {
                     const float *at = b->attrs + (size_t)v * 64;
-                    fprintf(stderr, "          v%u pos %g %g %g %g d %g %g %g %g t0 %g %g %g %g t1 %g %g\n", v,
+                    NFS_LOG_DEBUG("graphics", "          v%u pos %g %g %g %g d %g %g %g %g t0 %g %g %g %g t1 %g %g\n", v,
                             at[0], at[1], at[2], at[3], at[12], at[13], at[14], at[15],
                             at[36], at[37], at[38], at[39], at[40], at[41]);
                 }
@@ -1899,7 +1900,7 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
             s_finish = getenv("RECOMP_GL_FINISH") != NULL;
         ++draws;
         if (s_finish && s_new_obj)
-            fprintf(stderr, "  [GL] draw %u: surf %08X %ux%u prim %u idx %u verts %u attrs %04X"
+            NFS_LOG_DEBUG("graphics", "  [GL] draw %u: surf %08X %ux%u prim %u idx %u verts %u attrs %04X"
                     " xform %u vp %u shaders %08X combiners %08X tex0 %08X/%02X\n",
                     draws, s->va, s->w, s->h, b->prim, n, b->vertex_count,
                     b->attr_present, b->xform, b->vp_start, pk.shader_program, pk.control,
@@ -1916,14 +1917,14 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
                 memcpy(&x0, b->direct[0].ptr, 4);
                 memcpy(&y0, b->direct[0].ptr + 4, 4);
             }
-            fprintf(stderr, "          after (x,y from v0 + 4/12/20/28):");
+            NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "          after (x,y from v0 + 4/12/20/28):");
             for (q = 0; q < 4; q++) {
                 GLint xx = (GLint)(x0 + 0.5f) + 4 + q * 8, yy = (GLint)(y0 + 0.5f) + 4 + q * 8;
                 if (xx < 0 || yy < 0 || xx >= (GLint)s->w || yy >= (GLint)s->h) continue;
                 glReadPixels(to_stored((uint32_t)xx, s->pw, s->w), to_stored((uint32_t)yy, s->ph, s->h), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-                fprintf(stderr, " %02X%02X%02X%02X", px[0], px[1], px[2], px[3]);
+                NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, " %02X%02X%02X%02X", px[0], px[1], px[2], px[3]);
             }
-            fprintf(stderr, "\n");
+            NFS_LOG_STREAM("graphics", NFS_LOG_LEVEL_DEBUG, "\n");
         }
     }
 }
@@ -2033,7 +2034,7 @@ static void gl_flip(void)
             uint64_t dt = now - last_ns;
             if (now - window_ns > 10000000000ull) { window_ns = now; lines = 0; }
             if (dt > 50000000ull && lines++ < 30)
-                fprintf(stderr, "[hitch] frame %u: %.0f ms -- %u programs compiled (%.0f ms),"
+                NFS_LOG_DEBUG("graphics", "[hitch] frame %u: %.0f ms -- %u programs compiled (%.0f ms),"
                         " %u textures %.1f MB (%.0f ms), %u draws\n", s_frame, dt / 1e6,
                         s_hz_progs, s_hz_prog_ns / 1e6, s_hz_texs,
                         s_hz_tex_bytes / 1048576.0, s_hz_tex_ns / 1e6, s_hz_draws);
@@ -2062,7 +2063,7 @@ static void gl_flip(void)
                 extern void xbox_vblank_report(double, char *, size_t);
                 char vb[128];
                 xbox_vblank_report(dt, vb, sizeof vb);
-                fprintf(stderr, "[fps] %.1f fps (frame %u), %s\n",
+                NFS_LOG_DEBUG("graphics", "[fps] %.1f fps (frame %u), %s\n",
                         (s_frame - last_frame) / dt, s_frame, vb);
                 last_frame = s_frame;
                 last = now;
@@ -2385,7 +2386,7 @@ static void q_draw(const Nv2aRawBatch *b)
     size += Q_ALIGN((size_t)b->index_count * 4);
     if (size > Q_BYTES / 4) {
         if ((s_q_dropped++ & 1023) == 0)
-            fprintf(stderr, "  [GL] queued draw of %zu bytes dropped (%llu so far)\n",
+            NFS_LOG_DEBUG("graphics", "  [GL] queued draw of %zu bytes dropped (%llu so far)\n",
                     size, (unsigned long long)s_q_dropped);
         return;
     }
@@ -2395,7 +2396,7 @@ static void q_draw(const Nv2aRawBatch *b)
     s_q_prog_gen = b->vp_prog_gen;
     s_q_const_gen = b->vp_const_gen;
     if (at != batch_at) {                       /* cannot happen: same diffs */
-        fprintf(stderr, "  [GL] queue record mismatch %zu/%zu\n", at, batch_at);
+        NFS_LOG_DEBUG("graphics", "  [GL] queue record mismatch %zu/%zu\n", at, batch_at);
         abort();
     }
     qb = (Nv2aRawBatch *)(rec + batch_at);
@@ -2585,10 +2586,10 @@ void nv2a_gl_install(void)
     }
     if (s_q_on) {
         nv2a_backend_register(&s_backend_q);
-        fprintf(stderr, "  [GL] NV2A OpenGL renderer registered, on a thread of its own"
+        NFS_LOG_DEBUG("graphics", "  [GL] NV2A OpenGL renderer registered, on a thread of its own"
                         " (RECOMP_GL_THREAD=1)\n");
         return;
     }
     nv2a_backend_register(&s_backend_gl);
-    fprintf(stderr, "  [GL] NV2A OpenGL renderer registered\n");
+    NFS_LOG_DEBUG("graphics", "  [GL] NV2A OpenGL renderer registered\n");
 }

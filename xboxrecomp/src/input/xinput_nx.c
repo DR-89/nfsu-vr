@@ -44,6 +44,7 @@
  * already turns it.
  */
 #ifdef __SWITCH__
+#include "../../include/nfsu_log.h"
 #include <switch.h>
 
 #include <stdint.h>
@@ -126,7 +127,7 @@ static void nx_assign(unsigned mask[NX_PADS])
             if (p + 1 < NX_PADS)
                 n += snprintf(line + n, sizeof line - n, ";");
         }
-        fprintf(stderr, "%s\n", line);
+        NFS_LOG_INFO("input", "%s\n", line);
         shown[0] = mask[0];
         shown[1] = mask[1];
     }

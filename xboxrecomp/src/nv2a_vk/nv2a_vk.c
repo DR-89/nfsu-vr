@@ -43,6 +43,7 @@
  *   RECOMP_VK_VALIDATION=1           (Linux) enable the Khronos validation layer
  *   RECOMP_VK_HEADLESS=1             (Linux) no window, no present
  */
+#include "../../include/nfsu_log.h"
 #include "nv2a_vk.h"
 #include "../../include/nfsu_perf.h"
 #include "../nv2a_gl/gl_psh.h"
@@ -77,14 +78,13 @@
 
 extern ptrdiff_t xbox_GetMemoryOffset(void);
 
-#define LOGE(...) fprintf(stderr, "  [VK] " __VA_ARGS__)
 
 static int s_state;            /* 0 untried, 1 ready, -1 failed */
 static int s_trace;
 /* RECOMP_VK_TRACE=<n>: name every step of the first n draws, clears and
  * flips (a crash inside the driver then ends the log at the step). */
 static int s_vtrace;
-#define VT(...) do { if (s_vtrace > 0) { fprintf(stderr, "  [VKT] " __VA_ARGS__); fflush(stderr); } } while (0)
+#define VT(...) do { if (s_vtrace > 0) { NFS_LOG_TRACE("graphics", "  [VKT] " __VA_ARGS__); fflush(stderr); } } while (0)
 static uint32_t s_frame;
 /* RECOMP_TEX_CHANGES=1: log every cached texture whose guest bytes changed
  * (re-uploaded). Finds textures a title frees while still drawing them. */
@@ -298,7 +298,7 @@ static VkDeviceSize ring_alloc(VkDeviceSize size, VkDeviceSize align, void **ptr
          * it, and start over in the same ring. Slow, but only in extremes. */
         static int warned;
         if (!warned++)
-            LOGE("frame ring (%u MB) full: flushing mid-frame\n", RING_BYTES >> 20);
+            NFS_LOG_DEBUG("graphics", "  [VK] " "frame ring (%u MB) full: flushing mid-frame\n", RING_BYTES >> 20);
         flush_frame_wait();
         at = 0;
         if (size > RING_BYTES) {
@@ -639,13 +639,13 @@ static VkSurf *surf_get(uint32_t va, uint32_t w, uint32_t h, uint32_t aa_sx, uin
                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_ASPECT_COLOR_BIT, &s->image, &s->view, &s->mem)) {
-        LOGE("surface 0x%08X %ux%u: image creation failed\n", va, w, h);
+        NFS_LOG_ERROR("graphics", "  [VK] " "surface 0x%08X %ux%u: image creation failed\n", va, w, h);
         memset(s, 0, sizeof *s);
         return NULL;
     }
     clear_image_color(s->image, 0, 0, 0, 1);
     if (s_trace)
-        LOGE("surface 0x%08X %ux%u (aa %ux%u, stored %ux%u)\n", va, w, h, aa_sx, aa_sy,
+        NFS_LOG_DEBUG("graphics", "  [VK] " "surface 0x%08X %ux%u (aa %ux%u, stored %ux%u)\n", va, w, h, aa_sx, aa_sy,
              s->pw, s->ph);
     return s;
 }
@@ -661,7 +661,7 @@ static void rescale_surfaces(double k)
 
     s_scale = k;
     s_scale_x = k * s_xratio;
-    fprintf(stderr, "  [VK] rendering at %g x %g%s\n", s_scale_x, k,
+    NFS_LOG_DEBUG("graphics", "  [VK] rendering at %g x %g%s\n", s_scale_x, k,
             s_square ? ", square pixels" : "");
     for (i = 0; i < VK_MAX_SURF; i++) {
         VkSurf *s = &s_surf[i];
@@ -677,7 +677,7 @@ static void rescale_surfaces(double k)
                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                         VK_IMAGE_ASPECT_COLOR_BIT, &img, &view, &mem)) {
-            LOGE("surface 0x%08X %ux%u: image creation failed\n", s->va, pw, ph);
+            NFS_LOG_ERROR("graphics", "  [VK] " "surface 0x%08X %ux%u: image creation failed\n", s->va, pw, ph);
             continue;
         }
         if (!copied) {
@@ -734,7 +734,7 @@ static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
                     VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
                     &d->image, &d->view, &d->mem)) {
-        LOGE("depth 0x%08X %ux%u: image creation failed\n", va, pw, ph);
+        NFS_LOG_ERROR("graphics", "  [VK] " "depth 0x%08X %ux%u: image creation failed\n", va, pw, ph);
         memset(d, 0, sizeof *d);
         return NULL;
     }
@@ -744,7 +744,7 @@ static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph)
         vkCmdClearDepthStencilImage(s_cb, d->image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &rg);
     }
     if (s_trace)
-        LOGE("depth 0x%08X %ux%u\n", va, pw, ph);
+        NFS_LOG_DEBUG("graphics", "  [VK] " "depth 0x%08X %ux%u\n", va, pw, ph);
     return d;
 }
 
@@ -1095,7 +1095,7 @@ static void tex_fill(VkTex *t, uint32_t va, uint32_t layer)
             for (k = 0; k < w * h; k++)
                 px[k] = 0xFFFF00FFu;
             if (s_trace)
-                LOGE("texture 0x%08X format 0x%02X not decodable\n", va, color);
+                NFS_LOG_WARN("graphics", "  [VK] " "texture 0x%08X format 0x%02X not decodable\n", va, color);
         }
     }
     tex_copy_from_ring(t, at, 0, layer, 0);
@@ -1135,7 +1135,7 @@ static VkImageView tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h, 
         s_tex_changes = e && atoi(e) > 0;
     }
     if (t && s_tex_changes)
-        fprintf(stderr, "[tex] frame %u: %08X format %02X %ux%u changed\n",
+        NFS_LOG_DEBUG("graphics", "[tex] frame %u: %08X format %02X %ux%u changed\n",
                 s_frame, va, color, w, h);
     if (s_have_bc && color == 0x0C) fmt = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
     if (s_have_bc && color == 0x0E) fmt = VK_FORMAT_BC2_UNORM_BLOCK;
@@ -1166,7 +1166,7 @@ static VkImageView tex_get(uint32_t va, uint32_t color, uint32_t w, uint32_t h, 
         }
         tex_index_add(t);
         if (s_trace)
-            LOGE("texture 0x%08X format 0x%02X %ux%u pitch %u%s\n", va, color, w, h, pitch,
+            NFS_LOG_DEBUG("graphics", "  [VK] " "texture 0x%08X format 0x%02X %ux%u pitch %u%s\n", va, color, w, h, pitch,
                  face ? " cube" : "");
     }
     t->hash = hash;
@@ -1233,7 +1233,7 @@ static VkImageView cube_from_surfaces(uint32_t va, uint32_t w, uint32_t h, uint3
         clear_image_color(c->image, 0, 0, 0, 0);
         c->va = va; c->w = w; c->h = h; c->face = face; c->size = size;
         if (s_trace)
-            LOGE("cube 0x%08X %ux%u from surfaces (stored %u)\n", va, w, h, size);
+            NFS_LOG_DEBUG("graphics", "  [VK] " "cube 0x%08X %ux%u from surfaces (stored %u)\n", va, w, h, size);
     }
     c->used = s_frame;
     for (f = 0; f < 6; f++) {
@@ -1502,17 +1502,17 @@ static void *compile_thread(void *arg)
     in.resource = glslang_default_resource();
     sh = glslang_shader_create(&in);
     if (!glslang_shader_preprocess(sh, &in) || !glslang_shader_parse(sh, &in)) {
-        LOGE("%s shader failed:\n%s\n", j->stage == GLSLANG_STAGE_VERTEX ? "vertex" : "fragment",
+        NFS_LOG_ERROR("graphics", "  [VK] " "%s shader failed:\n%s\n", j->stage == GLSLANG_STAGE_VERTEX ? "vertex" : "fragment",
              glslang_shader_get_info_log(sh));
         if (s_trace)
-            fprintf(stderr, "%s\n", j->src);
+            NFS_LOG_DEBUG("graphics", "%s\n", j->src);
         glslang_shader_delete(sh);
         return NULL;
     }
     pr = glslang_program_create();
     glslang_program_add_shader(pr, sh);
     if (!glslang_program_link(pr, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
-        LOGE("link failed: %s\n", glslang_program_get_info_log(pr));
+        NFS_LOG_ERROR("graphics", "  [VK] " "link failed: %s\n", glslang_program_get_info_log(pr));
     } else {
         glslang_program_SPIRV_generate(pr, j->stage);
         j->nwords = glslang_program_SPIRV_get_size(pr);
@@ -1832,7 +1832,7 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     }
     s_prog_live++;
     if ((++s_prog_made % 100) == 0)
-        LOGE("%u shader programs compiled (%u live)\n", s_prog_made, s_prog_live);
+        NFS_LOG_DEBUG("graphics", "  [VK] " "%u shader programs compiled (%u live)\n", s_prog_made, s_prog_live);
     p->vkey = vkey;
     p->pkey = *pk;
     p->used = s_frame;
@@ -2072,11 +2072,11 @@ static VkPipeline pipe_get(const PipeKey *k)
     VT("vkCreateGraphicsPipelines prog %d blend %u cmask %X depth %u topo %u\n", k->prog, k->blend,
        k->cmask, k->depth, k->topo);
     if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe) != VK_SUCCESS) {
-        LOGE("pipeline creation failed\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "pipeline creation failed\n");
         return VK_NULL_HANDLE;
     }
     if (s_npipes == VK_MAX_PIPE) {
-        LOGE("pipeline table full\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "pipeline table full\n");
         return pipe;                          /* leaks; never seen in practice */
     }
     pe = &s_pipes[s_npipes];
@@ -2184,7 +2184,7 @@ static void prewarm(void)
     }
 #endif
     s_prewarming = 0;
-    fprintf(stderr, "  [VK] prewarm: %u programs (%u SPIR-V from cache), %u pipelines in %.0f ms%s\n",
+    NFS_LOG_DEBUG("graphics", "  [VK] prewarm: %u programs (%u SPIR-V from cache), %u pipelines in %.0f ms%s\n",
             nprog, s_spv_hits, npipe, (hz_now() - t0) / 1e6, bad ? " (a file ends in a bad record)" : "");
     if (s_pipes_unsaved)
         pcache_save();
@@ -2203,19 +2203,19 @@ static int create_swapchain(void)
 
     result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &caps);
     if (result != VK_SUCCESS) {
-        LOGE("surface capabilities failed: %d\n", result);
+        NFS_LOG_ERROR("graphics", "  [VK] " "surface capabilities failed: %d\n", result);
         return 0;
     }
     if (!caps.currentExtent.width || !caps.currentExtent.height)
         return 0;
     result = vkGetPhysicalDeviceSurfaceFormatsKHR(s_pd, s_surface, &nf, fmts);
     if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || !nf) {
-        LOGE("surface formats failed: %d\n", result);
+        NFS_LOG_ERROR("graphics", "  [VK] " "surface formats failed: %d\n", result);
         return 0;
     }
     result = vkGetPhysicalDeviceSurfacePresentModesKHR(s_pd, s_surface, &nm, modes);
     if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
-        LOGE("surface present modes failed: %d\n", result);
+        NFS_LOG_ERROR("graphics", "  [VK] " "surface present modes failed: %d\n", result);
         return 0;
     }
     ci.imageColorSpace = fmts[0].colorSpace;
@@ -2251,7 +2251,7 @@ static int create_swapchain(void)
      * rotation as already applied makes Android rotate them a second time. */
     if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
         ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    fprintf(stderr, "  [VK] Android surface transform: current=%u, supported=%u, selected=%u\n",
+    NFS_LOG_DEBUG("graphics", "  [VK] Android surface transform: current=%u, supported=%u, selected=%u\n",
         caps.currentTransform, caps.supportedTransforms, ci.preTransform);
 #endif
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -2262,7 +2262,7 @@ static int create_swapchain(void)
         VkSwapchainKHR sc;
         result = vkCreateSwapchainKHR(s_dev, &ci, NULL, &sc);
         if (result != VK_SUCCESS) {
-            LOGE("swapchain creation failed: %d\n", result);
+            NFS_LOG_ERROR("graphics", "  [VK] " "swapchain creation failed: %d\n", result);
             return 0;
         }
         for (i = 0; i < 8; i++) {
@@ -2280,7 +2280,7 @@ static int create_swapchain(void)
     s_sc_count = 8;
     result = vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, s_sc_images);
     if (result != VK_SUCCESS || !s_sc_count) {
-        LOGE("swapchain images failed: %d\n", result);
+        NFS_LOG_ERROR("graphics", "  [VK] " "swapchain images failed: %d\n", result);
         return 0;
     }
     for (i = 0; i < s_sc_count; i++) {
@@ -2289,7 +2289,7 @@ static int create_swapchain(void)
         VkSemaphoreCreateInfo sci = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         result = vkCreateSemaphore(s_dev, &sci, NULL, &s_sc_rendered[i]);
         if (result != VK_SUCCESS) {
-            LOGE("presentation semaphore creation failed: %d\n", result);
+            NFS_LOG_ERROR("graphics", "  [VK] " "presentation semaphore creation failed: %d\n", result);
             return 0;
         }
 #endif
@@ -2302,7 +2302,7 @@ static int create_swapchain(void)
         if (vkCreateImageView(s_dev, &vi, NULL, &s_sc_views[i]) != VK_SUCCESS)
             s_sc_views[i] = VK_NULL_HANDLE;     /* that image falls back to the blit */
     }
-    fprintf(stderr, "  [VK] swapchain %ux%u, %u images, format %d, present mode %d\n",
+    NFS_LOG_DEBUG("graphics", "  [VK] swapchain %ux%u, %u images, format %d, present mode %d\n",
             s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode);
     return 1;
 }
@@ -2379,13 +2379,13 @@ static void android_prepare_presentation(void)
         if (s_android_present == ANDROID_REBUILD_SURFACE)
             android_release_presentation();
         if (!s_surface && !android_create_surface()) {
-            LOGE("Android surface creation failed\n");
+            NFS_LOG_ERROR("graphics", "  [VK] " "Android surface creation failed\n");
             SDL_Delay(100);
             continue;
         }
         android_presentation_idle();
         if (create_swapchain()) {
-            LOGE("Android presentation restored: generation=%llu size=%ux%u\n",
+            NFS_LOG_INFO("graphics", "  [VK] " "Android presentation restored: generation=%llu size=%ux%u\n",
                  (unsigned long long)s_android_window.generation,
                  s_sc_extent.width, s_sc_extent.height);
             s_android_present = ANDROID_PRESENT_READY;
@@ -2487,17 +2487,17 @@ static int ready(void)
     ici.enabledLayerCount = nlayers;
     ici.ppEnabledLayerNames = layers;
     if (vkCreateInstance(&ici, NULL, &s_inst) != VK_SUCCESS) {
-        LOGE("vkCreateInstance failed\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "vkCreateInstance failed\n");
         return 0;
     }
     n = 8;
     if (vkEnumeratePhysicalDevices(s_inst, &n, pds) != VK_SUCCESS || !n) {
-        LOGE("no Vulkan device\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "no Vulkan device\n");
         return 0;
     }
     s_pd = pds[0];
     vkGetPhysicalDeviceProperties(s_pd, &pp);
-    fprintf(stderr, "  [VK] %s, Vulkan %u.%u.%u\n", pp.deviceName, VK_API_VERSION_MAJOR(pp.apiVersion),
+    NFS_LOG_INFO("graphics", "  [VK] %s, Vulkan %u.%u.%u\n", pp.deviceName, VK_API_VERSION_MAJOR(pp.apiVersion),
             VK_API_VERSION_MINOR(pp.apiVersion), VK_API_VERSION_PATCH(pp.apiVersion));
     s_ubo_align = pp.limits.minUniformBufferOffsetAlignment;
     s_ubo_range = pp.limits.maxUniformBufferRange;
@@ -2521,7 +2521,7 @@ static int ready(void)
             s_xratio = (k < 0.5 ? 0.5 : k > 4.0 * 4.0 / 3.0 ? 4.0 * 4.0 / 3.0 : k) / s_scale;
         s_scale_x = s_scale * s_xratio;
         if (s_scale != 1.0 || s_scale_x != 1.0 || s_square)
-            fprintf(stderr, "  [VK] rendering at %g x %g (RECOMP_GL_SCALE[_X])%s, surfaces up to %u\n",
+            NFS_LOG_DEBUG("graphics", "  [VK] rendering at %g x %g (RECOMP_GL_SCALE[_X])%s, surfaces up to %u\n",
                     s_scale_x, s_scale, s_square ? ", square pixels" : "", s_max_size);
     }
     if (s_ubo_align < 16) s_ubo_align = 16;
@@ -2563,7 +2563,7 @@ static int ready(void)
         if (qf[s_qfam].queueFlags & VK_QUEUE_GRAPHICS_BIT)
             break;
     if (s_qfam == n) {
-        LOGE("no graphics queue\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "no graphics queue\n");
         return 0;
     }
 
@@ -2574,7 +2574,7 @@ static int ready(void)
         nwindowSetDimensions(win, 1280, 720);
         sci.window = win;
         if (vkCreateViSurfaceNN(s_inst, &sci, NULL, &s_surface) != VK_SUCCESS) {
-            LOGE("vkCreateViSurfaceNN failed\n");
+            NFS_LOG_ERROR("graphics", "  [VK] " "vkCreateViSurfaceNN failed\n");
             return 0;
         }
     }
@@ -2584,7 +2584,7 @@ static int ready(void)
 #else
     if (!s_headless && !SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
 #endif
-        LOGE("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+        NFS_LOG_ERROR("graphics", "  [VK] " "SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
         s_headless = 1;
     }
 #endif
@@ -2615,11 +2615,11 @@ static int ready(void)
     dci.ppEnabledExtensionNames = dext;
     (void)feds;
     if (vkCreateDevice(s_pd, &dci, NULL, &s_dev) != VK_SUCCESS) {
-        LOGE("vkCreateDevice failed (needs push descriptors, dynamic vertex input, Vulkan 1.3)\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "vkCreateDevice failed (needs push descriptors, dynamic vertex input, Vulkan 1.3)\n");
         return 0;
     }
     vkGetDeviceQueue(s_dev, s_qfam, 0, &s_queue);
-#define GET(p, name) p = (void *)vkGetDeviceProcAddr(s_dev, name); if (!p) { LOGE("missing %s\n", name); return 0; }
+#define GET(p, name) p = (void *)vkGetDeviceProcAddr(s_dev, name); if (!p) { NFS_LOG_ERROR("graphics", "missing %s\n", name); return 0; }
 #ifdef __ANDROID__
     p_push_desc = android_push_descriptors;
     p_begin_rendering = android_begin_rendering;
@@ -2641,7 +2641,7 @@ static int ready(void)
 #undef GET
 
     if (!s_headless && !create_swapchain()) {
-        LOGE("swapchain creation failed; running headless\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "swapchain creation failed; running headless\n");
         s_headless = 1;
     }
 
@@ -2682,7 +2682,7 @@ static int ready(void)
                 vkCreatePipelineCache(s_dev, &pci, NULL, &s_pcache);
             }
             if (n)
-                fprintf(stderr, "  [VK] pipeline cache: %u KB from %s\n", (unsigned)(n >> 10), path);
+                NFS_LOG_DEBUG("graphics", "  [VK] pipeline cache: %u KB from %s\n", (unsigned)(n >> 10), path);
             free(d);
         }
     }
@@ -2717,7 +2717,7 @@ static int ready(void)
         f->ring_mem = alloc_mem(rq, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (!f->ring_mem || vkBindBufferMemory(s_dev, f->ring, f->ring_mem, 0) != VK_SUCCESS ||
             vkMapMemory(s_dev, f->ring_mem, 0, RING_BYTES, 0, (void **)&f->ring_ptr) != VK_SUCCESS) {
-            LOGE("frame ring allocation failed\n");
+            NFS_LOG_ERROR("graphics", "  [VK] " "frame ring allocation failed\n");
             return 0;
         }
     }
@@ -2735,7 +2735,7 @@ static int ready(void)
         return 0;
     clear_image_color(s_dummy_cube_img, 0, 0, 0, 0);
     s_state = 1;
-    fprintf(stderr, "  [VK] ready%s: BC %s, depth %s, depth clamp %s, UBO align %u,"
+    NFS_LOG_DEBUG("graphics", "  [VK] ready%s: BC %s, depth %s, depth clamp %s, UBO align %u,"
             " mips %s (bias %g), aniso %gx, FXAA %s\n",
             s_headless ? " (headless)" : "", s_have_bc ? "yes" : "no",
             s_depth_fmt == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
@@ -3012,7 +3012,7 @@ static VkFormat vertex_format(uint32_t type, uint32_t size)
         vkGetPhysicalDeviceFormatProperties(s_pd, f, &fp);
         if (!(fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT)) {
             if (s_trace)
-                LOGE("vertex format %d (type %u size %u) not supported: converted\n", f, type, size);
+                NFS_LOG_DEBUG("graphics", "  [VK] " "vertex format %d (type %u size %u) not supported: converted\n", f, type, size);
             f = VK_FORMAT_UNDEFINED;
         }
     }
@@ -3405,7 +3405,7 @@ static void vk_draw_raw_impl(const Nv2aRawBatch *b)
                  && VK_CONST_SIZE % s_ubo_align == 0;
         if (s_inst_on && e && *e == '2')
             s_inst_alt = 1;                     /* debug: every other frame */
-        fprintf(stderr, "  [VK] instancing %s (uniform range %u, alignment %u)\n",
+        NFS_LOG_DEBUG("graphics", "  [VK] instancing %s (uniform range %u, alignment %u)\n",
                 s_inst_on ? "on" : "off", s_ubo_range, (unsigned)s_ubo_align);
     }
     s_st_draws++;
@@ -3702,7 +3702,7 @@ static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
     } else if (flags & 0xF0) {
         static int warned;
         if (!warned++)
-            LOGE("clear with a partial colour mask (0x%X) not done yet\n", flags & 0xF0);
+            NFS_LOG_DEBUG("graphics", "  [VK] " "clear with a partial colour mask (0x%X) not done yet\n", flags & 0xF0);
     }
     if (d && (flags & 0x3)) {
         uint32_t zmax = s_regs ? zmax_of(s_regs) : 0xFFFFFFu;
@@ -3970,7 +3970,7 @@ static VkPipeline pp_pipe(VkFormat fmt)
     if (vs) vkDestroyShaderModule(s_dev, vs, NULL);
     if (fs) vkDestroyShaderModule(s_dev, fs, NULL);
     if (!pipe) {
-        LOGE("FXAA pipeline failed; presenting with a blit\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "FXAA pipeline failed; presenting with a blit\n");
         s_fxaa = 0;
         return VK_NULL_HANDLE;
     }
@@ -4094,7 +4094,7 @@ static void vk_flip_impl(void)
     s_frame++;
     if (s_frame % 300 == 0) {
         pool_report();
-        fprintf(stderr, "[vkkick] threshold %d, %u early submits (frame %u)\n",
+        NFS_LOG_DEBUG("graphics", "[vkkick] threshold %d, %u early submits (frame %u)\n",
                 s_kick_n, s_st_kicks, s_frame);
     }
     if (s_inst_alt)
@@ -4107,7 +4107,7 @@ static void vk_flip_impl(void)
             st = e && *e == '1';
         }
         if (st && s_frame - st_frame >= 300) {
-            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended, %u constant sets reused)\n",
+            NFS_LOG_DEBUG("graphics", "[vk] per frame: %u draws -> %u draw calls (%u instances appended, %u constant sets reused)\n",
                     s_st_draws / (s_frame - st_frame), s_st_calls / (s_frame - st_frame),
                     s_st_inst / (s_frame - st_frame), s_st_creuse / (s_frame - st_frame));
             s_st_draws = s_st_calls = s_st_inst = s_st_creuse = 0;
@@ -4122,7 +4122,7 @@ static void vk_flip_impl(void)
             uint64_t dt = now - last_ns;
             if (now - window_ns > 10000000000ull) { window_ns = now; lines = 0; }
             if (dt > 50000000ull && lines++ < 30)
-                fprintf(stderr, "[hitch] frame %u: %.0f ms -- %u programs compiled (%.0f ms),"
+                NFS_LOG_DEBUG("graphics", "[hitch] frame %u: %.0f ms -- %u programs compiled (%.0f ms),"
                         " %u textures %.1f MB (%.0f ms), %u draws\n", s_frame, dt / 1e6,
                         s_hz_progs, s_hz_prog_ns / 1e6, s_hz_texs,
                         s_hz_tex_bytes / 1048576.0, s_hz_tex_ns / 1e6, s_hz_draws);
@@ -4149,7 +4149,7 @@ static void vk_flip_impl(void)
                 extern void xbox_vblank_report(double, char *, size_t);
                 char vb[128];
                 xbox_vblank_report(dt, vb, sizeof vb);
-                fprintf(stderr, "[fps] %.1f fps (frame %u), %s\n",
+                NFS_LOG_DEBUG("graphics", "[fps] %.1f fps (frame %u), %s\n",
                         (s_frame - last_frame) / dt, s_frame, vb);
                 last_frame = s_frame;
                 last = now;
@@ -4214,7 +4214,7 @@ static void vk_flip_impl(void)
         nfsu_perf_end(NFSU_PERF_VK_ACQUIRE, perf_acquire);
         if (rr == VK_ERROR_OUT_OF_DATE_KHR || rr == VK_ERROR_SURFACE_LOST_KHR) {
 #ifdef __ANDROID__
-            LOGE("Android acquire requires presentation rebuild: %d\n", rr);
+            NFS_LOG_DEBUG("graphics", "  [VK] " "Android acquire requires presentation rebuild: %d\n", rr);
             s_android_present = rr == VK_ERROR_SURFACE_LOST_KHR
                 ? ANDROID_REBUILD_SURFACE : ANDROID_REBUILD_SWAPCHAIN;
 #else
@@ -4303,7 +4303,7 @@ static void vk_flip_impl(void)
     }
     uint64_t perf_submit = nfsu_perf_begin();
     if (vkQueueSubmit(s_queue, 1, &si, s_f->fence) != VK_SUCCESS)
-        LOGE("vkQueueSubmit failed\n");
+        NFS_LOG_ERROR("graphics", "  [VK] " "vkQueueSubmit failed\n");
     nfsu_perf_end(NFSU_PERF_VK_SUBMIT, perf_submit);
     s_f->submitted = 1;
     if (have_image) {
@@ -4324,7 +4324,7 @@ static void vk_flip_impl(void)
         nfsu_perf_end(NFSU_PERF_VK_PRESENT, perf_present);
 #ifdef __ANDROID__
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
-            LOGE("Android present requires presentation rebuild: %d\n", pr);
+            NFS_LOG_DEBUG("graphics", "  [VK] " "Android present requires presentation rebuild: %d\n", pr);
             s_android_present = pr == VK_ERROR_SURFACE_LOST_KHR
                 ? ANDROID_REBUILD_SURFACE : ANDROID_REBUILD_SWAPCHAIN;
         }
@@ -4380,5 +4380,5 @@ static const Nv2aBackend s_backend = {
 void nv2a_vk_install(void)
 {
     nv2a_backend_register(&s_backend);
-    fprintf(stderr, "[BOOT] NV2A Vulkan renderer registered\n");
+    NFS_LOG_INFO("graphics", "[BOOT] NV2A Vulkan renderer registered\n");
 }

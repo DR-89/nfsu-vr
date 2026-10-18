@@ -1,4 +1,5 @@
 /* Bounded host-side history. Never calls guest code or suspends guest threads. */
+#include "../xboxrecomp/include/nfsu_log.h"
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -129,12 +130,12 @@ static void report(int force)
         active[pending++] = threads[i].frames[threads[i].depth - 1];
     pthread_mutex_unlock(&mutex);
     last = now;
-    fprintf(stderr, "[RUNTIME] t=%llu events=%u pending=%u overwritten=%llu dropped=%llu\n",
+    NFS_LOG_INFO("runtime", "[RUNTIME] t=%llu events=%u pending=%u overwritten=%llu dropped=%llu\n",
             (unsigned long long)now, count, pending,
             (unsigned long long)omitted, (unsigned long long)lost);
     for (unsigned i = 0; i < count; i++) {
         DiagnosticEvent *e = &events[i];
-        fprintf(stderr, "[HISTORY] seq=%llu t=%llu tid=%ld op=%08X caller=%08X"
+        NFS_LOG_DEBUG("runtime", "[HISTORY] seq=%llu t=%llu tid=%ld op=%08X caller=%08X"
                 " args=%08X,%08X,%08X,%08X result=%08X ms=%llu\n",
                 (unsigned long long)e->sequence, (unsigned long long)e->start,
                 e->tid, e->operation, e->caller, e->args[0], e->args[1],
@@ -142,7 +143,7 @@ static void report(int force)
     }
     for (unsigned i = 0; i < pending; i++) {
         DiagnosticEvent *e = &active[i];
-        fprintf(stderr, "[WAITSTATE] tid=%ld ordinal=%u caller=%08X"
+        NFS_LOG_DEBUG("runtime", "[WAITSTATE] tid=%ld ordinal=%u caller=%08X"
                 " args=%08X,%08X,%08X,%08X age_ms=%llu\n", e->tid,
                 e->operation, e->caller, e->args[0], e->args[1], e->args[2],
                 e->args[3], (unsigned long long)(now >= e->start ? now - e->start : 0));

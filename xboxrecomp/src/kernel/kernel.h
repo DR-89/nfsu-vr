@@ -1082,7 +1082,7 @@ VOID    __stdcall xbox_Unknown_42(void);
 
 void xbox_log(int level, const char* subsystem, const char* fmt, ...);
 
-#ifdef _DEBUG
+#if defined(_DEBUG) || defined(NFSU_USE_ZLOG)
 #define XBOX_TRACE(subsystem, fmt, ...) xbox_log(XBOX_LOG_TRACE, subsystem, fmt, ##__VA_ARGS__)
 #else
 #define XBOX_TRACE(subsystem, fmt, ...) ((void)0)

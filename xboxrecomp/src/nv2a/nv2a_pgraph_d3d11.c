@@ -10,6 +10,7 @@
  *   - ~448 vertices per frame (~89 quads)
  *   - Textured 2D elements in 640×480 screen space
  */
+#include "../../include/nfsu_log.h"
 
 #include "nv2a_pgraph_d3d11.h"
 #include "nv2a_regs.h"
@@ -50,7 +51,7 @@ static IDirect3DTexture8 *create_dxt5_texture(IDirect3DDevice8 *dev,
     HRESULT hr = dev->lpVtbl->CreateTexture(dev, width, height, 1,
         0 /*Usage*/, 0x0F /*DXT5*/, 0 /*D3DPOOL_DEFAULT*/, &tex);
     if (hr != 0 || !tex) {
-        fprintf(stderr, "[PGRAPH-D3D11] Failed to create font atlas texture: hr=0x%08X\n", hr);
+        NFS_LOG_ERROR("graphics", "[PGRAPH-D3D11] Failed to create font atlas texture: hr=0x%08X\n", hr);
         return NULL;
     }
 
@@ -60,10 +61,10 @@ static IDirect3DTexture8 *create_dxt5_texture(IDirect3DDevice8 *dev,
     if (hr == 0 && lr.pBits) {
         memcpy(lr.pBits, dxt5_data, data_size);
         tex->lpVtbl->UnlockRect(tex, 0);
-        fprintf(stderr, "[PGRAPH-D3D11] Created font atlas: %ux%u DXT5 (%u bytes)\n",
+        NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Created font atlas: %ux%u DXT5 (%u bytes)\n",
                 width, height, data_size);
     } else {
-        fprintf(stderr, "[PGRAPH-D3D11] Failed to lock font atlas: hr=0x%08X\n", hr);
+        NFS_LOG_ERROR("graphics", "[PGRAPH-D3D11] Failed to lock font atlas: hr=0x%08X\n", hr);
     }
     return tex;
 }
@@ -213,13 +214,13 @@ void pgraph_d3d11_init(void)
     g_pg.color_mask = 0x01010101;
     g_pg.initialized = 1;
 
-    fprintf(stderr, "[PGRAPH-D3D11] Translator initialized\n");
+    NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Translator initialized\n");
 }
 
 void pgraph_d3d11_shutdown(void)
 {
     g_pg.initialized = 0;
-    fprintf(stderr, "[PGRAPH-D3D11] Translator shut down (draws=%u, verts=%u)\n",
+    NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Translator shut down (draws=%u, verts=%u)\n",
             g_pg.stats.draw_calls, g_pg.stats.vertices_submitted);
 }
 
@@ -331,12 +332,12 @@ static void submit_draw(void)
 
     /* Log first few draws' vertex positions (once) */
     if (g_pg.stats.draw_calls < 3 && num_verts >= 3) {
-        fprintf(stderr, "[PGRAPH-D3D11] Draw verts (mode=%u, %u in → %u out):\n",
+        NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Draw verts (mode=%u, %u in → %u out):\n",
                 g_pg.draw_mode, num_verts, out_vert_count);
         uint32_t show = num_verts < 8 ? num_verts : 8;
         for (uint32_t i = 0; i < show; i++) {
             uint32_t b = i * g_pg.vert_stride;
-            fprintf(stderr, "  [%u] pos=(%.1f, %.1f) uv=(%.3f, %.3f) color=0x%08X\n",
+            NFS_LOG_DEBUG("graphics", "  [%u] pos=(%.1f, %.1f) uv=(%.3f, %.3f) color=0x%08X\n",
                     i, u2f(src[b+0]), u2f(src[b+1]), u2f(src[b+2]), u2f(src[b+3]), src[b+4]);
         }
     }
@@ -363,10 +364,10 @@ static void submit_draw(void)
     if (g_textures_loaded) {
         if (!g_pg.texture_lookup_done) {
             g_pg.texture_lookup_done = 1;
-            fprintf(stderr, "[PGRAPH-D3D11] Texture lookup init (global_txd has %d textures)\n",
+            NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Texture lookup init (global_txd has %d textures)\n",
                     g_global_txd.count);
             for (int ti = 0; ti < g_global_txd.count; ti++) {
-                fprintf(stderr, "    [%3d] %-24s %3ux%-3u fmt=0x%X\n",
+                NFS_LOG_DEBUG("graphics", "    [%3d] %-24s %3ux%-3u fmt=0x%X\n",
                         ti, g_global_txd.entries[ti].name,
                         g_global_txd.entries[ti].width,
                         g_global_txd.entries[ti].height,
@@ -445,7 +446,7 @@ static void submit_draw(void)
     g_pg.stats.vertices_submitted += num_verts;
 
     if (g_pg.stats.draw_calls <= 5 || (g_pg.stats.draw_calls % 1000) == 0) {
-        fprintf(stderr, "[PGRAPH-D3D11] Draw #%u: %u verts, prim=%d, prims=%u\n",
+        NFS_LOG_DEBUG("graphics", "[PGRAPH-D3D11] Draw #%u: %u verts, prim=%d, prims=%u\n",
                 g_pg.stats.draw_calls, num_verts, g_pg.d3d_prim_type, prim_count);
     }
 }

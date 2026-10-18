@@ -346,3 +346,33 @@ preference is an editor preference, not a gameplay control binding. Cancel
 restores the original layout, including moves caused by enabling the grid.
 `tests/TouchGridTest.java` covers shared alignment, viewport scale, screen edges
 and the no-fitting-node fallback. Device visual/drag acceptance remains pending.
+
+### Android input trace
+
+Place `nfsu1x_env.txt` beside `nfsu1.log` in the app's runtime directory
+(normally `/sdcard/Android/data/org.nfsu.android/files/`) and fully restart
+the game. This is the app directory, not the selected Xbox game folder.
+
+```ini
+RECOMP_INPUT_TRACE=1
+```
+
+Android reads this optional file before starting the guest. It accepts
+`KEY=VALUE`, blank lines, `#` comment lines, whitespace and CRLF. Platform-owned
+paths and scheduler settings still follow Android's normal boot configuration.
+`RECOMP_INPUT_TRACE` requires the exact value `1`; set `0` or remove the line
+and restart to disable it. The startup log confirms `input trace=1`.
+
+`[INPUT_TRACE]` lines in `logs/input.log`, `logs/all.log` and the compatibility
+`nfsu1.log` include monotonic milliseconds, touch
+down/up/cancel, pointer IDs and coordinates, hit button, screen-hold ownership,
+accepted/ignored delivery, overlay state and button mask. Moves are logged when
+the hit target, ownership or button mask changes. The controller report logs
+changes in the final merged player-one state: source, digital buttons, steering
+axis, gas and brake. Steering left is negative, right positive; both touch
+directions together produce zero. This observes host input submitted to the USB
+backend, not the game's physics response. Existing `RECOMP_INPUT_DIAG=1` can
+also be set in this file for the older once-per-second USB diagnostic.
+
+Tracing is off by default and does not change gesture or controller behavior.
+Enable it only for a short reproduction, then share the log and recording.
