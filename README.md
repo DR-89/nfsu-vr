@@ -307,6 +307,12 @@ After building both targets and committing the source:
 
 The tool uses an explicit runtime-file list, inspects APK contents, rejects retail filenames/hashes and private paths, and writes packages, checksums and a source-revision manifest to `dist/`. It excludes game data, saves, generated C, debug symbols and signing keys.
 
+## Support development
+
+If you enjoy this project and would like to support further development of my VR ports, you can support my work on Patreon:
+
+[https://www.patreon.com/c/OpenSourceDevDirk](https://www.patreon.com/c/OpenSourceDevDirk)
+
 ## Credits and license
 
 - [cherepavel/nfsu1-android](https://github.com/cherepavel/nfsu1-android), base `0caa485`: NFSU1 recompilation and Android/runtime work.
