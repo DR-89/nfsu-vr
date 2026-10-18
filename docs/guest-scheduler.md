@@ -470,6 +470,17 @@ Open the game manually. Startup must contain both
 Use the same main menu after profile selection, then the same race. Revert
 with `adb shell setprop debug.nfsu.executor 0` and restart the app.
 
+Preemption queries cache whether another ready continuation has higher or equal
+priority. Creation/removal, native notifications, callback submissions, priority
+changes and suspend/resume invalidate that cache through an atomic generation.
+The cache resets on each resume. Unchanged queries avoid the wake mutex and
+ready-list traversal, and read the quantum clock only for equal-priority
+competition. Notification state is published before its generation update so a
+sleeping high-priority continuation cannot be hidden by a stale cached result.
+The cooperative quantum and priority selection policy are unchanged. Host
+regressions cover cache invalidation, native wake, and equal-priority expiry;
+Android performance and thermal improvements require a repeated race test.
+
 The root selects the highest mapped priority, FIFO among equal ready threads,
 with a cooperative 1 ms slice. Managed waits park their C stacks until resource
 completion or a monotonic deadline. Suspend/resume and priority changes use

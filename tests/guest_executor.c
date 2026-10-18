@@ -189,6 +189,62 @@ static DWORD WINAPI wait_ordered(void *arg)
     trace[trace_count++] = (int)side;
     return 0;
 }
+static DWORD WINAPI preempt_peer(void *unused)
+{
+    (void)unused;
+    assert(0); /* The probe removes this peer without running it. */
+    return 0;
+}
+static DWORD WINAPI preempt_waiting_peer(void *unused)
+{
+    (void)unused;
+    assert(xgf_prepare_wait(xgf_current()));
+    assert(xgf_park());
+    return 44;
+}
+static void *preempt_native_notify(void *peer)
+{
+    xgf_notify(peer);
+    return NULL;
+}
+static DWORD WINAPI preempt_cache_probe(void *unused)
+{
+    (void)unused;
+    assert(!xgf_should_preempt());
+    XgfFiber *peer;
+    HANDLE h = make(preempt_peer, NULL, 0, &peer, NULL);
+    assert(SetThreadPriority(h, -1));
+    usleep(5000); /* Expired slice alone must not preempt for lower priority. */
+    for (unsigned i = 0; i < 1000; i++) assert(!xgf_should_preempt());
+    assert(SetThreadPriority(h, 0));
+    assert(xgf_should_preempt()); /* Equal priority still observes slice expiry. */
+    assert(SetThreadPriority(h, 1));
+    assert(xgf_should_preempt());
+    assert(SuspendThread(h) == 0);
+    assert(!xgf_should_preempt());
+    assert(ResumeThread(h) == 1);
+    assert(xgf_should_preempt());
+    assert(SetThreadPriority(GetCurrentThread(), 2));
+    assert(!xgf_should_preempt());
+    assert(SetThreadPriority(GetCurrentThread(), 0));
+    assert(xgf_should_preempt());
+    assert(xgf_destroy(peer));
+    assert(!xgf_should_preempt());
+    assert(CloseHandle(h));
+    h = make(preempt_waiting_peer, NULL, 0, &peer, NULL);
+    assert(SetThreadPriority(h, 1));
+    assert(xgf_yield());
+    assert(xgf_state(peer) == XGF_WAITING);
+    assert(!xgf_should_preempt()); /* Cache the sleeping high-priority peer. */
+    pthread_t notifier;
+    assert(!pthread_create(&notifier, NULL, preempt_native_notify, peer));
+    assert(!pthread_join(notifier, NULL));
+    assert(xgf_should_preempt()); /* Native notification must invalidate it. */
+    assert(xgf_yield());
+    reap(h, peer, 44);
+    assert(!xgf_should_preempt());
+    return 43;
+}
 int main(void)
 {
     alarm(15);
@@ -202,6 +258,8 @@ int main(void)
     xgs_init(&preempt);
     assert(xgf_use_dispatcher_waits());
     executor = xgf_executor_create(); assert(executor);
+    HANDLE probe = make(preempt_cache_probe, NULL, 0, &fibers[0], NULL);
+    run(); reap(probe, fibers[0], 43);
     ready = CreateEventW(NULL, FALSE, FALSE, NULL);
     consumed = CreateEventW(NULL, FALSE, TRUE, NULL);
     handles[0] = make(producer, NULL, 0, &fibers[0], &tids[0]);
