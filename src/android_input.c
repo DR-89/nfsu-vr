@@ -251,9 +251,23 @@ DWORD xbox_InputSetState(DWORD port, const XBOX_VIBRATION *vibration)
     SDL_LockJoysticks();
     SDL_GameController *pad = controller_locked(port);
     BOOL connected = pad && SDL_GameControllerGetAttached(pad);
-    if (connected && pad != touch)
-        SDL_GameControllerRumble(pad, vibration->wLeftMotorSpeed,
-                                 vibration->wRightMotorSpeed, 1000);
+    int device_fallback = connected && pad == touch;
+    if (connected && pad != touch) {
+        device_fallback = SDL_GameControllerRumble(pad, vibration->wLeftMotorSpeed,
+                vibration->wRightMotorSpeed, 1000) < 0;
+    }
+    if (port == 0) {
+        /* SDL gets every refresh; avoid repeated JNI/UI work for steady speeds.
+         * This cache is protected by the joystick lock along with routing. */
+        static unsigned short last_left, last_right;
+        unsigned short left = device_fallback ? vibration->wLeftMotorSpeed : 0;
+        unsigned short right = device_fallback ? vibration->wRightMotorSpeed : 0;
+        if (left != last_left || right != last_right) {
+            android_device_rumble(left, right);
+            last_left = left;
+            last_right = right;
+        }
+    }
     /* Missing haptics is not a controller disconnection. */
     SDL_UnlockJoysticks();
     return connected ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;

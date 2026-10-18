@@ -270,3 +270,29 @@ void android_show_port_credits(void)
     if (xbox_guest_executor_native_call(show_port_credits_native, NULL)) return;
     show_port_credits_native(NULL);
 }
+
+/* USB feedback can originate on a guest fiber; JNI requires the host stack. */
+static void device_rumble_native(void *argument)
+{
+    const unsigned short *speeds = argument;
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    if (!env) return;
+    jobject activity = SDL_AndroidGetActivity();
+    if (!activity) return;
+    jclass cls = (*env)->GetObjectClass(env, activity);
+    jmethodID method = cls ? (*env)->GetMethodID(env, cls, "setGameRumble", "(II)V") : NULL;
+    if (method) (*env)->CallVoidMethod(env, activity, method, (jint)speeds[0], (jint)speeds[1]);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*env)->DeleteLocalRef(env, activity);
+}
+
+void android_device_rumble(unsigned short left, unsigned short right)
+{
+    unsigned short speeds[2] = {left, right};
+    if (xbox_guest_executor_native_call(device_rumble_native, speeds)) return;
+    device_rumble_native(speeds);
+}

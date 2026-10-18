@@ -17,6 +17,18 @@ import org.libsdl.app.SDLActivity;
 /** SDL hosts the game, controller input and audio on Android. */
 public final class GameActivity extends SDLActivity {
     private android.app.Dialog portCredits;
+    private GameRumble gameRumble;
+
+    // Invoked from the native stack; serialize commands with Activity lifecycle.
+    public void setGameRumble(final int left, final int right) {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if (!isFinishing() && !isDestroyed() && gameRumble != null)
+                    gameRumble.setSpeeds(left, right);
+            }
+        });
+    }
+
 
     // Called through JNI on the guest thread; all window work belongs to UI.
     public void showPortCredits() {
@@ -41,6 +53,7 @@ public final class GameActivity extends SDLActivity {
             portCredits.dismiss();
             portCredits = null;
         }
+        if (gameRumble != null) gameRumble.setActive(false);
         super.onDestroy();
     }
 
@@ -233,6 +246,8 @@ public final class GameActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (gameRumble == null) gameRumble = new GameRumble(this);
+        gameRumble.setActive(true);
         if (raceControls != null) raceControls.resumeControls();
         restoreFullscreen();
     }
@@ -242,6 +257,7 @@ public final class GameActivity extends SDLActivity {
         // A document picker is part of the editor session, not an abandoned edit.
         if (touchPresets == null || !touchPresets.isPickingDocument()) closeTouchEditor(false);
         if (raceControls != null) raceControls.pauseControls();
+        if (gameRumble != null) gameRumble.setActive(false);
         super.onPause();
     }
 
