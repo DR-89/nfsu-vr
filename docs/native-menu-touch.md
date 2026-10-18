@@ -600,3 +600,14 @@ The Controller adapter refreshes state after hotplug revisions. Host coverage
 in tests/controller_touch_options.c checks all eight component states, native
 call arguments, guest stack balance, original color restoration and rejection
 of overlay editing with no pad. Device visual acceptance remains pending.
+
+### Shared paint palette touch
+
+All paint categories use the ColorPicker adapter in `feng_touch.c`. A tap
+previews a populated rendered swatch. Two taps on the same swatch within
+350 ms send native Select, preserving the controller's availability and
+purchase flow. A different color starts a new pair; empty cells, drags,
+cancellation and leaving the screen clear the pending pair. Confirmation
+consumes the pair, so a third tap cannot confirm again. Synthetic coverage
+checks preview, empty cells, drag cancellation, double tap and third tap.
+Device validation across paint categories remains pending.

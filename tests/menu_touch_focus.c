@@ -444,6 +444,14 @@ int main(void)
     menu_touch_event(MENU_TOUCH_MOVE, .4f, .6f, 1280, 720); update();
     menu_touch_event(MENU_TOUCH_UP, .4f, .6f, 1280, 720); update(); update();
     assert(palette_previews == 1); /* swatch drag is neither carousel nor camera */
+    int paint_actions = controller_selects;
+    tap(.3f, yes); /* drag cancelled the previous tap pair */
+    assert(controller_selects == paint_actions);
+    expected_message = 0x406415E3;
+    tap(.3f, yes); /* second tap confirms through the screen controller */
+    assert(controller_selects == paint_actions + 1);
+    tap(.3f, yes); /* third tap starts a fresh pair */
+    assert(controller_selects == paint_actions + 1);
     float paint_yaw;
     memcpy(&paint_yaw, (void *)XBOX_PTR(0x2C044), 4);
     menu_touch_event(MENU_TOUCH_DOWN, .05f, .5f, 1280, 720);

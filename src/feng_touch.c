@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #define NFSU1_GAMEFLOW_STATE 0x00283434u
 extern int xbox_video_widescreen(void);
 /* The retail Xbox FEng retains its native mouse dispatcher (D8730), focus
@@ -614,6 +615,70 @@ void feng_touch_hit(void)
 
 /* Activate the object found under this gesture in the active package. This
  * applies to menu rows, keyboard keys and dialogs, without screen-name rules. */
+/* All paint categories use ColorPicker; B14 remains owned by the native
+ * controller, including availability, price and confirmation dialogs. */
+static uint32_t s_paint_screen, s_paint_entry, s_paint_color;
+static uint64_t s_paint_tap_ms;
+
+static void touch_paint_reset(void)
+{
+    s_paint_screen = s_paint_entry = s_paint_color = 0;
+}
+
+static int touch_paint_capture(uint32_t screen, TouchTarget *target, float x, float y)
+{
+    if (screen != touch_preview_screen() || MEM32(screen) != 0x001FDD74u) return 0;
+    for (unsigned i = 0; i < 60; i++) {
+        uint32_t entry = screen + 0x58 + i * 0x2C;
+        uint32_t object = MEM32(entry + 0xC);
+        TouchBounds bounds;
+        if (!MEM32(entry + 0x10) || !object ||
+            !touch_object_bounds(object, &bounds, 0) ||
+            x < bounds.left || x >= bounds.right ||
+            y < bounds.top || y >= bounds.bottom) continue;
+        target->target = object;
+        target->message = 1; /* palette selection, no purchase/accept */
+        target->palette_entry = entry;
+        touch_target_begin(target, screen, s_touch_x, s_touch_y);
+        return 1;
+    }
+    return 1; /* Empty palette cells must not fall through to native mouse input. */
+}
+
+static void touch_paint_select(const TouchTarget *target)
+{
+    uint32_t entry = target->palette_entry, screen = target->screen;
+    uint32_t row = MEM32(entry + 0x24), column = MEM32(entry + 0x28);
+    if (row >= 6 || column >= 10 || !MEM32(entry + 0x10) ||
+        MEM32(entry + 0xC) != target->target) { touch_paint_reset(); return; }
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t ms = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    uint32_t color = MEM32(entry + 0x10);
+    int accept = s_paint_screen == screen && s_paint_entry == entry &&
+        s_paint_color == color && ms - s_paint_tap_ms <= 350 &&
+        MEM32(screen + 0xB08) == row && MEM32(screen + 0xB0C) == column;
+    s_paint_screen = screen; s_paint_entry = entry; s_paint_color = color;
+    s_paint_tap_ms = ms;
+    MEM32(screen + 0xB08) = row;
+    MEM32(screen + 0xB0C) = column;
+    PUSH32(esp, 0); ecx = screen; sub_000C74C0();
+    PUSH32(esp, 0); ecx = screen; sub_000C7B40();
+    PUSH32(esp, 100);
+    PUSH32(esp, 0); ecx = screen; sub_000C7A80();
+    MEM8(screen + 0xAFC) = 1;
+    MEM32(screen + 0xAF8) = MEM32(0x002CA448u);
+    if (accept) {
+        touch_paint_reset();
+        PUSH32(esp, target->package);
+        PUSH32(esp, 1);
+        PUSH32(esp, target->target);
+        PUSH32(esp, 0x406415E3u); /* Native Select preserves locks and purchase flow. */
+        PUSH32(esp, 0); ecx = screen; sub_000DE540();
+    }
+}
+
+
 void feng_touch_dispatch(void)
 {
     if (!input_mode_sensor_enabled()) { sub_000D8730_gen(); return; }
@@ -658,25 +723,8 @@ void feng_touch_dispatch(void)
             }
             /* Horizontal browsers draw their arrows in a shared backdrop
              * package. Route those visible objects to the active browser. */
-            if (screen == touch_preview_screen() && MEM32(screen) == 0x001FDD74u) {
-                for (unsigned i = 0; i < 60; i++) {
-                    uint32_t entry = screen + 0x58 + i * 0x2C;
-                    uint32_t object = MEM32(entry + 0xC);
-                    TouchBounds bounds;
-                    float x = s_touch_x + 320.0f, y = s_touch_y + 240.0f;
-                    if (!MEM32(entry + 0x10) || !object ||
-                        !touch_object_bounds(object, &bounds, 0) ||
-                        x < bounds.left || x >= bounds.right ||
-                        y < bounds.top || y >= bounds.bottom) continue;
-                    TouchTarget *target = &s_touch_targets[slot];
-                    target->target = object;
-                    target->message = 1; /* palette selection, no purchase/accept */
-                    target->palette_entry = entry;
-                    touch_target_begin(target, screen, s_touch_x, s_touch_y);
-                    break;
-                }
-                continue;
-            }
+            if (touch_paint_capture(screen, &s_touch_targets[slot],
+                    s_touch_x + 320.0f, s_touch_y + 240.0f)) continue;
             for (unsigned side = 0; side < 2; side++) {
                 uint32_t object = MEM32(screen + 0x24 + side * 4);
                 TouchBounds bounds;
@@ -706,6 +754,7 @@ void feng_touch_dispatch(void)
             TouchGestureResult result = touch_gesture_update(&target->gesture,
                 s_touch_x, s_touch_y, s_touch_buttons, s_touch_prepare,
                 axis, target->swipe_distance, target->swipe_only);
+            if (target->palette_entry && result == TOUCH_GESTURE_CANCEL) touch_paint_reset();
             fire = result == TOUCH_GESTURE_TAP || result == TOUCH_GESTURE_NEGATIVE ||
                 result == TOUCH_GESTURE_POSITIVE;
             if (fire) {
@@ -726,25 +775,7 @@ void feng_touch_dispatch(void)
             target->gesture.fired = 1;
             uint32_t saved_eax = eax, saved_edx = edx, saved_esp = esp;
             if (target->palette_entry) {
-                uint32_t entry = target->palette_entry, screen = target->screen;
-                uint32_t row = MEM32(entry + 0x24), column = MEM32(entry + 0x28);
-                if (row < 6 && column < 10 && MEM32(entry + 0x10) &&
-                    MEM32(entry + 0xC) == target->target) {
-                    MEM32(screen + 0xB08) = row;
-                    MEM32(screen + 0xB0C) = column;
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C74C0(); /* cursor, current sample and native lock UI */
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C7B40();
-                    PUSH32(esp, 100); /* preview only; 101 is the accept path */
-                    PUSH32(esp, 0);
-                    ecx = screen;
-                    sub_000C7A80();
-                    MEM8(screen + 0xAFC) = 1;
-                    MEM32(screen + 0xAF8) = MEM32(0x002CA448u);
-                }
+                touch_paint_select(target);
             } else if (target->screen) {
                 int valid = 1;
                 if (target->magazine_slot && message == 0x406415E3u)
@@ -916,6 +947,7 @@ void feng_touch_update(void)
         }
         s_touch_poll = s_touch_prepare = s_touch_buttons = s_touch_target_count = 0;
         touch_orbit_reset(&s_touch_orbit);
+        touch_paint_reset();
         s_difficulty_screen = s_difficulty_choice = 0;
         s_touch_bounds_count = s_qr_arrow_count = s_back_cache_count = s_back_icon_count = 0;
         atomic_store(&s_race_menu_active, 0);
@@ -941,6 +973,7 @@ void feng_touch_update(void)
     int enabled = touch_menu_enabled() &&
         menu_touch_position(&sample, xbox_video_widescreen(), menu_size,
                             &s_touch_x, &s_touch_y);
+    if (sample.reset || !touch_menu_enabled() || active_screen != s_paint_screen) touch_paint_reset();
     if (sample.reset || (!enabled && sample.active)) {
         memset((void *)XBOX_PTR(feng + 0xC), 0, 0x20);
         MEM32(feng + 0x94) = 0; /* mouse press capture, not controller focus */
@@ -959,6 +992,12 @@ void feng_touch_update(void)
     MEM8(feng + 2) = enabled;
     sub_000D8B10_gen();
     MEM8(feng + 2) = mouse_enabled;
+    if (sample.prepare) {
+        int palette = 0;
+        for (unsigned i = 0; i < s_touch_target_count; i++)
+            if (s_touch_targets[i].palette_entry) palette = 1;
+        if (!palette) touch_paint_reset();
+    }
     s_touch_poll = 0;
     uint32_t preview = enabled ? touch_preview_screen() : 0;
     int control_captured = 0;
