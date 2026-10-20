@@ -10,7 +10,20 @@ Based on [cherepavel/nfsu1-android](https://github.com/cherepavel/nfsu1-android)
 
 ## Release status
 
-**v0.3.0-preview.1** is the first public preview. Quest 3 is the tested standalone target. Windows builds and passes automated checks; an actual NFSU1 **PCVR headset session has not yet been validated**.
+**v0.3.0-preview.1** is the first public preview, updated on **October 20, 2026** with the color correction below (Quest version code **5**). Quest 3 is the tested standalone target. Windows builds and passes automated checks; an actual NFSU1 **PCVR headset session has not yet been validated**.
+
+### October 20 color correction
+
+The Quest APK and Windows PCVR download now preserve the game's original
+display-encoded colors when presenting through OpenXR. This fixes the washed-out,
+gray appearance caused by applying gamma conversion twice, including menus,
+stereo gameplay and the VR Settings panel. Native Quest testing confirmed the
+colors and visible detail in dark areas. GPU regression tests cover both eye
+layers, channel orders and resolution scaling on Quest, Intel and NVIDIA GPUs;
+the updated PCVR build still needs a headset session.
+
+Download filenames and URLs remain unchanged. Install the APK over the previous
+version to retain imported data, saves and settings. The signing key is unchanged.
 
 | Release asset | Purpose |
 |---|---|
