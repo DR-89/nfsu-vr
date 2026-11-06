@@ -51,11 +51,64 @@ void sub_00130A70(void) { sub_00130A70_gen(); }
 void sub_00131050(void) { sub_00131050_gen(); }
 #endif
 
+extern void sub_00066820_gen(void);
 #ifdef NFSU2_OPENXR
 extern void sub_0003B8C0(void);
 extern void sub_00080850_gen(void);
 #include "nfsu1_vr_hooks.inc"
 #endif
+
+/* MAD movie packets feed the lifted player at 19E734/19E77D. Keep retail
+ * ownership of the three frame buffers and the movie clock on both hosts. */
+#ifdef NFSU2_OPENXR
+#include "movie_mad.h"
+static RECOMP_TLS unsigned mad_blocks, mad_width, mad_height;
+#endif
+extern void sub_0019F450_gen(void);
+void sub_0019F450(void)
+{
+#ifdef NFSU2_OPENXR
+    mad_blocks = 0;
+    if ((MEM32(esp) == 0x19e739 || MEM32(esp) == 0x19e782) && nfsu1_address(edi, 0x18)) {
+        uint32_t packet = MEM32(esp + 4) - 24;
+        if (nfsu1_address(packet, 24)) {
+            unsigned size = MEM32(packet + 4);
+            mad_width = MEM32(edi + 0x10);
+            mad_height = MEM32(edi + 0x14);
+            if (nfsu1_address(packet, size) && mad_width == MEM16(packet+16) && mad_height == MEM16(packet+18) &&
+                nfsu1_mad_begin(edi, (const uint8_t *)XBOX_PTR(packet), size)) {
+                static RECOMP_TLS int reported;
+                mad_blocks = mad_width * mad_height / 256;
+                if (!reported) {
+                    fprintf(stderr, "[NFSU1 movie] Native EA MAD decoding active (%ux%u)\n", mad_width, mad_height);
+                    reported = 1;
+                }
+            }
+            else nfsu1_mad_reset();
+        }
+    }
+#endif
+    sub_0019F450_gen();
+}
+
+extern void sub_0019F500_gen(void);
+void sub_0019F500(void)
+{
+#ifdef NFSU2_OPENXR
+    if (mad_blocks && MEM32(esp) == 0x19e835) {
+        if (mad_blocks == mad_width * mad_height / 256) {
+            unsigned area = mad_width * mad_height;
+            uint32_t y = MEM32(esp+16), u = MEM32(esp+20), v = MEM32(esp+24);
+            if (nfsu1_address(y,area) && nfsu1_address(u,area/4) && nfsu1_address(v,area/4)) {
+                uint8_t *planes[] = {(uint8_t *)XBOX_PTR(y), (uint8_t *)XBOX_PTR(u), (uint8_t *)XBOX_PTR(v)};
+                if (!nfsu1_mad_copy(mad_width, mad_height, planes)) mad_blocks = 0;
+            } else mad_blocks = 0;
+        }
+        if (mad_blocks) { --mad_blocks; esp += 4; return; }
+    }
+#endif
+    sub_0019F500_gen();
+}
 
 extern void sub_00080850_gen(void);
 void sub_00080850(void)
@@ -97,9 +150,108 @@ void sub_00126A90(void)
 void sub_0003BB10(void)
 {
 #ifdef NFSU2_OPENXR
+    int remember = quest_xr_enabled() && MEM32(esp) == 0x3f586 && ecx == nfsu1_player() && !nfsu1_replay_owner;
     if (nfsu1_vr_cycle()) return;
 #endif
     sub_0003BB10_gen();
+#ifdef NFSU2_OPENXR
+    if (remember) quest_xr_camera_remember((int)MEM32(0x295b68));
+#endif
+}
+
+void sub_00066820(void)
+{
+#ifdef NFSU2_OPENXR
+    if (quest_xr_enabled()) { nfsu1_driver_update(); return; }
+#endif
+    sub_00066820_gen();
+}
+
+/* Player HUD component mask (EDX:EAX). 0x40 is the retail gauge group. */
+extern void sub_0003BD90_gen(void);
+void sub_0003BD90(void)
+{
+#ifdef NFSU2_OPENXR
+    uint32_t manager = ecx;
+#endif
+    sub_0003BD90_gen();
+#ifdef NFSU2_OPENXR
+    eax |= nfsu1_grid_gauge_mask(manager);
+#endif
+}
+
+extern void sub_00065CF0_gen(void);
+void sub_00065CF0(void)
+{
+#ifdef NFSU2_OPENXR
+    uint32_t driver = ecx;
+#endif
+    sub_00065CF0_gen();
+#ifdef NFSU2_OPENXR
+    if (quest_xr_enabled() && nfsu1_address(driver, 0x288) && !nfsu1_replay_owner) {
+        uint32_t car = MEM32(driver+0x26c);
+        int gear = quest_xr_shifter_grid_request(car);
+        if (gear != QUEST_SHIFT_NONE) nfsu1_apply_grid_gear(driver, car, nfsu1_manual_gears(driver), gear);
+    }
+#endif
+}
+
+extern void sub_001AF3C0_gen(void);
+void sub_001AF3C0(void)
+{
+#ifdef NFSU2_OPENXR
+    /* The streamed R2 voice produces mono floats, in signed 16-bit units,
+     * before per-speaker gain. Feed silence on pause while retaining the
+     * stream's packet cursor and the original decoder history for resume. */
+    uint32_t voice = MEM32(esp+4), capacity = MEM32(esp+8), dest = MEM32(esp+16);
+    int channel = capacity && capacity <= 4096 && nfsu1_address(dest, capacity*sizeof(float)) ?
+                  nfsu1_music_channel(nfsu1_vr_read, NULL, voice) : -1;
+    if (channel >= 0 && vr_music_stock_held()) {
+        memset((void *)XBOX_PTR(dest), 0, capacity*sizeof(float));
+        eax = capacity;
+        esp += 4;
+        return;
+    }
+#endif
+    sub_001AF3C0_gen();
+#ifdef NFSU2_OPENXR
+    if (channel >= 0 && eax && eax <= capacity) {
+        static RECOMP_TLS unsigned seen;
+        if (!(seen & (1u<<channel))) {
+            seen |= 1u<<channel;
+            fprintf(stderr, "[NFSU1 radio] EA TRAX channel %d, %u decoded samples\n", channel, eax);
+        }
+        vr_music_stock_samples(1u+(unsigned)channel, (const float *)XBOX_PTR(dest), eax);
+    }
+#endif
+}
+
+extern void sub_0012EBE0_gen(void);
+void sub_0012EBE0(void)
+{
+#ifdef NFSU2_OPENXR
+    uint32_t r = ecx;
+    if (quest_xr_enabled() && MEM32(esp) == 0x2f116 && r && r == nfsu1_replay() && MEM32(r+4))
+        vr_replay_record(&nfsu1_recording, r, MEM32(r+0x64), MEM32(r+0x50),
+                         MEM32(r+0x5c), MEM32(0x25315c), MEM32(esp+4));
+#endif
+    sub_0012EBE0_gen();
+}
+
+extern void sub_0012EBA0_gen(void);
+void sub_0012EBA0(void)
+{
+#ifdef NFSU2_OPENXR
+    uint32_t r = ecx, caller = MEM32(esp);
+#endif
+    sub_0012EBA0_gen();
+#ifdef NFSU2_OPENXR
+    if (quest_xr_enabled() && r && r == nfsu1_replay() && MEM32(r) && !MEM32(r+8)) {
+        VrReplayFrame *frame = nfsu1_replay_frame(r);
+        if (frame && caller == 0x2f0fb && (frame->ticks & 255) == eax) eax = frame->ticks;
+        if (frame && caller == 0x2f34f && nfsu1_replay_owner) eax = (uint8_t)ebx;
+    }
+#endif
 }
 
 extern void sub_00015AB0_gen(void);

@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $dependencies = Get-Content -LiteralPath (Join-Path $repo 'quest/dependencies.json') -Raw | ConvertFrom-Json
 foreach ($property in $dependencies.PSObject.Properties) {
+    if ($property.Name -eq 'FFmpeg') { continue } # Built from its pinned revision by build-vr-media.ps1.
     $dep = $property.Value
     $destination = Join-Path $repo "build/deps/$($property.Name)"
     if (-not (Test-Path -LiteralPath $destination)) {

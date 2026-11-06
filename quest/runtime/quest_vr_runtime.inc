@@ -1,13 +1,16 @@
 /* Included by quest_xr.c. All UI, settings I/O and gamepad sampling belong to
  * the OpenXR/render thread; the guest receives only locked snapshots. */
 #include "quest_vr_panel.h"
+#include "vr_music.h"
+#include "apu_xaudio2.h"
 #include "quest_gamepad.h"
 #include "quest_cockpit_fit.h"
 #ifdef NFSU2_PCVR
 #include <windows.h>
 #endif
 static QuestVRMenu vr_menu;
-static int vr_paused,vr_save_status,vr_start_resolution;
+static int vr_settings_access,vr_save_status,vr_start_resolution;
+static uint32_t vr_save_tick;
 static char vr_settings_path[4096];
 static QuestSwapchain vr_panel_swap;
 static VkBuffer vr_panel_buffer;
@@ -24,6 +27,9 @@ static int create_swapchain(QuestSwapchain *,int64_t,uint32_t,uint32_t);
 
 static void vr_publish_settings(void)
 {
+    xa2_set_output_gain(powf(10.f,vr_settings.master_gain_db/20.f));
+    vr_music_set_source(vr_settings.music_source);
+    wheel_grip.return_speed=vr_settings.return_speed;
     float limit=vr_settings.rotation*QUEST_WHEEL_PI/360.0f;
     if(wheel_configured && (wheel_grip.limit!=limit || wheel_grip.sensitivity!=vr_settings.sensitivity)) {
         quest_wheel_reset(&wheel_grip);
@@ -31,9 +37,9 @@ static void vr_publish_settings(void)
     }
     ++vr_panel_revision;
 }
-void quest_xr_pause_publish(int paused)
+void quest_xr_settings_access_publish(int access)
 {
-    pthread_mutex_lock(&input_lock);vr_paused=paused;pthread_mutex_unlock(&input_lock);
+    pthread_mutex_lock(&input_lock);vr_settings_access=access;pthread_mutex_unlock(&input_lock);
 }
 static void vr_load_settings(void)
 {
@@ -45,6 +51,20 @@ static void vr_load_settings(void)
         if(f) {
             char text[4096];size_t n=SDL_RWread(f,text,1,sizeof text-1);text[n]=0;
             SDL_RWclose(f);quest_vr_parse(&vr_settings,text);
+            for(const char *line=text;*line;) {
+                char name[32];float y,p,sy,sp;int choice;
+                if(sscanf(line,"race_camera=%d",&choice)==1 && choice>=0 && choice<=6)
+                    camera_choice=choice;
+                if(sscanf(line,"mirror_%31[A-Z0-9]=%f,%f,%f,%f",name,&y,&p,&sy,&sp)==5 &&
+                   isfinite(y) && isfinite(p) && isfinite(sy) && isfinite(sp)) {
+                    int i=quest_cockpit_vehicle_index(name);
+                    if(!strcmp(name,quest_cockpit_vehicle(i)->name)) {
+                        mirror_settings[i]=(QuestMirrorSetting){quest_mirror_trim(y,p),quest_mirror_trim(sy,sp)};
+                        mirror_known[i]=1;
+                    }
+                }
+                line+=strcspn(line,"\n");if(*line)++line;
+            }
         }
     }
     vr_start_resolution=vr_settings.resolution;
@@ -54,9 +74,21 @@ static void vr_load_settings(void)
 }
 static void vr_save_settings(void)
 {
-    char text[512],temporary[4112];int n=quest_vr_format(&vr_settings,text,sizeof text);
+    char text[4096],temporary[4112];int n=quest_vr_format(&vr_settings,text,sizeof text);
     vr_save_status=-1;
+    vr_save_tick=SDL_GetTicks();
     if(!*vr_settings_path || n<=0 || n>=(int)sizeof text)return;
+    int base=snprintf(text+n,sizeof text-n,"race_camera=%d\n",quest_xr_camera_choice());
+    if(base<0 || base>=(int)sizeof text-n)return;
+    n+=base;
+    for(int i=0;i<QUEST_COCKPIT_VEHICLES;++i) {
+        const QuestMirrorSetting *m=&mirror_settings[i];
+        if(!mirror_known[i])continue;
+        int added=snprintf(text+n,sizeof text-n,"mirror_%s=%.6f,%.6f,%.6f,%.6f\n",quest_cockpit_vehicle(i)->name,
+            m->inside.yaw,m->inside.pitch,m->outside.yaw,m->outside.pitch);
+        if(added<0 || added>=(int)sizeof text-n)return;
+        n+=added;
+    }
     snprintf(temporary,sizeof temporary,"%s.tmp",vr_settings_path);
     SDL_RWops *f=SDL_RWFromFile(temporary,"wb");if(!f)return;
     int complete=SDL_RWwrite(f,text,1,(size_t)n)==(size_t)n;
@@ -70,6 +102,7 @@ static void vr_save_settings(void)
 #else
     vr_save_status=rename(temporary,vr_settings_path)==0?1:-1;
 #endif
+    if(vr_save_status>0)mirror_dirty=0;
     fprintf(stderr,"[VR settings] %s\n",vr_save_status>0?"saved":"save failed");
 }
 /* SDL covers Xbox, PlayStation and mapped Bluetooth/USB gamepads. Hotplug
@@ -100,7 +133,7 @@ static int vr_poll_gamepad(uint16_t *buttons,uint8_t analog[8],int16_t sticks[4]
 static int vr_settings_input(uint16_t buttons,const uint8_t analog[8],const int16_t sticks[4])
 {
     if(!vr_panel_pixels || !vr_panel_uploaded)return 0;
-    int paused;pthread_mutex_lock(&input_lock);paused=vr_paused;pthread_mutex_unlock(&input_lock);
+    int access;pthread_mutex_lock(&input_lock);access=vr_settings_access;pthread_mutex_unlock(&input_lock);
     int keys=buttons&15;
     int x=abs(sticks[2])>abs(sticks[0])?sticks[2]:sticks[0];
     int y=abs(sticks[3])>abs(sticks[1])?sticks[3]:sticks[1];
@@ -110,11 +143,17 @@ static int vr_settings_input(uint16_t buttons,const uint8_t analog[8],const int1
     if(analog[1]>127 || (buttons&0x10))keys|=QUEST_VR_BACK;
     if(analog[2]>127)keys|=QUEST_VR_OPEN;
     int old_open=vr_menu.open,old_row=vr_menu.row;
-    int changed=quest_vr_menu_step(&vr_menu,&vr_settings,SDL_GetTicks(),paused,keys);
+    int changed=quest_vr_menu_step(&vr_menu,&vr_settings,SDL_GetTicks(),access,keys);
+    if(changed&QUEST_VR_RESET_MIRRORS) {
+        pthread_mutex_lock(&input_lock);int vehicle=cockpit_vehicle_index;pthread_mutex_unlock(&input_lock);
+        mirror_settings[vehicle]=(QuestMirrorSetting){0};mirror_known[vehicle]=1;mirror_dirty=1;
+        quest_mirror_release(&mirror_grip);
+        ++vr_panel_revision;
+    }
     if(changed&1)vr_publish_settings();
     if(changed&2) {
         vr_save_settings();
-        if(vr_save_status<0 && paused) {vr_menu.open=1;vr_menu.row=6;}
+        if(vr_save_status<0 && access) {vr_menu.open=1;vr_menu.row=QUEST_VR_SAVE_ROW;}
     }
     if(old_open!=vr_menu.open || old_row!=vr_menu.row || (changed&2))++vr_panel_revision;
     return changed&4;
@@ -145,8 +184,8 @@ static int vr_panel_initialize(VkPhysicalDevice physical,int64_t format)
 }
 static void vr_panel_copy(VkCommandBuffer cb)
 {
-    int paused;pthread_mutex_lock(&input_lock);paused=vr_paused;pthread_mutex_unlock(&input_lock);
-    if(!paused || !vr_panel_pixels || !vr_panel_uploaded)return;
+    int access;pthread_mutex_lock(&input_lock);access=vr_settings_access;pthread_mutex_unlock(&input_lock);
+    if(!access || !vr_panel_pixels || !vr_panel_uploaded)return;
     XrSwapchainImageAcquireInfo acquire={XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     if(!XR_OK(xrAcquireSwapchainImage(vr_panel_swap.handle,&acquire,&vr_panel_swap.index)))return;
     vr_panel_swap.acquired=1;

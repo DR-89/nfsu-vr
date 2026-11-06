@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "quest_ghost_hands.h"
-#include "quest_cockpit_fit.h"
+#include "quest_cockpit_vehicle.h"
 
 /* The retail car is transformed into seated eye space before head tracking.
  * Only that rigid transform is eligible; roadside meshes and other cars must

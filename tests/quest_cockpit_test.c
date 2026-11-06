@@ -195,7 +195,9 @@ int main(int argc,char **argv)
         for(int i=0;i<QUEST_HUD_PANEL_VERTICES;++i) {
             CHECK(isfinite(hud[i].position[0]) && isfinite(hud[i].position[1]) && isfinite(hud[i].position[2]));
             CHECK(hud[i].uv[0]>=0 && hud[i].uv[0]<=1 && hud[i].uv[1]>=0 && hud[i].uv[1]<=1);
-            if(i>=QUEST_HUD_INSTRUMENT_VERTICES) {
+            if(i/6==QUEST_HUD_WINDOW) {
+                CHECK(fabsf(hud[i].position[0] - fit->right_window_x) < .18f);
+            } else if(i>=QUEST_HUD_INSTRUMENT_VERTICES) {
                 CHECK(fabsf(hud[i].position[0]-(hud[i].uv[0]-.5f)*2.8f)<.00001f);
                 CHECK(fabsf(hud[i].position[1]-(1.45f-hud[i].uv[1]*1.7f))<.00001f);
                 CHECK(hud[i].position[2]==-3);
@@ -203,9 +205,16 @@ int main(int argc,char **argv)
         }
         /* The map fits the console face; its upper edge leans away. The
          * right-hand cabin mirrors position while keeping labels readable. */
-        CHECK(hud[6].position[2]<hud[8].position[2]);
-        CHECK(hud[6].position[1]>hud[8].position[1]);
-        CHECK((hud[7].position[0]-hud[6].position[0])*(hud[7].uv[0]-hud[6].uv[0])>0);
+        QuestMinimapMount mount=quest_minimap_mount(fit);
+        QuestMinimapPlacement placement={0};
+        float map_matrix[16];
+        quest_minimap_matrix(map_matrix,&mount,&placement);
+        CHECK(map_matrix[5]>0 && map_matrix[6]<0 && map_matrix[12]*fit->side>0);
+        for(int v=6;v<12;++v) {
+            CHECK(hud[v].position[0]==(2*hud[v].uv[0]-1)*QUEST_MINIMAP_RADIUS);
+            CHECK(hud[v].position[1]==(1-2*hud[v].uv[1])*QUEST_MINIMAP_RADIUS);
+            CHECK(hud[v].position[2]==0);
+        }
     }
     float own[16]={0,-1.22f,0,.427f,0,0,2.21f,-2.3f,1,0,0,-.32f,1,0,0,.10f};
     CHECK(quest_cockpit_own_car(own,1.22f,2.21f,seat));
@@ -385,13 +394,17 @@ int main(int argc,char **argv)
         CHECK(!quest_cockpit_asset(&asset,data,(size_t)length-1));
         unsigned char saved[4]; memcpy(saved,data+8,4); memset(data+8,255,4);
         CHECK(!quest_cockpit_asset(&asset,data,(size_t)length)); memcpy(data+8,saved,4);
-        size_t offset=64+(size_t)asset.vertices*32; memcpy(saved,data+offset,4); memset(data+offset,255,4);
+        size_t offset=(size_t)(asset.index_data-data); memcpy(saved,data+offset,4); memset(data+offset,255,4);
         CHECK(!quest_cockpit_asset(&asset,data,(size_t)length)); memcpy(data+offset,saved,4);
         for(size_t i=24;i<=60;i+=4) {
             memcpy(saved,data+i,4); memset(data+i,255,4);
             CHECK(!quest_cockpit_asset(&asset,data,(size_t)length)); memcpy(data+i,saved,4);
         }
-        float bad=NAN; memcpy(data+64,&bad,4); CHECK(!quest_cockpit_asset(&asset,data,(size_t)length));
+        if(quest_cockpit_u32(data+4)==4)for(size_t i=64;i<128;i+=4) {
+            memcpy(saved,data+i,4);memset(data+i,255,4);
+            CHECK(!quest_cockpit_asset(&asset,data,(size_t)length));memcpy(data+i,saved,4);
+        }
+        float bad=NAN; memcpy(data+(asset.vertex_data-data),&bad,4); CHECK(!quest_cockpit_asset(&asset,data,(size_t)length));
         free(data);
     }
     puts("Cockpit camera, controls, wheel rotation and asset validation checks passed");

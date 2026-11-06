@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include "../quest/runtime/quest_cockpit_ui.h"
 
 /* Xbox NTSC-U, default.xbe SHA-256 f4b3dc57...6b34b22. These are NFSU1
  * addresses, verified against the local executable, never NFSU2 offsets. */
@@ -54,6 +55,42 @@ static inline int nfsu1_player_camera(Nfsu1Read read, void *context, Nfsu1Player
     return 1;
 }
 
+/* The transport owns the controller's embedded music state at +1b0. */
+static inline uint32_t nfsu1_music_transport(Nfsu1Read read, void *context, uint32_t controller)
+{
+    uint32_t transport, header[2];
+    if (!nfsu1_address(controller, 0x2b0) || !read(context, controller+0x14, &transport, 4) ||
+        !nfsu1_address(transport, 0x618) || !read(context, transport, header, sizeof header) ||
+        header[0] != 0x203500 || header[1] != controller+0x1b0) return 0;
+    return transport;
+}
+
+/* The music bank and ambience both use the streamed float decoder (1AF3C0).
+ * At 1AF510 +30 is the stream slot and +38 the channel. 1A86B0 resolves
+ * the slot to its ring. Its callback state points back to the file reader.
+ * Identify the AST by its owned filename before taking samples or pausing. */
+static inline int nfsu1_music_channel(Nfsu1Read read, void *context, uint32_t decoder)
+{
+    uint32_t slot, ring, state, reader, file, back, handle, state_handle;
+    unsigned char channel, slots;
+    char path[sizeof "d:\\sound\\streams\\STRM_Music_UG0_MB.ast"];
+    if (!nfsu1_address(decoder, 0x39) ||
+        !read(context,decoder+0x30,&slot,4) || !read(context,decoder+0x38,&channel,1) ||
+        !read(context,0x2ddab6,&slots,1) || slot>=slots || channel>1 ||
+        !read(context,0x2de0b4+4*slot,&ring,4) || !nfsu1_address(ring,0x60) ||
+        !read(context,ring,&handle,4) || handle==UINT32_MAX ||
+        !read(context,ring+0x5c,&state,4) || !nfsu1_address(state,12) ||
+        !read(context,state+4,&state_handle,4) || handle!=state_handle ||
+        !read(context,state,&reader,4) || !nfsu1_address(reader,4) ||
+        !read(context,reader,&file,4) || !nfsu1_address(file,0x88+sizeof path) ||
+        !read(context,file+0x34,&back,4) || back!=reader ||
+        !read(context,file+0x88,path,sizeof path) || path[sizeof path-1]) return -1;
+    static const char music[]="d:\\sound\\streams\\strm_music_ug0_mb.ast";
+    for (size_t i=0;i<sizeof music-1;++i)
+        if ((path[i]|32)!=(music[i]|32)) return -1;
+    return channel;
+}
+
 /* 12C420 selects the rendered pose using Car+530's view bit: rotation +90
  * and origin +50, or the alternate pair +4e0/+520. Car+60 is a different
  * position and cannot anchor the cockpit to the geometry being drawn. */
@@ -81,11 +118,11 @@ static inline int nfsu1_ui_name(const char *name, const char *expected)
  * The registry includes cached packages. Package+0x1c is a CONTROLLER MASK
  * (D7C70), not visibility: a real paused Quest capture has mask 4.
  * Return -1 on invalid data so the caller retains the complete menu plane. */
-static inline int nfsu1_vr_menu(Nfsu1Read read, void *context, int *paused)
+static inline int nfsu1_vr_menu(Nfsu1Read read, void *context, int *settings_access)
 {
     uint32_t frontend, manager, node;
-    int active = 0, pause = 0, overlay = 0;
-    *paused = 0;
+    int active = 0, pause = 0, options = 0, overlay = 0;
+    *settings_access = QUEST_SETTINGS_CLOSED;
     if (!read(context, NFSU1_FRONTEND, &frontend, 4)) return -1;
     if (!frontend) return 0;
     if (!nfsu1_address(frontend, 12) ||
@@ -106,16 +143,28 @@ static inline int nfsu1_vr_menu(Nfsu1Read read, void *context, int *paused)
         if (!i || i == sizeof name) return -1;
         int hud = i >= 4 && (name[0] | 32) == 'h' &&
                   (name[1] | 32) == 'u' && (name[2] | 32) == 'd' && name[3] == '_';
-        if (!hud && !nfsu1_ui_name(name, "PreRaceStats.fng")) {
+        /* The countdown draws the EA TRAX chyron over the race HUD. */
+        int chyron = nfsu1_ui_name(name, "Chyron.fng") || nfsu1_ui_name(name, "Chyron_alpine.fng") ||
+                     nfsu1_ui_name(name, "Chyron_audiobahn.fng") || nfsu1_ui_name(name, "Chyron_kenwood.fng");
+        if (!hud && !chyron && !nfsu1_ui_name(name, "PreRaceStats.fng") &&
+            !nfsu1_ui_name(name, "drag_HUD_test.fng") && !nfsu1_ui_name(name, "2PHudTop.fng") &&
+            !nfsu1_ui_name(name, "2PHudBot.fng")) {
             active = 1;
             if (nfsu1_ui_name(name, "MU_Pause.fng")) pause = 1;
-            else overlay = 1;
+            else if (nfsu1_ui_name(name, "MU_Options.fng") || nfsu1_ui_name(name, "MU_OptionsSelector.fng") ||
+                     nfsu1_ui_name(name, "MU_PauseOptions.fng") || nfsu1_ui_name(name, "MU_PauseOptionsSelector.fng") ||
+                     nfsu1_ui_name(name, "MU_OptionsHUD.fng"))
+                options = 1;
+            else if (!nfsu1_ui_name(name, "MU_Main.fng") && !nfsu1_ui_name(name, "background.fng") &&
+                     !nfsu1_ui_name(name, "GarageMain.fng"))
+                overlay = 1;
         }
         node = fields[1];
     }
     if (node) return -1;
-    /* Options/dialogs may leave the parent pause package visible. They must
-     * keep their own X action and must not open our settings panel. */
-    *paused = pause && !overlay;
+    /* Parent packages can stay in the active chain behind the options.
+     * Dialogs and controller bindings must retain exclusive input. */
+    if (!overlay && options) *settings_access = QUEST_SETTINGS_OPTIONS;
+    else if (!overlay && pause) *settings_access = QUEST_SETTINGS_PAUSE;
     return active;
 }

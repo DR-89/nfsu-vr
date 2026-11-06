@@ -2,6 +2,28 @@
 
 Target: every applicable VR/host feature in the local `nfsu2 - vr port` reference, on Windows PCVR and Quest 3. Imported source alone is not acceptance. NFSU2-specific gameplay (SMS, open-world shops and its extra cars) is not NFSU1 content.
 
+## November 6 public preview (v0.6.0-preview.1)
+
+Reference `DR-89/nfsu2-vr` at `dev-2026-11-06-r2` (5f9c2b4). The October evidence below describes the earlier preview. Current additions use the NTSC-U Underground 1 executable and its 20 car profiles.
+
+| Feature | Underground 1 integration | Verification scope |
+|---|---|---|
+| H-pattern, grid starts, pedals and returning wheel | HumanDriver request and processed pedals, installed gearbox, race director countdown, NFSU1 steering calibration | Controller and shifter regressions plus captured manual and automatic Quick Race starts. In-headset lever feel still needs a playtest. |
+| Mirrors, movable minimap, seat and window display | Head-relative rear capture, saved angles per car, adjustable capture resolution, grip-and-tilt map, physical door switches and NFSU1-specific HUD crops | Mirror, control and asset tests and stock-car geometry. Visual alignment in motion needs headset confirmation. |
+| Persistent camera and replay | Restore the native camera slot or cockpit. Replay director states 5/6 use five native track-camera modes plus the seat, and a short B toggles the HUD. The replay sidecar retains full frame ticks and physical gear inputs. | Guest address mapping, replay storage and input tests. Full race-to-replay transition remains a live test. |
+| Radio, video, spectrum and lighting | Both hosts mix optional custom media with the game. The stock radio follows the title's 26-song playlist and captures decoded music before its gain stage. Eight LED colors, music pulse and master gain are available in settings. | Native library and media tests cover playback, spectral response, fallback, pause and video timing. In-headset touch and audio checks remain open. |
+| Haptics and SteamVR | NFSU1 RPM, idle, rev limit and throttle feed the engine effect. Independent grip feedback, SteamVR runtime selection and pause gesture use the shared host implementation. | Input and haptics regressions. Controller feel and Steam Link need a headset session. |
+| Native movies | EA MAD packets feed FFmpeg on both hosts. The retail player retains its destination planes, timing and audio. | Decoded output checked against FFmpeg using the local disc. |
+| Game-specific differences | NFSU1 supplies its own race HUD, movie format, music bank and vehicle fits. Its career has no free-roam world map for the minimap shortcut. | Hardware results from the public NFSU2 build apply only to that game. |
+
+Both hosts passed 30 native test executables each. The Quest 3 ran the ARM64 binaries in a temporary device directory. The Windows game booted with the original disc data and reached native MAD decoding and both EA TRAX audio channels. VirtualDesktopXR reported headset focus and stereo frame submissions on the packaged Windows executable. All 63 decoded frames of the boot movie matched the FFmpeg reference byte for byte on Windows and Quest. The Windows media tests also exercised MP3, FLAC, WAV and H.264 MP4. The Android importer passed 32 unit tests, and the 66 cockpit shader variants compiled for Vulkan 1.1. A full race with motion controls and a race-to-replay transition still need a headset playtest on this build.
+
+The PCVR radio and options follow-up exercised the original Xbox playback code with a captured audio state. Previous and next selected the requested EA TRAX songs in both playlist contexts, including rapid taps, wraparound and previously played tracks. Both native music lanes reached zero and full gain. The custom playback controls also worked with the native transport detached. UI tests cover opening VR Settings on Render Resolution from Options, retaining input in unrelated dialogs, and saving the preset. All six saved selections reached both Windows eye-buffer requests in an isolated initialization test. Fingertip feel and the updated Options entry still need a headset playtest.
+
+The start-line test captured NFSU1 Quick Race states during loading, the countdown and the first racing frame with both transmission settings. Replaying the countdown with the track announcement active exercised the cockpit camera, radio and screen visibility, and a hand movement from neutral into first. The retail HUD routines enabled both gauge groups before the start signal. The guest driver received first while the original launch lock was held and retained the selection across the camera change. Separate input tests cover right-stick selection and release of a shift pulse across the start signal.
+
+## Earlier preview
+
 | Feature | NFSU1 implementation and evidence | Still required |
 |---|---|---|
 | Native Quest ARM64 game | APK boots; user confirms Quick Race picture and controls | Broader game modes, saves, long sessions |

@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 import zlib
 
 MODULE = Path(__file__).resolve().parents[1] / "tools/inspect_game.py"
@@ -69,9 +70,13 @@ class InputTests(unittest.TestCase):
             self.assertEqual(result["game_compatibility"], "not checked until extracted")
 
     def test_supported_layout(self):
-        result = inspector.check_xbe(synthetic_xbe())
+        sample = synthetic_xbe()
+        with patch.object(inspector, "XBE_SHA256", inspector.hashlib.sha256(sample).hexdigest()):
+            result = inspector.check_xbe(sample)
         self.assertTrue(result["ok"])
-        self.assertIn("exact revision unverified", result["validation"])
+        self.assertIn("exact executable SHA-256", result["validation"])
+        with self.assertRaisesRegex(inspector.InputError, "SHA-256"):
+            inspector.check_xbe(sample)
 
     def test_other_platform(self):
         with self.assertRaisesRegex(inspector.InputError, "original Xbox"):
@@ -85,12 +90,11 @@ class InputTests(unittest.TestCase):
         with self.assertRaisesRegex(inspector.InputError, "NTSC-U"):
             inspector.check_xbe(synthetic_xbe(region=4))
 
-    def test_european_title_reports_game_and_incompatible_layout(self):
-        with self.assertRaisesRegex(inspector.InputError, "European Xbox NFS") as caught:
-            inspector.check_xbe(synthetic_xbe(title=inspector.EUROPE_TITLE_ID, region=4, entry=0x21B77E))
+    def test_wrong_title_reports_both_ids(self):
+        with self.assertRaisesRegex(inspector.InputError, "Wrong Xbox title") as caught:
+            inspector.check_xbe(synthetic_xbe(title=0x4541006F))
         self.assertEqual(caught.exception.details["title_id"], "0x4541006F")
-        self.assertEqual(caught.exception.details["entry"], "0x0021B77E")
-        self.assertEqual(caught.exception.details["expected_entry"], "0x0021B1CE")
+        self.assertEqual(caught.exception.details["expected_title_id"], f"0x{inspector.TITLE_ID:08X}")
 
     def test_changed_entry(self):
         with self.assertRaisesRegex(inspector.InputError, "Unsupported XBE layout"):
@@ -110,7 +114,7 @@ class InputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "default.xbe").write_bytes(synthetic_xbe())
-            with self.assertRaisesRegex(inspector.InputError, "NFSUNDER"):
+            with self.assertRaisesRegex(inspector.InputError, "nonempty CARS"):
                 inspector.inspect(root)
 
 

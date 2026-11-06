@@ -10,25 +10,28 @@ Based on [cherepavel/nfsu1-android](https://github.com/cherepavel/nfsu1-android)
 
 ## Release status
 
-**v0.3.0-preview.1** is the first public preview, updated on **October 20, 2026** with the color correction below (Quest version code **5**). Quest 3 is the tested standalone target. Windows builds and passes automated checks; an actual NFSU1 **PCVR headset session has not yet been validated**.
+**v0.6.0-preview.1** is the November 6, 2026 preview for Meta Quest 3 standalone and Windows PCVR (Quest version code **7**). Windows was tested with Virtual Desktop's OpenXR runtime, including headset focus and stereo frame submission. The test suite passed on both platforms. Extended race and replay playtesting is still in progress.
 
-### October 20 color correction
+### Changes since the October preview
 
-The Quest APK and Windows PCVR download now preserve the game's original
-display-encoded colors when presenting through OpenXR. This fixes the washed-out,
-gray appearance caused by applying gamma conversion twice, including menus,
-stereo gameplay and the VR Settings panel. Native Quest testing confirmed the
-colors and visible detail in dark areas. GPU regression tests cover both eye
-layers, channel orders and resolution scaling on Quest, Intel and NVIDIA GPUs;
-the updated PCVR build still needs a headset session.
+This release brings the cockpit and media features from NFSU2 VR through `dev-2026-11-06-r2` to Underground 1.
 
-Download filenames and URLs remain unchanged. Install the APK over the previous
-version to retain imported data, saves and settings. The signing key is unchanged.
+- The cockpit speedometer, radio and video screen are available on the starting grid. During the countdown, grip the lever with either hand and move it left and forward to select first. You can also push the right stick up for first or down for neutral. The gear indicator shows your selection before the lights change. Automatic cars resume automatic shifting at the start.
+- In a manual car, use the full H-pattern once the race starts. In reverse, accelerate with the right trigger. The pedals and H-pattern guide follow the inputs. The released wheel returns at the configured speed and can be caught in motion.
+- Grip a mirror to adjust it. Each car recalls its mirror angles. Grip the round minimap to move or tilt it, then release to save its placement. Tap the door armrest switches to adjust your seat. Lap information appears on the right window.
+- Click the right stick during a replay to cycle the camera, including the driver's seat. A short B press toggles the race overlay. A long press keeps the game's replay action.
+- Touch the strip on the left of the radio with an index finger and slide sideways to set music volume. Tap the three keys to its right for previous, play/pause or next. Lift the finger between taps. Put MP3, FLAC, PCM WAV or H.264 MP4 files in `Music` beside the Windows executable, or in `Android/data/org.nfsu1.quest/files/Music` on Quest shared storage. Restart after changing files. The radio screen plays video or displays a 16-band spectrum. **Radio Soundtrack** selects Auto, Custom Only or EA TRAX Only. An empty or unreadable library falls back to the original music.
+- In the game’s **Options**, press **X** for **Render Resolution**, choose a preset, save with **B** and restart.
+- Pause and press **X** for wheel return speed, mirror resolution, master gain, interior LED colors and music pulse, and per-hand haptics including optional RPM rumble. On Windows, `Start-PCVR.cmd -SteamVR` selects SteamVR explicitly.
+- Intro and story movies use a native EA MAD decoder while the game owns timing, sound and frame presentation.
+
+### Downloads
 
 | Release asset | Purpose |
 |---|---|
-| `NFSU-VR-Quest3-v0.3.0-preview.1.apk` | Standalone Quest 3 application |
-| `NFSU-VR-PCVR-Windows-x64-v0.3.0-preview.1.zip` | Experimental Windows x64/OpenXR package |
+| `NFSU-VR-Quest3-v0.6.0-preview.1.apk` | Standalone Quest 3 application |
+| `NFSU-VR-PCVR-Windows-x64-v0.6.0-preview.1.zip` | Experimental Windows x64/OpenXR package |
+| `FFmpeg-n7.1.5-source.zip` | Corresponding FFmpeg source used by both builds |
 | `SHA256SUMS.txt` | Download checksums |
 | `release-manifest.json` | Matching source commit, version and package contents |
 
@@ -48,7 +51,7 @@ Download the named assets under [Releases](https://github.com/DR-89/nfsu-vr/rele
 
 Quest users have confirmed Quick Race, basic driving, the accepted cockpit fit, all three Golf mirrors, the corrected Eclipse instruments/map, and the pause/resume and seat-preview fixes. The common interior is a fitted prototype, not a different authentic interior for every car. Geometry checks cover 20 stock cars; Focus/Tiburon center mirrors and broader live testing of tuned parts and other cars remain open.
 
-A 64-second Golf sample at **1680 × 1760 per eye** averaged **44.73 FPS**, with samples from 33.7 to 61.3 FPS. This is not a guaranteed frame rate or controlled benchmark. Stable 72 FPS, all race modes, long sessions, audio behavior, every secondary input and PCVR hardware validation remain work in progress. Full applicable NFSU2 VR feature parity is the goal, not a completed claim. See [FEATURE_PARITY.md](FEATURE_PARITY.md).
+A 64-second Golf sample at **1680 × 1760 per eye** averaged **44.73 FPS**, with samples from 33.7 to 61.3 FPS. This is not a guaranteed frame rate or controlled benchmark. Stable 72 FPS, all race modes, long sessions, audio behavior, every secondary input and broader PCVR headset coverage remain work in progress. Full applicable NFSU2 VR feature parity is the goal, not a completed claim. See [FEATURE_PARITY.md](FEATURE_PARITY.md).
 
 ## Required game version
 
@@ -119,7 +122,7 @@ Connect the powered-on headset using the data cable. Put it on and accept **Allo
 
 ```powershell
 .\adb.exe devices
-.\adb.exe -s YOUR_QUEST_SERIAL install -r "C:\Downloads\NFSU-VR-Quest3-v0.3.0-preview.1.apk"
+.\adb.exe -s YOUR_QUEST_SERIAL install -r "C:\Downloads\NFSU-VR-Quest3-v0.6.0-preview.1.apk"
 ```
 
 Replace the serial and file path. The device state must be `device`; if it is `unauthorized`, accept the headset prompt. Wait for `Success`. On macOS/Linux use `./adb` and adjust paths. The `-r` option preserves existing app data; see [the ADB reference](https://developer.android.com/tools/adb).
@@ -153,7 +156,7 @@ Wait for the entire transfer. No manual copying into `Android/data` is needed.
 
 ### 7. Adjust the seat and resolution
 
-Pause with the left controller's menu button, then press **X** at **[X] VR SETTINGS**. Use the stick to choose a row and adjust it.
+From **Options** in the main menu or during a race, press **X** at **[X] VR Settings / Render Resolution**. The panel opens on **Render Resolution**. Move the stick left or right to choose the size per eye, press **B** to save, then restart the game. You can also open VR Settings with **X** from the root pause menu.
 
 Seat changes are visible immediately while paused. Positive height moves your eyes up; positive distance moves them farther back. Press **B** or choose **Save and Back**, then resume.
 
@@ -165,14 +168,14 @@ Start with **1680 × 1760 per eye** on Quest 3, or try **1280 × 1344** for less
 
 You need 64-bit Windows, a Vulkan-capable graphics driver and a configured **OpenXR runtime**. If Windows reports missing `VCRUNTIME140`/`MSVCP140` libraries, install Microsoft's [Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
 
-Connect the headset to its PCVR service first. Quest connection options include Quest Link/Air Link or Virtual Desktop with VDXR. Select the desired OpenXR runtime in that service's settings. The port uses the selected runtime and does not change the OpenXR registry. An end-to-end NFSU1 headset test is still pending.
+Connect the headset to its PCVR service first. Quest connection options include Quest Link/Air Link or Virtual Desktop with VDXR. Select the desired OpenXR runtime in that service's settings. The port uses the selected runtime and does not change the OpenXR registry. Virtual Desktop with VDXR was used for the Windows headset startup check.
 
 ### 2. Extract the complete ZIP
 
 Download the Windows ZIP and extract **all** files into a writable directory such as `C:\Games\NFSU-VR`. Do not run from inside the ZIP or move only the EXE.
 
 ```text
-NFSU-VR-PCVR-Windows-x64-v0.3.0-preview.1/
+NFSU-VR-PCVR-Windows-x64-v0.6.0-preview.1/
 ├── Start-PCVR.cmd
 ├── nfsu1-pcvr.exe
 ├── SDL2.dll
@@ -221,7 +224,7 @@ This is the implemented Touch mapping. Basic driving/camera/menu operation is co
 | Cycle camera, including cockpit | Right stick click |
 | Recenter | Both stick clicks together |
 | Pause | Left controller menu button |
-| Open VR Settings | X in the game's root pause menu |
+| Open VR Settings | X in Options or the game's root pause menu |
 | Navigate / adjust settings | Stick or D-pad |
 | Confirm / save and return | A / B |
 
@@ -238,8 +241,8 @@ SDL gamepad support and haptics are integrated but need more hardware testing. F
 Verify downloads against the release's `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash .\NFSU-VR-Quest3-v0.3.0-preview.1.apk -Algorithm SHA256
-Get-FileHash .\NFSU-VR-PCVR-Windows-x64-v0.3.0-preview.1.zip -Algorithm SHA256
+Get-FileHash .\NFSU-VR-Quest3-v0.6.0-preview.1.apk -Algorithm SHA256
+Get-FileHash .\NFSU-VR-PCVR-Windows-x64-v0.6.0-preview.1.zip -Algorithm SHA256
 ```
 
 ## Troubleshooting
@@ -257,7 +260,7 @@ Get-FileHash .\NFSU-VR-PCVR-Windows-x64-v0.3.0-preview.1.zip -Algorithm SHA256
 | APK signature mismatch | Use a build signed with the installed key. A self-built APK normally has another key; preserve data before switching. |
 | Low Quest FPS | Try 1680 × 1760 or 1280 × 1344, save and restart. Higher resolutions cost more; 72 FPS is not guaranteed. |
 | Cockpit missing | Cycle the camera while racing. The main-menu car preview does not use the added cockpit. |
-| VR Settings missing | Open the original game's root pause menu, not the Quest system menu or an Options subpage, then press X. |
+| VR Settings missing | Open Options or the root in-game pause menu and press X. |
 | Windows rejects 7z | Unpack it first; Windows setup accepts ISO/XISO. |
 | Missing PC DLLs | Extract the complete ZIP; install the Visual C++ x64 runtime if needed. Vulkan comes from the GPU driver. |
 | OpenXR initialization fails | Connect the headset, start its PCVR service and select the intended runtime. Read `logs/stderr.log`. |
@@ -282,7 +285,7 @@ py -m venv .venv
 .\.venv\Scripts\python.exe tools/regen.py game
 ```
 
-Generation requires an empty `gen/`. Build scripts fetch and verify SDL 2.32.10, OpenXR SDK 1.1.53 and glslang 15.1.0 from [quest/dependencies.json](quest/dependencies.json). Old phone/Switch submodules are not needed for the VR targets.
+Generation requires an empty `gen/`. Build scripts fetch and verify SDL 2.32.10, OpenXR SDK 1.1.53, glslang 15.1.0 and FFmpeg 7.1.5 from [quest/dependencies.json](quest/dependencies.json). Old phone/Switch submodules are not needed for the VR targets.
 
 ### Quest
 
@@ -315,7 +318,7 @@ Output: `build/pcvr/game/nfsu1-pcvr.exe`. `tools/start-pcvr.ps1 -DesktopOnly` ru
 After building both targets and committing the source:
 
 ```powershell
-.\.venv\Scripts\python.exe tools/package-release.py --version v0.3.0-preview.1
+.\.venv\Scripts\python.exe tools/package-release.py --version v0.6.0-preview.1
 ```
 
 The tool uses an explicit runtime-file list, inspects APK contents, rejects retail filenames/hashes and private paths, and writes packages, checksums and a source-revision manifest to `dist/`. It excludes game data, saves, generated C, debug symbols and signing keys.

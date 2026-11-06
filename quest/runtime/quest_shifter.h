@@ -1,0 +1,190 @@
+#pragma once
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+#include "quest_cockpit_vehicle.h"
+
+/* Distances in fitted cabin meters. Slots always go left to right from the
+ * driver's perspective, even when the console itself is on the left. Gear
+ * IDs match the retail driver: reverse=0, neutral=1, first=2. */
+enum { QUEST_SHIFT_RESUME_AUTO=-2, QUEST_SHIFT_NONE=-1, QUEST_SHIFT_R=0, QUEST_SHIFT_N=1, QUEST_SHIFT_FIRST=2 };
+enum { QUEST_DRIVER_READY, QUEST_DRIVER_GRID_LOCK, QUEST_DRIVER_NO_INPUT };
+static inline int quest_shifter_before_start(int stage) { return stage>=1 && stage<=3; }
+/* A grid selection belongs to one car and survives the film-to-driver
+ * camera switch. Automatic transmission stays retail-owned until touched. */
+typedef struct {
+    uint32_t car;
+    int count, gear, manual, selected, racing;
+} QuestGridShifter;
+
+static inline int quest_grid_stage(QuestGridShifter *grid, uint32_t car, int stage,
+                                   int previous, int count, int manual)
+{
+    if (!car || count < 4 || count > 6 || (!quest_shifter_before_start(stage) && stage != 4) ||
+        (stage == 4 && (grid->car != car || grid->count != count || grid->manual != manual))) {
+        int changed = grid->car != 0;
+        memset(grid, 0, sizeof *grid);
+        return changed;
+    }
+    if (quest_shifter_before_start(stage) &&
+        (grid->car != car || previous > stage || grid->count != count || grid->manual != manual)) {
+        *grid = (QuestGridShifter){car, count, QUEST_SHIFT_N, manual, 0, 0};
+        return 1;
+    }
+    grid->racing = stage == 4;
+    return 0;
+}
+
+static inline int quest_grid_request(const QuestGridShifter *grid, uint32_t car, int hand_lever)
+{
+    return car && grid->car == car && (grid->selected || (grid->manual && hand_lever)) ? grid->gear : QUEST_SHIFT_NONE;
+}
+
+/* Return the driver request while the grid owns the lever. Once the
+ * physical transmission takes first, hand the request back to retail. */
+static inline int quest_grid_driver(QuestGridShifter *grid, uint32_t car, int hand_lever,
+                                    int gear, int locked)
+{
+    int request = quest_grid_request(grid, car, hand_lever);
+    if (grid->car != car || !grid->racing || locked) return request;
+    if (!grid->manual) {
+        if (request == QUEST_SHIFT_FIRST && gear < QUEST_SHIFT_FIRST) return request;
+        grid->car = 0;
+        return request == QUEST_SHIFT_NONE ? QUEST_SHIFT_NONE : QUEST_SHIFT_RESUME_AUTO;
+    }
+    if (request == QUEST_SHIFT_NONE || (request == QUEST_SHIFT_FIRST && gear == request))
+        grid->car = 0;
+    return request;
+}
+
+/* The right stick and gamepad produce retail shift-button pulses. Consume
+ * the whole pulse across GO so selecting first cannot also shift to second. */
+static inline unsigned quest_grid_buttons(QuestGridShifter *grid, int selecting,
+                                          unsigned buttons, unsigned *consumed)
+{
+    *consumed &= buttons;
+    if (selecting && buttons) {
+        if (buttons == 1 || buttons == 2) {
+            grid->gear = buttons == 1 ? QUEST_SHIFT_FIRST : QUEST_SHIFT_N;
+            grid->selected = 1;
+        }
+        *consumed = buttons;
+    }
+    return *consumed;
+}
+
+#define QUEST_SHIFT_PITCH .045f
+#define QUEST_SHIFT_THROW .060f
+typedef struct {
+    int hand, blocked[2], gear, lane, rebase, first_only, at_lever;
+    float x,z,offset_x,offset_z,last_x,last_z;
+    uint32_t squeeze_tick;
+} QuestShifter;
+
+static inline int quest_shifter_lane(int gear,int count)
+{
+    if(gear==QUEST_SHIFT_R)return count==6?3:2;
+    if(gear==QUEST_SHIFT_N)return 1;
+    return (gear-2)/2;
+}
+static inline void quest_shifter_detent(QuestShifter *s,int gear,int count)
+{
+    s->gear=gear;s->lane=quest_shifter_lane(gear,count);
+    s->x=(s->lane-1)*QUEST_SHIFT_PITCH;
+    s->z=gear==QUEST_SHIFT_N?0:
+        (gear==QUEST_SHIFT_R || (gear&1)?QUEST_SHIFT_THROW:-QUEST_SHIFT_THROW);
+}
+static inline void quest_shifter_reset(QuestShifter *s)
+{
+    memset(s,0,sizeof *s);
+    s->blocked[0]=s->blocked[1]=1;
+    quest_shifter_detent(s,QUEST_SHIFT_N,5);
+}
+static inline void quest_shifter_knob(const QuestShifter *s,int vehicle,float p[3])
+{
+    /* Center of the upper grip on tripo_part_58. */
+    const float center[3]={.312f,-.413f,-.205f};
+    quest_cockpit_fit_point(p,center,quest_cockpit_vehicle(vehicle));
+    p[0]+=s->x;p[2]+=s->z;
+}
+
+static inline int quest_shifter_in_reach(const QuestShifter *s,int vehicle,const float hand[3])
+{
+    float knob[3];quest_shifter_knob(s,vehicle,knob);
+    float dx=hand[0]-knob[0],dy=hand[1]-knob[1],dz=hand[2]-knob[2];
+    return dx*dx+dy*dy+dz*dz<=.065f*.065f;
+}
+
+/* Return a request only on changing detents. Moving sideways is possible in
+ * the neutral crossbar. Pulling diagonally against an engaged rail stays on
+ * that rail until the hand returns to (or crosses) the middle. */
+static inline int quest_shifter_move(QuestShifter *s,float x,float z,int count)
+{
+    const float middle=.016f,engage=.043f;
+    int previous=s->gear;
+    if(s->gear!=QUEST_SHIFT_N && (fabsf(z)<=middle || z*s->z<0))
+        s->gear=QUEST_SHIFT_N;
+    if(s->gear==QUEST_SHIFT_N) {
+        int last=count==6?3:2;
+        /* A partially inserted lever is already between the rail walls,
+         * even before it has travelled far enough to engage the gear. */
+        if(fabsf(s->z)>middle && fabsf(z)>middle && z*s->z>0)x=s->x;
+        s->x=fmaxf(-QUEST_SHIFT_PITCH,fminf((last-1)*QUEST_SHIFT_PITCH,x));
+        s->lane=(int)floorf(s->x/QUEST_SHIFT_PITCH+1.5f);
+        float rail=(s->lane-1)*QUEST_SHIFT_PITCH;
+        int target=z<0?2+s->lane*2:3+s->lane*2;
+        if(z>0 && s->lane==last)target=QUEST_SHIFT_R;
+        if(fabsf(s->x-rail)>.017f || target>count+1 || (s->first_only && target!=QUEST_SHIFT_FIRST)) {
+            s->z=0;
+            return previous==s->gear?QUEST_SHIFT_NONE:s->gear;
+        }
+        if(fabsf(z)>middle)s->x=rail;
+        /* First clicks in at the forward stop. Allow half a millimetre
+         * for controller sampling and fitted-coordinate roundoff. */
+        if(fabsf(z)>=(target==QUEST_SHIFT_FIRST?QUEST_SHIFT_THROW-.0005f:engage))s->gear=target;
+    }
+    s->z=fmaxf(-QUEST_SHIFT_THROW,fminf(QUEST_SHIFT_THROW,z));
+    return previous==s->gear?QUEST_SHIFT_NONE:s->gear;
+}
+
+static inline int quest_shifter_update(QuestShifter *s,uint32_t now,int vehicle,int count,int actual,
+    const int valid[2],const float pos[2][3],const float squeeze[2],const int busy[2])
+{
+    s->at_lever=0;
+    for(int h=0;h<2;++h) {
+        if(isfinite(squeeze[h]) && squeeze[h]<.15f) {
+            if(s->hand==h+1)s->hand=0;
+            s->blocked[h]=0;
+        }
+    }
+    if(!s->hand)quest_shifter_detent(s,actual,count);
+    for(int h=0;h<2;++h) {
+        int held=s->hand==h+1;
+        if(!isfinite(squeeze[h])) {
+            if(held) {
+                s->rebase=1;
+                if(now-s->squeeze_tick>=500) { s->hand=0;s->blocked[h]=1; }
+            }
+            continue;
+        }
+        if(held)s->squeeze_tick=now;
+        if(!valid[h] || !isfinite(pos[h][0]) || !isfinite(pos[h][1]) || !isfinite(pos[h][2])) {
+            if(held)s->rebase=1;
+            continue;
+        }
+        float x=pos[h][0],z=pos[h][2];
+        if(!held) {
+            if(s->hand || busy[h] || s->blocked[h])continue;
+            if(!quest_shifter_in_reach(s,vehicle,pos[h]))continue;
+            s->at_lever=1;
+            if(squeeze[h]<.65f)continue;
+            s->hand=h+1;s->squeeze_tick=now;s->rebase=1;
+        } else s->at_lever=1;
+        if(s->rebase || fabsf(x-s->last_x)>.13f || fabsf(z-s->last_z)>.15f) {
+            s->offset_x=s->x-x;s->offset_z=s->z-z;s->rebase=0;
+        }
+        s->last_x=x;s->last_z=z;
+        return quest_shifter_move(s,x+s->offset_x,z+s->offset_z,count);
+    }
+    return QUEST_SHIFT_NONE;
+}

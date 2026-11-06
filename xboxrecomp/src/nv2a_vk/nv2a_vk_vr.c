@@ -565,6 +565,12 @@ typedef struct {
     int dirty;                 /* written since the last barrier */
     uint32_t gen;              /* bumped by every draw and clear into it */
     uint32_t draw_frame;       /* real draw freshness for the cockpit mirror */
+#ifdef NFSU2_OPENXR
+    uint32_t rear_depth_va,rear_frame;
+    float rear_projection[4];  /* horizontal/vertical scales and depth A+B/Z */
+    QuestMirrorCamera rear_camera;
+    int rear_camera_valid,rear_vehicle;
+#endif
 } VkSurf;
 #ifdef NFSU2_OPENXR
 static VkSurf s_feedback_spare;
@@ -578,6 +584,9 @@ typedef struct {
     VkImage image; VkImageView view; VkDeviceMemory mem;
     VkImageLayout layout;
     uint32_t used;
+#ifdef NFSU2_OPENXR
+    VkImageView sample_depth;
+#endif
 } VkDepthBuf;
 
 #define VK_MAX_SURF 64
@@ -988,11 +997,18 @@ static VkSurf *surf_get(uint32_t va, uint32_t w, uint32_t h, uint32_t aa_sx, uin
 {
     VkSurf *s = surf_find(va), *victim = NULL;
     int i;
+    unsigned mirror_width=0;
+#ifdef NFSU2_OPENXR
+    if(w==256 && h==64 && aa_sx==1 && aa_sy==1 && xr_stereo()) {
+        mirror_width=quest_xr_mirror_width();
+        if(mirror_width>s_max_size)mirror_width=s_max_size;
+    }
+#endif
 
     /* h is the surface clip, not the allocation (NFSU2's split screen clips
      * the back buffer to each player's half): keep the surface while the
      * clip fits, grow it when it does not. Same as nv2a_gl.c. */
-    if (s && s->w == w && s->h >= h) {
+    if (s && s->w == w && s->h >= h && (!mirror_width || s->h!=64 || s->pw==mirror_width)) {
         s->used = s_frame;
         return s;
     }
@@ -1051,8 +1067,8 @@ static VkSurf *surf_get(uint32_t va, uint32_t w, uint32_t h, uint32_t aa_sx, uin
         }
     }
     if(xr_stereo()) {
-        if(w==256 && h==64 && aa_sx==1 && aa_sy==1) {
-            s->pw=512; s->ph=128;
+        if(mirror_width) {
+            s->pw=mirror_width; s->ph=mirror_width/4;
         }
         static double eye_scale=-1;
         if(eye_scale<0) {
@@ -1161,7 +1177,7 @@ static VkImageView surface_feedback_swap(VkSurf *s)
 }
 #endif
 
-static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph, int eye, uint32_t layers)
+static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph, int eye, uint32_t layers,int rear)
 {
     VkDepthBuf *d, *victim = NULL;
     int i;
@@ -1178,20 +1194,38 @@ static VkDepthBuf *depth_get(uint32_t va, uint32_t pw, uint32_t ph, int eye, uin
     d = victim;
     if (d->image) {
         if (s_rt_depth == d) end_rendering(), s_rt = NULL, s_rt_depth = NULL;
+#ifdef NFSU2_OPENXR
+        if(d->sample_depth)garbage_add(VK_NULL_HANDLE,d->sample_depth,VK_NULL_HANDLE);
+#endif
         garbage_add(d->image, d->view, d->mem);
     }
     memset(d, 0, sizeof *d);
     d->va = va; d->pw = pw; d->ph = ph; d->used = s_frame;
     d->eye = eye;
     d->layers = layers;
-    if (!make_image_n(pw, ph, layers, s_depth_fmt, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+    VkImageUsageFlags usage=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+#ifdef NFSU2_OPENXR
+    if(rear) {
+        VkImageFormatProperties properties;
+        if(vkGetPhysicalDeviceImageFormatProperties(s_pd,s_depth_fmt,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
+            usage|VK_IMAGE_USAGE_SAMPLED_BIT,0,&properties)==VK_SUCCESS)usage|=VK_IMAGE_USAGE_SAMPLED_BIT;
+    }
+#endif
+    if (!make_image_n(pw, ph, layers, s_depth_fmt, usage,
                     VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
                     &d->image, &d->view, &d->mem)) {
         LOGE("depth 0x%08X %ux%u: image creation failed\n", va, pw, ph);
         memset(d, 0, sizeof *d);
         return NULL;
     }
+#ifdef NFSU2_OPENXR
+    if(usage&VK_IMAGE_USAGE_SAMPLED_BIT) {
+        VkImageViewCreateInfo ci={VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        ci.image=d->image;ci.viewType=s_multiview?VK_IMAGE_VIEW_TYPE_2D_ARRAY:VK_IMAGE_VIEW_TYPE_2D;
+        ci.format=s_depth_fmt;ci.subresourceRange=(VkImageSubresourceRange){VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,layers};
+        vkCreateImageView(s_dev,&ci,NULL,&d->sample_depth);
+    }
+#endif
     {
         VkClearDepthStencilValue z = { 1.0f, 0 };
         VkImageSubresourceRange rg = { VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, layers };
@@ -1218,7 +1252,7 @@ static VkSurf *target(const Nv2aSurface *sf, uint32_t zeta_va, VkDepthBuf **dout
         return NULL;
     s = surf_get(sf->color_va, w, h, sf->aa_sx ? sf->aa_sx : 1, sf->aa_sy ? sf->aa_sy : 1);
     if (s && zeta_va)
-        *dout = depth_get(zeta_va, s->pw, s->ph, s->eye, s->layers);
+        *dout = depth_get(zeta_va, s->pw, s->ph, s->eye, s->layers,w==256 && h==64 && s->eye==-1);
     if (s) {
         s_last = s;
 #ifdef NFSU2_OPENXR
@@ -4871,7 +4905,8 @@ static void vk_draw_raw_eye(const Nv2aRawBatch *b)
         }
 
 #ifdef NFSU2_OPENXR
-    if(s_cockpit_frame && s_cockpit.ready && s_cockpit.hud_pipeline[s_multiview!=0] &&
+    int hide_replay_hud = quest_xr_replay_hud_hidden();
+    if((hide_replay_hud || (s_cockpit_frame && s_cockpit.ready && s_cockpit.hud_pipeline[s_multiview!=0])) &&
        xr_stereo() && quest_xr_tracking() && s_stereo_frame && s->va==s_world_color_va &&
        !r[0x30c/4] && !r[0x32c/4] && !xr_fullscreen_quad(b) &&
        (b->xform==0 || (b->xform==2 && (b->vp_start==0 ||
@@ -4879,7 +4914,7 @@ static void vk_draw_raw_eye(const Nv2aRawBatch *b)
          fabsf(b->vp_consts[99][0])+fabsf(b->vp_consts[99][1])+fabsf(b->vp_consts[99][2])<1e-6f)))) &&
        b->tex_va[0] && s->aa_sx==1 && s->w==640 && s->h==480 &&
        !sampled[0] && !sampled[1] && !sampled[2] && !sampled[3]) {
-        if(s_eye) return; /* same 2D HUD for both eyes; never blend it twice */
+        if(hide_replay_hud || s_eye) return; /* same 2D HUD for both eyes; never blend it twice */
         cockpit_hud=1;s=&s_cockpit.hud;d=NULL;
     }
 #endif
@@ -4937,6 +4972,17 @@ static void vk_draw_raw_eye(const Nv2aRawBatch *b)
     s->dirty = 1;
     s->gen++;
     s->draw_frame=s_frame;
+#ifdef NFSU2_OPENXR
+    if(s->w==256 && s->h==64 && s->eye==-1 && b->xform==2 && b->vp_const_count>=116 &&
+       quest_projection_constants(&b->vp_consts[113][0],s->rear_projection)) {
+        if(s->rear_frame!=s_frame || !s->rear_camera_valid)
+            s->rear_camera_valid=quest_xr_mirror_source(&s->rear_camera,&s->rear_vehicle);
+        s->rear_projection[2]=b->vp_consts[115][2];s->rear_projection[3]=b->vp_consts[115][3];
+        s->rear_frame=s_frame;
+        if(d && d->sample_depth)s->rear_depth_va=d->va;
+        else s->rear_depth_va=0;
+    }
+#endif
     apply_dynamic(r, d != NULL, topo);
     set_surface_scissor(r, s);
 

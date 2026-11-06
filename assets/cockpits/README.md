@@ -4,7 +4,7 @@ These assets are shared with [DR-89/nfsu2-vr](https://github.com/DR-89/nfsu2-vr)
 
 ## Runtime files
 
-- `runtime/cockpits/shared.ncpk`: the common cabin, 50,410 triangles and a 4096 × 4096 RGBA atlas. Includes dashboard, console, seats, floor, door interiors and an animated steering wheel.
+- `runtime/cockpits/shared.ncpk`: the common cabin, 50,633 triangles and a 4096 × 4096 RGBA atlas. Includes dashboard, console, seats, floor, door interiors with separate moving wheel, gear lever and pedals.
 - `runtime/cockpits/driver-gloves.nghv`: the custom glove model with open/grip poses and texture.
 - Adjacent JSON files record source hashes and preparation metadata. The runtime reads the binary files.
 
@@ -25,3 +25,5 @@ Quest testing confirms the accepted Golf fit and three mirrors, Eclipse HUD layo
 NCPK v2 contains a 64-byte header, interleaved position/normal/UV vertices, triangle indices and an RGBA atlas. The loader validates dimensions, bounds, finite values, indices and steering-shaft geometry. Gloves use their own validated NGHV format.
 
 `tests/quest_cockpit_test.c` covers camera transforms, fitting, controls, HUD coverage/mounting, mirror classification and asset validation. Any fixtures or captures derived from the original game remain in ignored private build directories.
+
+The optional offline packer is `tools/prepare-cockpit.py`. It uses trimesh, Pillow and NumPy with the source GLB and the fit configuration. Normal game builds use the versioned NCPK.

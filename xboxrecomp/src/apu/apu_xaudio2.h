@@ -41,6 +41,12 @@ void xa2_get_stats(Xa2Stats *out);
  * output, followed by a limiter that keeps the signal below -6 dBFS: nothing
  * the guest or the mixers produce can reach full scale in a headset. */
 void xa2_set_master_volume(float v);
+/* Live gain multiplier for the final mix, before the same output limiter. */
+void xa2_set_output_gain(float gain);
+
+/* Optional host soundtrack, installed before starting the APU. Returns nonzero
+ * when out contains a combined stereo block. in and out can alias. */
+extern int (*xa2_music_mix)(const int16_t *in,int16_t *out,int samples);
 
 /* The same volume + limiter, for any other output path (waveOut). in and out
  * may be the same buffer. */

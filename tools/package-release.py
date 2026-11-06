@@ -116,17 +116,23 @@ def main():
     folder = f'NFSU-VR-PCVR-Windows-x64-{args.version}'
     pc = out/(folder+'.zip')
     with zipfile.ZipFile(pc, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        archive.writestr(folder+'/Music/', b'')
         for name, path in sorted(payload.items()):
             archive.write(path, folder+'/'+name)
     pc_entries = audit_zip(pc, retail_hashes, allowed={folder+'/'+name for name in payload})
-    files = [file_record(apk), file_record(pc)]
+    ffmpeg = json.loads((ROOT/'quest/dependencies.json').read_text(encoding='utf-8'))['FFmpeg']
+    codec_source = out/f"FFmpeg-{ffmpeg['tag']}-source.zip"
+    subprocess.run(['git', '-C', str(ROOT/'build/deps/FFmpeg'), 'archive', '--format=zip',
+                    f"--prefix=FFmpeg-{ffmpeg['tag']}/", '-o', str(codec_source), ffmpeg['revision']], check=True)
+    files = [file_record(apk), file_record(pc), file_record(codec_source)]
     manifest = {
         'version': args.version, 'source_commit': commit,
         'source_url': REPO+'/tree/'+commit,
         'no_original_game_data': True,
         'validation': 'Explicit runtime file lists; APK asset/library allowlist; retail file hash and path checks.',
-        'quest_status': 'Quest 3 gameplay and pause/cockpit/mirror fixes confirmed; development-signed APK.',
-        'pcvr_status': 'Experimental; automated and desktop checks passed; headset session not yet validated.',
+        'ffmpeg_revision': ffmpeg['revision'], 'ffmpeg_source_archive': codec_source.name,
+        'quest_status': 'Development-signed APK. See FEATURE_PARITY.md for hardware coverage.',
+        'pcvr_status': 'Preview. Windows tests passed. Virtual Desktop (VDXR) headset focus and stereo frame submission verified.',
         'files': files, 'apk_entries': apk_entries, 'pcvr_entries': pc_entries,
     }
     manifest_path = out/'release-manifest.json'

@@ -1,5 +1,6 @@
 #include "../src/nfsu1_vr.h"
 #include "../src/nfsu1_host_image.h"
+#include "../src/vr_replay.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -36,11 +37,39 @@ int main(void)
     CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused);
     put(0x11004,0); /* pause still cached, removed from active chain */
     CHECK(nfsu1_vr_menu(read_memory,0,&paused)==0 && !paused);
+    /* Packages sampled in Quick Race during the start-line countdown. */
+    const char *chyrons[]={"Chyron.fng","Chyron_alpine.fng","Chyron_audiobahn.fng","Chyron_kenwood.fng"};
+    put(0x11004,0x12000);
+    for (unsigned i=0;i<sizeof chyrons/sizeof chyrons[0];++i) {
+        package(0x12000,chyrons[i],0);
+        CHECK(nfsu1_vr_menu(read_memory,0,&paused)==0 && !paused);
+    }
+    package(0x12000,"Chyron.fng",0x13000);
+    package(0x13000,"Loading.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && !paused);
+    package(0x13000,"MU_Pause.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused==QUEST_SETTINGS_PAUSE);
+    put(0x11004,0);
     put(0x1200c,0xfffffff0); /* released cached package is never followed */
     CHECK(nfsu1_vr_menu(read_memory,0,&paused)==0 && !paused);
     put(0x11004,0x12000);package(0x12000,"MU_Pause.fng",0x13000);
     package(0x13000,"MU_Options.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused==QUEST_SETTINGS_OPTIONS);
+    package(0x13000,"MU_PauseOptionsSelector.fng",0x14000);
+    package(0x14000,"GenericDialog.fng",0);
     CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && !paused);
+    package(0x12000,"MU_Main.fng",0x13000);
+    package(0x13000,"MU_OptionsSelector.fng",0x14000);
+    package(0x14000,"Chyron.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused==QUEST_SETTINGS_OPTIONS);
+    package(0x14000,"Chyron.fng",0x15000);
+    package(0x15000,"GarageMain.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused==QUEST_SETTINGS_OPTIONS);
+    package(0x13000,"MU_OptionsHUD.fng",0x14000);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && paused==QUEST_SETTINGS_OPTIONS);
+    package(0x13000,"MU_OptionsController.fng",0);
+    CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && !paused);
+    package(0x12000,"MU_Pause.fng",0x13000);
     package(0x13000,"MU_Pause.fng.dialog",0); /* exact name only */
     CHECK(nfsu1_vr_menu(read_memory,0,&paused)==1 && !paused);
     package(0x13000,"Unknown.fng",0); /* unknown overlay blocks X */
@@ -131,6 +160,40 @@ int main(void)
     CHECK(!nfsu1_render_pose(read_memory,0,0xfffffff0,1,rotation,position));
     CHECK(!nfsu1_render_pose(read_memory,0,0x3ffff00,1,rotation,position));
     CHECK(!nfsu1_render_pose(read_memory,0,0x310000,1,rotation,position));
+
+    /* The real transport points into the controller, not at its base. */
+    const uint32_t controller=0x49000, transport=0x4a000;
+    put(controller+0x14,transport);put(transport,0x203500);put(transport+4,controller+0x1b0);
+    CHECK(nfsu1_music_transport(read_memory,0,controller)==transport);
+    put(transport+4,controller);
+    CHECK(!nfsu1_music_transport(read_memory,0,controller));
+    put(transport+4,controller+0x1b0);put(transport,0);
+    CHECK(!nfsu1_music_transport(read_memory,0,controller));
+
+    /* The stream callback also renders speech and road ambience. A matching
+     * slot alone must never let the radio pause another source. */
+    const uint32_t voice=0x42000, ring=0x43000, stream=0x44000, reader=0x45000, file=0x46000;
+    put(voice+0x30,3); put(0x2ddab6,4); put(0x2de0b4+12,ring);
+    put(ring,0x5ba); put(ring+0x5c,stream); put(stream+4,0x5ba);
+    put(stream,reader); put(reader,file); put(file+0x34,reader);
+    strcpy((char *)memory+file+0x88,"d:\\sound\\streams\\STRM_Music_UG0_MB.ast");
+    CHECK(nfsu1_music_channel(read_memory,0,voice)==0);
+    put(voice+0x38,1); CHECK(nfsu1_music_channel(read_memory,0,voice)==1);
+    put(stream+4,12); CHECK(nfsu1_music_channel(read_memory,0,voice)<0);
+    put(stream+4,0x5ba); strcpy((char *)memory+file+0x88,"d:\\sound\\streams\\STRM_AMB_Stereo_MB.ast");
+    CHECK(nfsu1_music_channel(read_memory,0,voice)<0);
+
+    VrReplay recording={0};
+    CHECK(vr_replay_record(&recording,1,2,5,50,5,999));
+    VrReplayFrame *recorded=vr_replay_find(&recording,1,2,5,50,5);
+    CHECK(recorded && recorded->ticks==999);
+    recorded->gear_after=4;
+    CHECK(!vr_replay_find(&recording,1,2,5,51,5));
+    CHECK(vr_replay_record(&recording,1,2,5,50,6,33));
+    CHECK(vr_replay_find(&recording,1,2,5,50,5)->gear_after==4);
+    CHECK(vr_replay_record(&recording,1,3,1,60,1,17));
+    CHECK(!vr_replay_find(&recording,1,2,5,50,5));
+    free(recording.frames);
 
     /* Real-format synthetic XBE certificate. Only the owned in-memory copy
      * changes; wrong titles, truncation and wrapping offsets are rejected. */

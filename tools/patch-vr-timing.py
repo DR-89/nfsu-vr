@@ -8,6 +8,7 @@ stored here or patched on disk. Unknown executable revisions are rejected.
 """
 import argparse
 import hashlib
+import re
 from pathlib import Path
 
 TITLE_SHA = "f4b3dc578fa38abb59961c0c1c692f28514b2ca8bfbd43854c726a1636b34b22"
@@ -21,6 +22,13 @@ def function(source, name):
 def patch(directory, xbe, fixtures=None):
     if hashlib.sha256(xbe.read_bytes()).hexdigest() != TITLE_SHA:
         raise ValueError("VR timing hooks require the supported Xbox NTSC-U executable")
+    manual = (Path(__file__).resolve().parents[1] / "src/recomp_manual.c").read_text()
+    names = set(re.findall(r"^extern void (sub_[0-9A-F]{8})_gen\(void\);", manual, re.M))
+    wrapper = re.compile(r"^void (" + "|".join(sorted(names)) + r")\(void\)\n\{", re.M)
+    # Only the normal and drag gauges use the pending grid gear for display.
+    # Substitution counts include the translator's comparison comments.
+    gauges = {"sub_0009CE60": {"ebp": 4}, "sub_0009F2B0": {"esi": 1, "ebx": 11, "ebp": 3}}
+    found_gauges = set()
     bodies = {}
     pending = []
     for path in sorted(directory.glob("recomp_*.c")):
@@ -75,8 +83,33 @@ extern unsigned int nfsu1_vr_present(unsigned int);
 #define NFSU1_VR_PRESENT(v) (v)
 #endif
 """ + source
+        for name, registers in gauges.items():
+            if "void " + name + "(void)\n{" not in source:
+                continue
+            original_gauge = function(source, name)
+            gauge = original_gauge
+            for register, count in registers.items():
+                stock = f"MEM32({register} + 0x3D8)"
+                hooked = f"NFSU1_VR_GAUGE_GEAR({register})"
+                if gauge.count(stock) + gauge.count(hooked) != count:
+                    raise ValueError(f"Unexpected {name} gear reads for {register}")
+                gauge = gauge.replace(stock, hooked)
+            source = source.replace(original_gauge, gauge)
+            found_gauges.add(name)
+            if "/* NFSU1 VR gauge read */" not in source:
+                source = """/* NFSU1 VR gauge read */
+#ifdef NFSU2_OPENXR
+extern unsigned int nfsu1_vr_gauge_gear(unsigned int);
+#define NFSU1_VR_GAUGE_GEAR(car) nfsu1_vr_gauge_gear(car)
+#else
+#define NFSU1_VR_GAUGE_GEAR(car) MEM32((car) + 0x3D8)
+#endif
+""" + source
+        source = wrapper.sub(r"void \1_gen(void)\n{", source)
         if source != original:
             pending.append((path, source))
+    if found_gauges != gauges.keys():
+        raise ValueError("Expected both retail gauge functions")
     if len(bodies) != 2:
         raise ValueError("Expected exactly both title timing functions")
     for path, source in pending:
@@ -90,7 +123,10 @@ extern unsigned int nfsu1_vr_present(unsigned int);
         baseline, updated = bodies["sub_001410D0"]
         baseline = baseline.replace("void sub_001410D0(void)", "void simulation_original(void)")
         updated = updated.replace("void sub_001410D0(void)", "void simulation_updated(void)")
-        (fixtures / "timing_generated.inc").write_text("\n".join(helpers + [baseline, updated]), newline="\n")
+        fixture = fixtures / "timing_generated.inc"
+        content = "\n".join(helpers + [baseline, updated])
+        if not fixture.exists() or fixture.read_text() != content:
+            fixture.write_text(content, newline="\n")
     print(f"NFSU1 timing hooks verified; {len(pending)} generated files updated.")
 
 
