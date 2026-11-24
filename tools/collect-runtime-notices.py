@@ -26,6 +26,7 @@ def main():
         ('OpenXR JsonCpp', ROOT / 'build/deps/OpenXR-SDK/src/external/jsoncpp/LICENSE'),
         ('OpenXR jnipp', ROOT / 'build/deps/OpenXR-SDK/src/external/jnipp/LICENSE'),
         ('glslang', ROOT / 'build/deps/glslang/LICENSE.txt'),
+        ('lg4ff-hid (USB racing wheels)', ROOT / 'third_party/lg4ff-hid/LICENSE.txt'),
         ('LLVM / Android C++ runtime', args.ndk / 'toolchains/llvm/prebuilt/windows-x86_64/NOTICE'),
     ]
     blocks = [

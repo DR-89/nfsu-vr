@@ -952,6 +952,14 @@ static void poll_haptics(int focused)
     static float pad_sent;
     static uint32_t pad_tick;
     float pad_amplitude=vr_gamepad_selected?quest_mix_rumble(road,engine,1):0;
+#if QUEST_WHEEL_DEVICE
+    /* The wheel renders rumble as a short alternating force while its rim
+     * is driven; lg4ff_update() in the input poll advances the wave. */
+    if(vr_wheel) {
+        if(pad_amplitude!=pad_sent)lg4ff_set_rumble(vr_wheel,pad_amplitude*QUEST_WHEEL_DEVICE_RUMBLE);
+        pad_sent=pad_amplitude;pad_tick=now;
+    } else
+#endif
     if(vr_gamepad && (pad_amplitude!=pad_sent || (pad_amplitude>0 && now-pad_tick>=50))) {
         uint16_t strength=(uint16_t)(pad_amplitude*65535);
         SDL_GameControllerRumble(vr_gamepad,strength,strength,pad_amplitude>0?100:0);
@@ -1299,12 +1307,19 @@ static void poll_wheel_grips(void)
                     !vr_menu.open && !quest_xr_cockpit_menu_active();
     poll_shifter_grip(in_cabin,pedal_active,position);
     if(shifter.hand)wheel_grip.blocked[shifter.hand-1]=1;
+    /* A selected USB wheel owns steering: hands resting on its rim must not
+     * grab the virtual one, and its angle is encoded like the virtual wheel. */
+    int device_steering=0;
+#if QUEST_WHEEL_DEVICE
+    device_steering=vr_wheel_steering && vr_gamepad_selected;
+    if(device_steering)quest_wheel_reset(&wheel_grip);
+#endif
     quest_wheel_update(&wheel_grip,SDL_GetTicks(),active,hand_valid,position,frame_squeeze,fallback);
     for(int h=0;h<2;++h)
         if(wheel_grip.grabbed[h] || shifter.hand==h+1)
             map_grip.hover[h]=0;
     frame_sticks[0]=quest_wheel_input(&wheel_grip,active,frame_sticks[0]);
-    frame_sticks[0]=nfsu1_wheel_packet(frame_sticks[0],active && wheel_grip.latched);
+    frame_sticks[0]=nfsu1_wheel_packet(frame_sticks[0],active && (wheel_grip.latched || device_steering));
     /* Grips are separate pose/squeeze inputs. Preserve the camera command
      * emitted by the right stick click, including while gripping the wheel. */
     static int previous_mask=-1,trace=-1;
@@ -1600,6 +1615,9 @@ void quest_xr_shutdown(void)
     if(device) vkDeviceWaitIdle(device);
     if(begun) quest_xr_end();
     if(vr_gamepad){SDL_GameControllerClose(vr_gamepad);vr_gamepad=NULL;}
+#if QUEST_WHEEL_DEVICE
+    if(vr_wheel){lg4ff_close(vr_wheel);vr_wheel=NULL;}
+#endif
     if(vr_panel_pixels)vkUnmapMemory(device,vr_panel_memory);
     if(vr_panel_buffer)vkDestroyBuffer(device,vr_panel_buffer,NULL);
     if(vr_panel_memory)vkFreeMemory(device,vr_panel_memory,NULL);

@@ -5,6 +5,7 @@
 #include "apu_xaudio2.h"
 #include "quest_gamepad.h"
 #include "quest_cockpit_fit.h"
+#include "quest_wheel_device.h"
 #ifdef NFSU2_PCVR
 #include <windows.h>
 #endif
@@ -23,8 +24,28 @@ static unsigned *vr_panel_uploaded;
 static SDL_GameController *vr_gamepad;
 static uint32_t vr_gamepad_scan;
 static int vr_gamepad_selected;
+/* USB racing wheel (Quest only: Windows' hid.dll rejects the wheel's 7-byte
+ * force feedback reports). It supplies the pad packet while connected. */
+#ifdef __ANDROID__
+#define QUEST_WHEEL_DEVICE 1
+#define QUEST_WHEEL_DEVICE_RUMBLE .4f /* road/engine rumble, of full motor force */
+static LG4FF_Wheel *vr_wheel;
+static void *vr_wheel_opened;
+static SDL_atomic_t vr_wheel_opening;
+static int vr_wheel_ready,vr_wheel_steering;
+#else
+#define QUEST_WHEEL_DEVICE 0
+#endif
 static int create_swapchain(QuestSwapchain *,int64_t,uint32_t,uint32_t);
 
+#if QUEST_WHEEL_DEVICE
+static void vr_wheel_apply_settings(void)
+{
+    if(!vr_wheel)return;
+    lg4ff_set_range(vr_wheel,quest_wheel_device_range(vr_settings.rotation));
+    lg4ff_set_autocenter(vr_wheel,quest_wheel_device_spring(vr_settings.return_speed));
+}
+#endif
 static void vr_publish_settings(void)
 {
     xa2_set_output_gain(powf(10.f,vr_settings.master_gain_db/20.f));
@@ -35,6 +56,9 @@ static void vr_publish_settings(void)
         quest_wheel_reset(&wheel_grip);
         wheel_grip.limit=limit;wheel_grip.sensitivity=vr_settings.sensitivity;
     }
+#if QUEST_WHEEL_DEVICE
+    vr_wheel_apply_settings();
+#endif
     ++vr_panel_revision;
 }
 void quest_xr_settings_access_publish(int access)
@@ -107,8 +131,53 @@ static void vr_save_settings(void)
 }
 /* SDL covers Xbox, PlayStation and mapped Bluetooth/USB gamepads. Hotplug
  * probing is bounded to once per second; no guest-thread SDL event calls. */
+#if QUEST_WHEEL_DEVICE
+/* Opening blocks while Android asks for USB permission, and a G923 for
+ * PlayStation re-enumerates after its mode switch, so a worker polls once a
+ * second until a wheel opens. The render thread owns it from then on. */
+static int SDLCALL vr_wheel_open_thread(void *unused)
+{
+    (void)unused;
+    LG4FF_Wheel *wheel;
+    while(!(wheel=lg4ff_open()))SDL_Delay(1000);
+    SDL_AtomicSetPtr(&vr_wheel_opened,wheel);
+    SDL_AtomicSet(&vr_wheel_opening,0);
+    return 0;
+}
+static int vr_poll_wheel(uint16_t *buttons,uint8_t analog[8],int16_t sticks[4],int clicks[2])
+{
+    if(!vr_wheel_ready) {
+        vr_wheel_ready=lg4ff_init()==0?1:-1;
+        if(vr_wheel_ready<0)fprintf(stderr,"[VR] wheel support unavailable: %s\n",SDL_GetError());
+    }
+    if(vr_wheel_ready<0)return 0;
+    if(!vr_wheel && (vr_wheel=SDL_AtomicSetPtr(&vr_wheel_opened,NULL))) {
+        vr_wheel_apply_settings();
+        fprintf(stderr,"[VR] wheel connected: %s, %d degrees\n",lg4ff_name(vr_wheel),lg4ff_get_range(vr_wheel));
+    }
+    if(!vr_wheel) {
+        if(SDL_AtomicCAS(&vr_wheel_opening,0,1)) {
+            SDL_Thread *thread=SDL_CreateThread(vr_wheel_open_thread,"lg4ff_open",NULL);
+            if(thread)SDL_DetachThread(thread); else SDL_AtomicSet(&vr_wheel_opening,0);
+        }
+        return 0;
+    }
+    LG4FF_State state;
+    if(lg4ff_update(vr_wheel,&state)<0) {
+        fprintf(stderr,"[VR] wheel disconnected\n");
+        lg4ff_close(vr_wheel);vr_wheel=NULL;vr_gamepad_selected=0;
+        return 0;
+    }
+    return quest_wheel_device_sample(&state,vr_settings.sensitivity,buttons,analog,sticks,clicks);
+}
+#endif
 static int vr_poll_gamepad(uint16_t *buttons,uint8_t analog[8],int16_t sticks[4],int clicks[2])
 {
+#if QUEST_WHEEL_DEVICE
+    int wheel=vr_poll_wheel(buttons,analog,sticks,clicks);
+    vr_wheel_steering=wheel!=0;
+    if(wheel)return wheel;
+#endif
     uint32_t now=SDL_GetTicks();
     /* Also run detection when no pad is open. The headless VR renderer has
      * no desktop window/event pump; SDL's update explicitly scans drivers. */
